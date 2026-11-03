@@ -138,6 +138,7 @@ int main(int argc, char **argv)
     uint8_t source[URO_PAGE_SIZE], shadow[URO_PAGE_SIZE];
     const uint32_t code[] = {0xd503245f,0x52800540,0xd65f03c0,0xd503201f};
     const uint64_t fake = UINT64_C(0x8877665544332211);
+    uint8_t fake_bytes[8];
     cpu_set_t allowed, one;
     void *original = MAP_FAILED, *replacement = MAP_FAILED;
     unsigned i, c, iteration, rounds = 100, cpus = 0;
@@ -154,6 +155,7 @@ int main(int argc, char **argv)
     if (sysconf(_SC_PAGESIZE) != URO_PAGE_SIZE) { fprintf(stderr, "Unsupported page size\n"); goto done; }
     for (i = 0; i < URO_PAGE_SIZE; ++i) source[i] = (uint8_t)random64();
     for (i = 0; i < sizeof(code); ++i) source[64 + i] = ((const uint8_t *)code)[i];
+    for (i = 0; i < 8; ++i) fake_bytes[i] = (uint8_t)(fake >> (i * 8U));
     for (i = 0; i < URO_PAGE_SIZE; ++i) ((volatile uint8_t *)shadow)[i] = source[i];
     for (i = 0; i < 8; ++i) shadow[64 + i] = (uint8_t)(fake >> (i * 8));
     original = sealed_page(source, data_only); replacement = sealed_page(shadow, data_only);
@@ -179,7 +181,7 @@ int main(int argc, char **argv)
                     struct native_input input;
                     struct native_output out;
                     struct uro_regs r = { { 0 }, 0x40000, (uintptr_t)cases[c].pc, 0 };
-                    struct uro_view v = { source, (uintptr_t)original, UINT64_C(1) << 48, mode ? 64U : 4000U };
+                    struct uro_view v = { source, fake_bytes, (uintptr_t)original, UINT64_C(1) << 48, mode ? 64U : 4000U, 8U };
                     unsigned base_offset = (unsigned)((int)pos - cases[c].displacement);
                     uintptr_t native_page = (uintptr_t)(mode ? replacement : original);
                     input.base = native_page + base_offset;
@@ -188,7 +190,7 @@ int main(int argc, char **argv)
                     r.x[0] = v.base + base_offset; r.x[1] = input.index;
                     r.x[2] = input.r2; r.x[3] = input.r3; r.pstate = input.nzcv;
                     cases[c].fn(&input, &out);
-                    if (uro_emulate(&v, *cases[c].pc, URO_READ_ESR, v.base + pos, fake, &r) != URO_OK ||
+                    if (uro_emulate(&v, *cases[c].pc, URO_READ_ESR, v.base + pos, &r) != URO_OK ||
                         r.x[0] - v.base != out.base - native_page || r.x[1] != out.index ||
                         r.x[2] != out.r2 || r.x[3] != out.r3 || r.pstate != out.nzcv || r.pc != out.next_pc) {
                         fprintf(stderr, "FAIL cpu=%d case=%s iteration=%u mode=%u\n", cpu, cases[c].name, iteration, mode);

@@ -210,9 +210,11 @@ static int register_self(struct urov_request *q)
 	if (!s) return -ENOMEM;
 	s->mm = current->mm;
 	s->view.original = s->bytes;
+	s->view.fake = NULL;
 	s->view.base = q->address;
 	s->view.user_limit = TASK_SIZE;
 	s->view.overlay_offset = q->offset;
+	s->view.overlay_len = 8;
 	urov_record_begin(&s->ctl, ++next_id, q);
 	atomic64_set(&s->hits, 0);
 	atomic64_set(&s->failures, 0);
@@ -312,7 +314,9 @@ EXPORT_SYMBOL_GPL(urov_backend_v1);
 bool urov_handle_abort(unsigned long far, unsigned long esr, struct pt_regs *regs)
 {
 	struct urov_session *s;
+	struct uro_view view;
 	struct uro_regs model;
+	uint64_t fake;
 	u32 opcode;
 	unsigned int i;
 	int result;
@@ -334,7 +338,11 @@ bool urov_handle_abort(unsigned long far, unsigned long esr, struct pt_regs *reg
 	}
 	for (i = 0; i < 31; ++i) model.x[i] = regs->regs[i];
 	model.sp = regs->sp; model.pc = regs->pc; model.pstate = regs->pstate;
-	result = uro_emulate(&s->view, opcode, esr, far, smp_load_acquire(&s->ctl.value), &model);
+	fake = smp_load_acquire(&s->ctl.value);
+	view = s->view;
+	view.fake = (const uint8_t *)&fake;
+	view.overlay_len = 8;
+	result = uro_emulate(&view, opcode, esr, far, &model);
 	if (result != URO_OK) { failed = true; goto finish; }
 	for (i = 0; i < 31; ++i) regs->regs[i] = model.x[i];
 	regs->sp = model.sp; regs->pc = model.pc;
@@ -354,7 +362,7 @@ static int __init urov_init(void)
 	if (!scratch) return -ENOMEM;
 	ret = uro_core_selftest(scratch, &checks);
 	kfree(scratch);
-	core_ready = !ret && checks == 4114 &&
+	core_ready = !ret && checks == URO_CORE_CHECKS &&
 		!urov_control_selftest(&control_checks) && control_checks > 0;
 	return core_ready ? 0 : -EINVAL;
 }

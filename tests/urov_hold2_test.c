@@ -104,7 +104,12 @@ int main(int argc, char **argv)
     if (make_page()) { perror("make_page"); return 2; }
     memset(&q, 0, sizeof(q));
     q.size = sizeof(q); q.version = UROV_ABI_VERSION; q.op = UROV_NOTIFY_REGISTER;
-    q.address = (uintptr_t)code; q.offset = 4; q.value = fake; q.flags = UROV_F_RAW_XOM;
+    q.address = (uintptr_t)code; q.offset = 4; q.flags = UROV_F_RAW_XOM;
+    q.length = UROV_FAKE_MAX;
+    q.value = fake;
+    q.value_hi[0] = UINT64_C(0x0011223344556677);
+    q.value_hi[1] = UINT64_C(0x8899aabbccddeeff);
+    q.value_hi[2] = UINT64_C(0x0123456789abcdef);
     if (notify(UROV_NOTIFY_REGISTER, &q)) { perror("register"); return 2; }
     for (i = 0; i < 4; ++i) pthread_create(&t[i], NULL, reader, (void *)(uintptr_t)i);
     printf("READY readers=4\n");

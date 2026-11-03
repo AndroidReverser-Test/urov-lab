@@ -7,7 +7,7 @@ static int valid_user(uint64_t address, uint64_t limit)
 }
 
 int uro_emulate(const struct uro_view *v, uint32_t opcode, uint64_t esr,
-                uint64_t far, uint64_t fake, struct uro_regs *r)
+                uint64_t far, struct uro_regs *r)
 {
     struct uro_load d;
     uint64_t values[2] = { 0, 0 };
@@ -18,7 +18,10 @@ int uro_emulate(const struct uro_view *v, uint32_t opcode, uint64_t esr,
         (UINT64_C(1) << 10) | (UINT64_C(1) << 9) |
         (UINT64_C(1) << 8) | (UINT64_C(1) << 7) | (UINT64_C(1) << 6);
 
-    if (!v || !r || !v->original || v->overlay_offset > URO_PAGE_SIZE - 8U ||
+    if (!v || !r || !v->original || !v->fake ||
+        v->overlay_len < 8U || v->overlay_len > URO_FAKE_MAX ||
+        (v->overlay_len & 7U) ||
+        v->overlay_offset > URO_PAGE_SIZE - v->overlay_len ||
         v->user_limit < 2U * URO_PAGE_SIZE ||
         v->user_limit > (UINT64_C(1) << 56) ||
         (v->user_limit & (v->user_limit - 1U)) ||
@@ -60,8 +63,9 @@ int uro_emulate(const struct uro_view *v, uint32_t opcode, uint64_t esr,
         for (byte = 0; byte < d.size; ++byte) {
             uint64_t pos = offset + element * d.size + byte;
             uint8_t b;
-            if (pos >= v->overlay_offset && pos - v->overlay_offset < 8U)
-                b = (uint8_t)(fake >> ((pos - v->overlay_offset) * 8U));
+            if (pos >= v->overlay_offset &&
+                pos - v->overlay_offset < v->overlay_len)
+                b = v->fake[pos - v->overlay_offset];
             else
                 b = v->original[pos];
             value |= (uint64_t)b << (byte * 8U);

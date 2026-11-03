@@ -1,0 +1,24 @@
+﻿backend_caps=0x6b7 state=0
+page=0x7827b51000 baseline_ok
+registered width=8 session=1 generation=1
+concurrent_readers=8 updates=100 loops=75921
+status width=8 generation=102 hits=160700 failures=0
+width=8 restored=verified
+registered width=16 session=1 generation=1
+concurrent_readers=8 updates=100 loops=79458
+status width=16 generation=102 hits=171379 failures=0
+width=16 restored=verified
+registered width=24 session=1 generation=1
+concurrent_readers=8 updates=100 loops=104799
+status width=24 generation=102 hits=225666 failures=0
+width=24 restored=verified
+registered width=32 session=1 generation=1
+mapping_gates=verified
+fork_inherit=blocked
+unsupported_access=fail_closed
+concurrent_readers=8 updates=100 loops=111417
+status width=32 generation=102 hits=242698 failures=1
+width=32 restored=verified
+PASS scope=standalone_active_overlay widths=8,16,24,32 ordinary_loads=1,2,4,8,ldp execution=42 update=verified gates=verified fork=blocked fail_closed=verified concurrency=verified restore=verified
+cycle 1 PASS
+ALL_CYCLES_PASS

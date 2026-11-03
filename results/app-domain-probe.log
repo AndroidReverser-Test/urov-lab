@@ -1,0 +1,26 @@
+普通 app（untrusted_app，uid 10284）
+
+I urovapp : onCreate
+I urovapp : uid=10284 pid=11324
+I urovapp : context=u:r:untrusted_app:s0:c28,c257,c512,c768
+I urovapp : open /proc/self/fd failed errno=13
+I urovapp : PAGE FAIL
+I urovapp : RESULT FAIL
+
+普通 app，控制 syscall 放在映射之前
+
+I urovapp : onCreate
+I urovapp : uid=10284 pid=11157
+F libc    : Fatal signal 31 (SIGSYS), code 1 (SYS_SECCOMP), syscall 272 in tid 11157 (example.urovapp), pid 11157 (example.urovapp)
+F DEBUG   : signal 31 (SIGSYS), code 1 (SYS_SECCOMP), fault addr --------
+F DEBUG   : Cause: seccomp prevented call to disallowed arm64 system call 272
+
+非 root shell（uid 2000，Seccomp: 0）
+
+uid=2000(shell) gid=2000(shell) ... context=u:r:shell:s0
+backend_caps=0x6b7 state=0
+open /proc/self/fd: Permission denied
+
+root（kpatch su）基线
+
+PASS scope=standalone_active_overlay widths=8,16,24,32 ordinary_loads=1,2,4,8,ldp execution=42 update=verified gates=verified fork=blocked fail_closed=verified concurrency=verified restore=verified

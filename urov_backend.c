@@ -53,6 +53,14 @@
 
 #define UROV_USER_LIMIT (1ULL << 52)
 
+/* The seqlock is only ever written by the serialized SET/REGISTER control
+ * paths. A retry is expected only when a reader overlaps the four 64-bit
+ * stores; exhausting this bound means the update path was preempted for an
+ * implausibly long time, in which case the fault fails closed. */
+#define UROV_FAKE_RETRY 1000000U
+_Static_assert(UROV_FAKE_MAX == URO_FAKE_MAX, "UAPI and core fake widths");
+_Static_assert(UROV_FAKE_MAX == 32U, "four 64-bit fake words");
+
 #define UROV_VM_READ 0x00000001UL
 #define UROV_VM_WRITE 0x00000002UL
 #define UROV_VM_EXEC 0x00000004UL
@@ -87,11 +95,13 @@ struct urov_session {
     uint64_t pte_saved;
     uint64_t prot_saved;
     uint64_t flags_saved;
-    uint64_t fake;
+    uint64_t fake[4];
     uint64_t generation;
     uint64_t hits;
     uint64_t failures;
     uint32_t overlay_offset;
+    uint32_t overlay_len;
+    uint32_t fake_seq;
     uint32_t pad;
     uint8_t original[UROV_PAGE_BYTES];
 } __attribute__((aligned(64)));
@@ -149,7 +159,8 @@ static uint64_t *pte_of(void *mm, uint64_t address)
 
 static uint64_t caps_now(void)
 {
-    uint64_t caps = UROV_CAP_GPR | UROV_CAP_PAIR | UROV_CAP_RAW_XOM | UROV_CAP_RESIDENT;
+    uint64_t caps = UROV_CAP_GPR | UROV_CAP_PAIR | UROV_CAP_RAW_XOM |
+                    UROV_CAP_RESIDENT | UROV_CAP_FAKE16 | UROV_CAP_FAKE32;
     if (g_gate_hooked[0] && g_gate_hooked[1] && g_gate_hooked[2] &&
         g_gate_hooked[3] && g_gate_hooked[4])
         caps |= UROV_CAP_MM_GATES;
@@ -172,6 +183,58 @@ static void ctrl_unlock(void)
 static int session_active(void)
 {
     return __atomic_load_n(&g_active, __ATOMIC_ACQUIRE);
+}
+
+static unsigned request_fake_len(const struct urov_request *q)
+{
+    return q->length ? q->length : 8U;
+}
+
+static void request_fake_words(const struct urov_request *q, uint64_t words[4])
+{
+    words[0] = q->value;
+    words[1] = q->value_hi[0];
+    words[2] = q->value_hi[1];
+    words[3] = q->value_hi[2];
+}
+
+/* Publish a complete new fake vector. Control requests are serialized, so
+ * there is exactly one writer; fault readers use the sequence word below. */
+static void fake_publish(const uint64_t words[4])
+{
+    uint32_t seq = __atomic_load_n(&g_sess.fake_seq, __ATOMIC_RELAXED);
+
+    __atomic_store_n(&g_sess.fake_seq, seq + 1U, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    g_sess.fake[0] = words[0];
+    g_sess.fake[1] = words[1];
+    g_sess.fake[2] = words[2];
+    g_sess.fake[3] = words[3];
+    __atomic_store_n(&g_sess.fake_seq, seq + 2U, __ATOMIC_RELEASE);
+}
+
+/* One immutable snapshot for the whole emulated instruction, including both
+ * halves of an LDP. Retries only overlap the four stores above. */
+static int fake_snapshot(uint64_t words[4], unsigned *len)
+{
+    unsigned tries;
+    for (tries = 0; tries < UROV_FAKE_RETRY; ++tries) {
+        uint32_t seq = __atomic_load_n(&g_sess.fake_seq, __ATOMIC_ACQUIRE);
+        if (seq & 1U) {
+            __asm__ volatile("yield" ::: "memory");
+            continue;
+        }
+        words[0] = __atomic_load_n(&g_sess.fake[0], __ATOMIC_RELAXED);
+        words[1] = __atomic_load_n(&g_sess.fake[1], __ATOMIC_RELAXED);
+        words[2] = __atomic_load_n(&g_sess.fake[2], __ATOMIC_RELAXED);
+        words[3] = __atomic_load_n(&g_sess.fake[3], __ATOMIC_RELAXED);
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (__atomic_load_n(&g_sess.fake_seq, __ATOMIC_RELAXED) == seq) {
+            *len = g_sess.overlay_len;
+            return 0;
+        }
+    }
+    return -EAGAIN;
 }
 
 static void session_count_failure(uint64_t far, uint64_t esr, uint32_t opcode, int result)
@@ -289,7 +352,8 @@ static void urov_abort_before(hook_fargs4_t *args, void *udata)
     struct pt_regs *regs = (struct pt_regs *)args->arg2;
     struct uro_view view;
     struct uro_regs model;
-    uint64_t fake;
+    uint64_t fake_words[4];
+    unsigned fake_len = 0;
     uint32_t opcode;
     int result, i;
 
@@ -327,13 +391,19 @@ static void urov_abort_before(hook_fargs4_t *args, void *udata)
     model.pc = regs->pc;
     model.pstate = regs->pstate;
 
+    if (fake_snapshot(fake_words, &fake_len)) {
+        session_count_failure(far, esr, opcode, -EAGAIN);
+        if (f_force_sig_fault) f_force_sig_fault(UROV_SIGSEGV, UROV_SEGV_ACCERR, (void *)far);
+        goto handled;
+    }
     view.original = g_sess.original;
+    view.fake = (const uint8_t *)fake_words;
     view.base = g_sess.base;
     view.user_limit = UROV_USER_LIMIT;
     view.overlay_offset = g_sess.overlay_offset;
-    fake = __atomic_load_n(&g_sess.fake, __ATOMIC_ACQUIRE);
+    view.overlay_len = fake_len;
 
-    result = uro_emulate(&view, opcode, esr, far, fake, &model);
+    result = uro_emulate(&view, opcode, esr, far, &model);
     if (result == URO_OK) {
         for (i = 0; i < 31; ++i) regs->regs[i] = model.x[i];
         regs->sp = model.sp;
@@ -365,9 +435,18 @@ static uint64_t sys_arg(hook_fargs4_t *args, int n)
 
 static int request_validate(const struct urov_request *q)
 {
+    unsigned len = q->length;
+
     if (q->size != sizeof(*q) || q->version != UROV_ABI_VERSION) return -EINVAL;
-    if (q->reserved0 || q->reserved[0] || q->reserved[1] || q->reserved[2]) return -EINVAL;
     if (q->flags & ~UROV_F_RAW_XOM) return -EINVAL;
+    if (len != 0U && (len < 8U || len > UROV_FAKE_MAX || (len & 7U)))
+        return -EINVAL;
+    /* Canonical encoding: every byte outside the declared window is zero, so
+     * a short request can never smuggle a different wide snapshot. */
+    if (len < 16U && q->value_hi[0]) return -EINVAL;
+    if (len < 24U && q->value_hi[1]) return -EINVAL;
+    if (len < 32U && q->value_hi[2]) return -EINVAL;
+    if (q->op != UROV_REGISTER && q->op != UROV_SET && len) return -EINVAL;
     return 0;
 }
 
@@ -379,12 +458,14 @@ static long do_register(struct urov_request *q)
     void *page = 0;
     uint64_t *ptep;
     uint64_t pte, newpte;
+    uint64_t words[4];
+    unsigned len = request_fake_len(q);
     long pinned;
     long ret;
 
     if (q->address & (UROV_PAGE_BYTES - 1)) return -EINVAL;
     if (q->address < UROV_PAGE_BYTES || q->address >= UROV_USER_LIMIT) return -EINVAL;
-    if (q->offset > UROV_PAGE_BYTES - 8U) return -EINVAL;
+    if (q->offset > UROV_PAGE_BYTES - len) return -EINVAL;
     if (session_active()) return -EBUSY;
     drain_handlers();
     if (__atomic_load_n(&g_handlers, __ATOMIC_ACQUIRE)) return -EBUSY;
@@ -426,10 +507,16 @@ static long do_register(struct urov_request *q)
     g_sess.page = page;
     g_sess.base = q->address;
     g_sess.overlay_offset = q->offset;
+    g_sess.overlay_len = len;
     g_sess.pte_saved = pte;
     g_sess.prot_saved = *(uint64_t *)((char *)vma + UROV_VMA_PROT_OFF);
     g_sess.flags_saved = *(uint64_t *)((char *)vma + UROV_VMA_FLAGS_OFF);
-    g_sess.fake = q->value;
+    request_fake_words(q, words);
+    g_sess.fake[0] = words[0];
+    g_sess.fake[1] = words[1];
+    g_sess.fake[2] = words[2];
+    g_sess.fake[3] = words[3];
+    g_sess.fake_seq = 0;
     g_sess.generation = 1;
     g_sess.hits = 0;
     g_sess.failures = 0;
@@ -446,6 +533,12 @@ static long do_register(struct urov_request *q)
     ret = 0;
     q->session = 1;
     q->generation = 1;
+    q->offset = g_sess.overlay_offset;
+    q->length = len;
+    q->value = words[0];
+    q->value_hi[0] = words[1];
+    q->value_hi[1] = words[2];
+    q->value_hi[2] = words[3];
     q->state = UROV_ACTIVE;
     q->caps = caps_now();
     if (f_mmap_write_unlock) f_mmap_write_unlock(mm);
@@ -459,12 +552,23 @@ unlock:
 
 static long do_set(struct urov_request *q)
 {
+    uint64_t words[4];
+    unsigned len;
+
     if (!session_active() || q->session != 1) return -ENOENT;
     if (q->expected_generation != g_sess.generation) return -EAGAIN;
-    __atomic_store_n(&g_sess.fake, q->value, __ATOMIC_RELEASE);
+    len = request_fake_len(q);
+    if (len != g_sess.overlay_len) return -EINVAL;
+    request_fake_words(q, words);
+    fake_publish(words);
     g_sess.generation++;
     q->generation = g_sess.generation;
-    q->value = g_sess.fake;
+    q->offset = g_sess.overlay_offset;
+    q->length = len;
+    q->value = words[0];
+    q->value_hi[0] = words[1];
+    q->value_hi[1] = words[2];
+    q->value_hi[2] = words[3];
     q->state = UROV_ACTIVE;
     q->hits = __atomic_load_n(&g_sess.hits, __ATOMIC_RELAXED);
     q->failures = __atomic_load_n(&g_sess.failures, __ATOMIC_RELAXED);
@@ -475,7 +579,12 @@ static long do_status(struct urov_request *q)
 {
     if (!session_active() || q->session != 1) return -ENOENT;
     q->generation = g_sess.generation;
-    q->value = __atomic_load_n(&g_sess.fake, __ATOMIC_ACQUIRE);
+    q->offset = g_sess.overlay_offset;
+    q->length = g_sess.overlay_len;
+    q->value = g_sess.fake[0];
+    q->value_hi[0] = g_sess.fake[1];
+    q->value_hi[1] = g_sess.fake[2];
+    q->value_hi[2] = g_sess.fake[3];
     q->hits = __atomic_load_n(&g_sess.hits, __ATOMIC_RELAXED);
     q->failures = __atomic_load_n(&g_sess.failures, __ATOMIC_RELAXED);
     q->state = UROV_ACTIVE;
@@ -489,6 +598,11 @@ static long do_deactivate(struct urov_request *q)
     session_stop();
     q->session = 0;
     q->generation = 0;
+    q->length = 0;
+    q->value = 0;
+    q->value_hi[0] = 0;
+    q->value_hi[1] = 0;
+    q->value_hi[2] = 0;
     q->state = UROV_INACTIVE;
     q->caps = caps_now();
     return 0;
@@ -496,10 +610,14 @@ static long do_deactivate(struct urov_request *q)
 
 static long do_query(struct urov_request *q)
 {
+    int active = session_active();
+
     q->caps = caps_now();
-    q->state = session_active() ? UROV_ACTIVE : UROV_INACTIVE;
-    q->session = session_active() ? 1 : 0;
-    q->generation = session_active() ? g_sess.generation : 0;
+    q->state = active ? UROV_ACTIVE : UROV_INACTIVE;
+    q->session = active ? 1 : 0;
+    q->generation = active ? g_sess.generation : 0;
+    q->offset = active ? g_sess.overlay_offset : 0;
+    q->length = active ? g_sess.overlay_len : 0;
     q->hits = __atomic_load_n(&g_sess.hits, __ATOMIC_RELAXED);
     q->failures = __atomic_load_n(&g_sess.failures, __ATOMIC_RELAXED);
     return 0;
@@ -592,7 +710,7 @@ long urov_backend_init(const char *args)
 
     if (args && *args && !str_eq(args, "active")) return -EINVAL;
     if (!kallsyms_lookup_name) return -ENOSYS;
-    if (uro_core_selftest(g_selftest_ws, &checks) || checks != 4114) return -EINVAL;
+    if (uro_core_selftest(g_selftest_ws, &checks) || checks != URO_CORE_CHECKS) return -EINVAL;
 
     f_do_mem_abort = lookup("do_mem_abort");
     f_get_task_mm = (get_task_mm_t)lookup("get_task_mm");
@@ -694,6 +812,6 @@ void urov_backend_get_status(struct urov_backend_status *out)
     out->active = session_active() ? 1U : 0U;
     out->hooks = (g_abort_hooked ? 1U : 0U) | (g_notify_hooked ? 2U : 0U) |
                  ((g_gate_hooked[0] && g_gate_hooked[1] && g_gate_hooked[2] && g_gate_hooked[3] && g_gate_hooked[4]) ? 4U : 0U);
-    out->core_checks = 4114;
+    out->core_checks = URO_CORE_CHECKS;
     out->last_error = 0;
 }

@@ -229,6 +229,7 @@ static API_CALLS long activate(struct urov_request *q)
     session.mm = mm; session.page = NULL;
     session.view.base = q->address; session.view.overlay_offset = q->offset;
     session.view.original = session.bytes; session.view.user_limit = LIMIT;
+    session.view.fake = NULL; session.view.overlay_len = 8;
     __atomic_store_n(&gate_mm, mm, __ATOMIC_SEQ_CST);
     if (__atomic_load_n(&inflight, __ATOMIC_SEQ_CST)) { rc = -EBUSY; goto clear; }
     rc = api.pin(q->address, 1, &session.page, 0);
@@ -399,7 +400,9 @@ fail:
 
 API_CALLS int urov_resident_fault(unsigned long far, unsigned long esr, struct pt_regs *regs)
 {
+    struct uro_view view;
     struct uro_regs model;
+    uint64_t fake;
     uint32_t opcode;
     unsigned int i;
     int rc = 1;
@@ -415,8 +418,11 @@ API_CALLS int urov_resident_fault(unsigned long far, unsigned long esr, struct p
     } else if (api.copy_in(&opcode, (void *)regs->pc, 4)) goto failed;
     for (i = 0; i < 31; ++i) model.x[i] = regs->regs[i];
     model.sp = regs->sp; model.pc = regs->pc; model.pstate = regs->pstate;
-    if (uro_emulate(&session.view, opcode, esr, far,
-        __atomic_load_n(&session.value, __ATOMIC_ACQUIRE), &model) != URO_OK) goto failed;
+    fake = __atomic_load_n(&session.value, __ATOMIC_ACQUIRE);
+    view = session.view;
+    view.fake = (const uint8_t *)&fake;
+    view.overlay_len = 8;
+    if (uro_emulate(&view, opcode, esr, far, &model) != URO_OK) goto failed;
     for (i = 0; i < 31; ++i) regs->regs[i] = model.x[i];
     regs->sp = model.sp; regs->pc = model.pc;
     __atomic_add_fetch(&session.hits, 1, __ATOMIC_RELAXED);

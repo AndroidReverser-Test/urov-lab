@@ -99,7 +99,7 @@ static long check_ctl(const char *args, char __user *out, int outlen)
     __asm__ volatile("mrs %0, id_aa64mmfr1_el1" : "=r"(mmfr1));
     __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
     len = snprintf(message, sizeof(message),
-        "abi=1 mode=preflight active=0 backend=none core=pass checks=%u "
+        "abi=2 mode=preflight active=0 backend=none core=pass checks=%u "
         "kernel=0x%x kp=0x%x kernel_match=%d slot_match=%d kcfi_type_match=%d "
         "symbols=0x%x cpu_pan=%lu cpu_epan=%lu "
         "entry_writable=unverified loader_contract=unverified "

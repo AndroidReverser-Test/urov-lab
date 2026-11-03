@@ -9,8 +9,9 @@
 #include <stdint.h>
 #endif
 
-#define UROV_ABI_VERSION 1U
+#define UROV_ABI_VERSION 2U
 #define UROV_PAGE_BYTES 4096U
+#define UROV_FAKE_MAX 32U
 #define UROV_MODULE_NAME "urov-lab"
 
 /* Control channel: the standalone KPM hooks this syscall. A request is
@@ -21,11 +22,17 @@
  *
  *   QUERY      report caps/state/session/generation
  *   REGISTER   register the caller's page-aligned sealed RX page:
- *              address, offset (overlay byte offset in the page), value (fake64)
- *   SET        publish a new fake64; session and expected_generation must match
- *   STATUS     report generation, hits, failures and the current fake64
+ *              address, offset (overlay byte offset in the page),
+ *              length (8/16/24/32, 0 means the legacy 8) and up to 32 fake
+ *              bytes in value/value_hi[]
+ *   SET        publish new fake bytes of the session's registered length;
+ *              session, length and expected_generation must match
+ *   STATUS     report generation, hits, failures, length and the current
+ *              fake bytes
  *   DEACTIVATE restore the page and release the session (idempotent)
  *
+ * Fake bytes are little-endian: value holds bytes 0..7, value_hi[0] bytes
+ * 8..15, value_hi[1] bytes 16..23 and value_hi[2] bytes 24..31.
  * The fault path rewrites only general-purpose register loads; writes and
  * unsupported instructions keep failing closed with SIGSEGV. */
 #define UROV_NOTIFY_NR 272
@@ -47,6 +54,8 @@ enum urov_notify_cmd {
 #define UROV_CAP_TASK_WORK 64ULL
 #define UROV_CAP_RESIDENT 128ULL
 #define UROV_CAP_MODEL_CORE 256ULL
+#define UROV_CAP_FAKE16 512ULL
+#define UROV_CAP_FAKE32 1024ULL
 
 enum urov_op { UROV_QUERY = 1, UROV_REGISTER, UROV_SET, UROV_STATUS, UROV_DEACTIVATE };
 enum urov_state { UROV_INACTIVE, UROV_ACTIVE, UROV_RETAINED };
@@ -56,11 +65,18 @@ struct urov_request {
     uint32_t size;
     uint16_t version, op;
     uint64_t flags, request_id, session, address, expected_generation, value;
-    uint32_t offset, reserved0;
+    uint32_t offset;
+    union {
+        uint32_t length;    /* fake byte count: 0 (= 8 legacy), 8, 16, 24, 32 */
+        uint32_t reserved0; /* historical name; zero is the legacy encoding */
+    };
     uint64_t caps, generation, hits, failures;
     uint32_t state;
     int32_t last_error;
-    uint64_t reserved[3];
+    union {
+        uint64_t value_hi[3]; /* fake bytes 8..15, 16..23, 24..31 */
+        uint64_t reserved[3]; /* historical zero-check view of the same bytes */
+    };
 };
 _Static_assert(sizeof(struct urov_request) == 128, "UROV wire ABI");
 

@@ -151,7 +151,7 @@ static void reset_backend(void)
     api.find_vma = mock_missing_vma;
     /* Simulate an already attached controller to a published resident image. */
     status.ready = 1;
-    status.checks = 4114;
+    status.checks = URO_CORE_CHECKS;
     status.hooks = 255;
 }
 static struct urov_request make_request(unsigned int op)
@@ -179,6 +179,7 @@ static void seed_session(void)
     session.flags = UROV_F_RAW_XOM; session.generation = 1; session.state = UROV_ACTIVE;
     session.view.base = 0x400000; session.view.overlay_offset = 4;
     session.view.original = session.bytes; session.view.user_limit = LIMIT;
+    session.view.fake = NULL; session.view.overlay_len = 8;
 }
 
 static void test_wire_and_queue(void)
