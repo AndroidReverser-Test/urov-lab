@@ -54,11 +54,12 @@ static long urov_control(const char *args, char __user *out, int len)
     if (!str_eq(args, "status") && !str_eq(args, "selftest")) return -EINVAL;
     urov_backend_get_status(&st);
     n = snprintf(message, sizeof(message),
-                 "mode=standalone-resident caps=0x%llx state=%s hooks=0x%x core_checks=%u gen=%llu hits=%llu failures=%llu notify_nr=%d notify_magic=0x%llx\n",
+                 "mode=standalone-resident caps=0x%llx state=%s hooks=0x%x core_checks=%u gen=%llu hits=%llu failures=%llu notify_nr=%d notify_magic=0x%llx prctl_option=0x%lx\n",
                  (unsigned long long)st.caps, st.active ? "active" : "inactive", st.hooks,
                  st.core_checks, (unsigned long long)st.generation,
                  (unsigned long long)st.hits, (unsigned long long)st.failures,
-                 UROV_NOTIFY_NR, (unsigned long long)UROV_NOTIFY_MAGIC);
+                 UROV_NOTIFY_NR, (unsigned long long)UROV_NOTIFY_MAGIC,
+                 (unsigned long)UROV_PRCTL_OPTION);
     if (n < 0 || n >= (int)sizeof(message)) return -EOVERFLOW;
     if (len <= n) return -ENOSPC;
     return copy_out(out, message, (size_t)n + 1) ? -EFAULT : 0;

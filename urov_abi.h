@@ -14,22 +14,36 @@
 #define UROV_FAKE_MAX 32U
 #define UROV_MODULE_NAME "urov-lab"
 
-/* Control channel: the standalone KPM hooks this syscall. A request is
+/* Control channels.  The original standalone KPM hooked __NR_kcmp; real kcmp
+ * callers do not carry the magic and are forwarded unchanged.  Ordinary apps
+ * cannot use kcmp because Android app seccomp rejects it, so the same request
+ * can also be sent through __NR_prctl with (option, magic, cmd, request,
+ * size).  Both paths call the same dispatcher and accept the same 128-byte
+ * request.  prctl is on the app seccomp allowlist and needs no device node,
+ * file descriptor or SELinux policy change.
+ *
  *   long r = syscall(UROV_NOTIFY_NR, (long)UROV_NOTIFY_MAGIC,
  *                    (long)cmd, &request, (long)sizeof(request));
- * with cmd == request.op. Real kcmp callers do not carry the magic and are
- * forwarded to the native handler unchanged.
+ *   long r = syscall(__NR_prctl, (long)UROV_PRCTL_OPTION,
+ *                    (long)UROV_PRCTL_MAGIC, (long)cmd, &request,
+ *                    (long)sizeof(request));
  *
  *   QUERY      report caps/state/session/generation
- *   REGISTER   register the caller's page-aligned sealed RX page:
- *              address, offset (overlay byte offset in the page),
- *              length (8/16/24/32, 0 means the legacy 8) and up to 32 fake
- *              bytes in value/value_hi[]
+ *   REGISTER   register one caller-owned, exactly one-page, read-only,
+ *              executable file mapping: address (page-aligned), offset
+ *              (overlay byte offset in the page), length (8/16/24/32, 0 means
+ *              the legacy 8) and up to 32 fake bytes in value/value_hi[]
  *   SET        publish new fake bytes of the session's registered length;
  *              session, length and expected_generation must match
  *   STATUS     report generation, hits, failures, length and the current
  *              fake bytes
  *   DEACTIVATE restore the page and release the session (idempotent)
+ *
+ * The page must not be writable or writable-mappable (VM_MAYWRITE): in
+ * practice an app maps one page of its own installed native library with
+ * MAP_SHARED, PROT_READ|PROT_EXEC, or a one-page payload file the same way.
+ * MAP_PRIVATE file mappings are rejected because VM_MAYWRITE would allow a
+ * later COW that invalidates the pinned original page.
  *
  * Fake bytes are little-endian: value holds bytes 0..7, value_hi[0] bytes
  * 8..15, value_hi[1] bytes 16..23 and value_hi[2] bytes 24..31.
@@ -37,6 +51,8 @@
  * unsupported instructions keep failing closed with SIGSEGV. */
 #define UROV_NOTIFY_NR 272
 #define UROV_NOTIFY_MAGIC 0x55524f5653595343ULL /* "UROVSYSC" */
+#define UROV_PRCTL_OPTION 0x55524f56UL          /* "UROV", no native prctl option */
+#define UROV_PRCTL_MAGIC UROV_NOTIFY_MAGIC
 enum urov_notify_cmd {
     UROV_NOTIFY_QUERY = 1,
     UROV_NOTIFY_REGISTER = 2,
@@ -56,6 +72,7 @@ enum urov_notify_cmd {
 #define UROV_CAP_MODEL_CORE 256ULL
 #define UROV_CAP_FAKE16 512ULL
 #define UROV_CAP_FAKE32 1024ULL
+#define UROV_CAP_PRCTL 2048ULL
 
 enum urov_op { UROV_QUERY = 1, UROV_REGISTER, UROV_SET, UROV_STATUS, UROV_DEACTIVATE };
 enum urov_state { UROV_INACTIVE, UROV_ACTIVE, UROV_RETAINED };

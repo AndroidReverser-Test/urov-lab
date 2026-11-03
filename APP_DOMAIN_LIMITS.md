@@ -1,5 +1,12 @@
 # 普通 app / 非 root 进程可用性实测（2026-11-03）
 
+> **2026-11-04 更新**：本文第 1–4 项限制已有实现与真机验收：
+> `__NR_prctl` 控制通道替代 `kcmp`；注册对象改为 app 自己的一页只读可执行
+> `MAP_SHARED` 文件映射（推荐自身 native library 的别名），不再需要 sealed
+> memfd 或 `/proc/self/fd`；会话按 mm 归属并提供死 owner 惰性回收。第 5 项
+> （模块装卸需要 root）保持不变。详见 [APP_OVERLAY.md](APP_OVERLAY.md)。
+> 下文 2026-11-03 的实测记录保留作为问题背景。
+
 设备：Pixel 6 / Android 16（`BP31.250610.009`），模块 `urov-lab.kpm` 已由 root 加载。
 
 ## 1. 普通 app（untrusted_app，uid 10284）
@@ -89,4 +96,20 @@ PASS scope=standalone_active_overlay widths=8,16,24,32 ... concurrency=verified 
    门控和恢复协议；跨进程场景还要额外处理目标进程退出和句柄失效。
 
 在这些改动完成前，普通 app 只能依赖 root 测试进程（`kpatch su -c`）来使用当前模块。
+
+## 2026-11-04 落地情况
+
+- 控制通道：已改为 `__NR_prctl(option=0x55524f56, magic, cmd, req, size)`，
+  `untrusted_app` Seccomp mode 2 实测可发；`__NR_kcmp` 仅保留给 root/旧程序。
+- 页来源：已支持 app 自己的“恰好一页、只读、可执行、文件后备、无
+  `VM_MAYWRITE`”的 `MAP_SHARED` 映射；推荐把自身已安装 native library 的一页
+  以 `MAP_SHARED` RX 别名映射后注册。sealed memfd 与 `/proc/self/fd` 不再是
+  必需。`MAP_PRIVATE` 因携带 `VM_MAYWRITE`（可被 mprotect/FOLL_FORCE COW）被
+  明确拒绝。
+- 所有权/生命周期：单会话仍为全局，但按 mm 归属；非 owner 不能 SET/
+  DEACTIVATE；owner 进程死亡后由下一次控制请求按 `mm_users == 1` 惰性回收。
+  跨 app 并发仍需后续多会话改造。
+- fork：只对注册的一页别名设置 `VM_DONTCOPY`，app 正常 lib 映射不受影响。
+- 模块装卸仍需 root。
+- 真机验收、日志与复现命令见 [APP_OVERLAY.md](APP_OVERLAY.md)。
 

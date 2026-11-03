@@ -1,0 +1,8 @@
+--- foreign while app owns session ---
+query rc=0 errno=0 caps=0xeb7 state=0 session=0 gen=0 last_error=-16
+set rc=-1 errno=2 gen=0
+deactivate rc=-1 errno=2 state=0
+mode=standalone-resident caps=0xeb7 state=active hooks=0xf core_checks=4139 gen=1 hits=8 failures=0 notify_nr=272 notify_magic=0x55524f5653595343 prctl_option=0x55524f56
+--- kill owner, then query ---
+query rc=0 errno=0 caps=0xeb7 state=0 session=0 gen=0 last_error=0
+mode=standalone-resident caps=0xeb7 state=inactive hooks=0xf core_checks=4139 gen=0 hits=0 failures=0 notify_nr=272 notify_magic=0x55524f5653595343 prctl_option=0x55524f56

@@ -7,14 +7,22 @@
  *   - do_mem_abort(): intercepts the EL0 read permission fault produced by
  *     clearing PTE.AP[1] (raw execute-only mapping), emulates the faulting
  *     general-purpose load and returns the overlaid bytes.
- *   - __NR_kcmp: control channel. The test process passes a 128-byte request;
- *     normal kcmp calls (different magic) are left untouched.
+ *   - __NR_kcmp: legacy/root control channel. The test process passes a
+ *     128-byte request; normal kcmp calls (different magic) are left untouched.
+ *   - __NR_prctl: app-facing control channel. The same request is sent as
+ *     prctl(option, magic, cmd, request, size); ordinary prctl calls are left
+ *     untouched. Android app seccomp rejects kcmp but allows prctl.
  *   - mprotect/munmap/mremap/madvise: reject range changes that would break the
  *     registered mapping while a session is active.
  *
- * Only the calling process's own mm can be registered. One session exists at a
- * time; registration, update, status and deactivation are serialized by a
- * single control flag, while the fault path is lock-free and allocation-free.
+ * The page is one caller-owned, exactly one-page, read-only executable file
+ * mapping. An ordinary app uses a MAP_SHARED alias of its own installed native
+ * library (or a one-page payload file); sealed memfds are not required. The
+ * session belongs to the caller's mm: foreign SET/STATUS/DEACTIVATE are
+ * refused, and a session whose owner process died is reaped lazily from the
+ * next control request. One session exists at a time; registration, update,
+ * status and deactivation are serialized by a single control flag, while the
+ * fault path is lock-free and allocation-free.
  */
 #include <compiler.h>
 #include <kallsyms.h>
@@ -37,9 +45,11 @@
 
 /* Offsets from the matching device BTF (see DESIGN.md section 4.1). The mm
  * pointer is cross-checked against get_task_mm(current) before a session is
- * published; a mismatch refuses registration instead of guessing. */
+ * published; a mismatch refuses registration instead of guessing.  mm_users
+ * is used only to notice that an app-owned session outlived its process. */
 #define UROV_TASK_MM_OFF 1440UL
 #define UROV_MM_PGD_OFF 56UL
+#define UROV_MM_USERS_OFF 68UL
 /* asm-generic only maps __NR_mmap under __BITS_PER_LONG == 64. */
 #ifndef __NR_mmap
 #define __NR_mmap 222
@@ -48,7 +58,6 @@
 #define UROV_VMA_END_OFF 8UL
 #define UROV_VMA_PROT_OFF 24UL
 #define UROV_VMA_FLAGS_OFF 32UL
-#define UROV_VMA_PGOFF_OFF 128UL
 #define UROV_VMA_FILE_OFF 136UL
 
 #define UROV_USER_LIMIT (1ULL << 52)
@@ -65,7 +74,6 @@ _Static_assert(UROV_FAKE_MAX == 32U, "four 64-bit fake words");
 #define UROV_VM_WRITE 0x00000002UL
 #define UROV_VM_EXEC 0x00000004UL
 #define UROV_VM_MAYWRITE 0x00000020UL
-#define UROV_VM_MAYSHARE 0x00000080UL
 #define UROV_VM_PFNMAP 0x00000400UL
 #define UROV_VM_IO 0x00002000UL
 #define UROV_VM_HUGETLB 0x00400000UL
@@ -127,6 +135,7 @@ static force_sig_fault_t f_force_sig_fault;
 static copy_nofault_t f_copy_in, f_copy_out;
 
 static int g_notify_hooked;
+static int g_prctl_hooked;
 static int g_abort_hooked;
 
 #define UROV_GATE_NUM 5
@@ -150,6 +159,18 @@ static uint64_t mm_pgd(void *mm)
     return *(uint64_t *)((char *)mm + UROV_MM_PGD_OFF);
 }
 
+/* get_task_mm() holds one mm_users reference for the session.  A process that
+ * exited without deactivating therefore leaves mm_users == 1: nobody else can
+ * still be running in that address space.  Control requests from any process
+ * use this to reap a dead owner instead of leaving a page pinned forever. */
+static int mm_has_live_user(void *mm)
+{
+    int users;
+    if (!mm) return 0;
+    users = __atomic_load_n((int *)((char *)mm + UROV_MM_USERS_OFF), __ATOMIC_ACQUIRE);
+    return users > 1;
+}
+
 static uint64_t *pte_of(void *mm, uint64_t address)
 {
     uint64_t pgd = mm_pgd(mm);
@@ -161,6 +182,7 @@ static uint64_t caps_now(void)
 {
     uint64_t caps = UROV_CAP_GPR | UROV_CAP_PAIR | UROV_CAP_RAW_XOM |
                     UROV_CAP_RESIDENT | UROV_CAP_FAKE16 | UROV_CAP_FAKE32;
+    if (g_prctl_hooked) caps |= UROV_CAP_PRCTL;
     if (g_gate_hooked[0] && g_gate_hooked[1] && g_gate_hooked[2] &&
         g_gate_hooked[3] && g_gate_hooked[4])
         caps |= UROV_CAP_MM_GATES;
@@ -183,6 +205,23 @@ static void ctrl_unlock(void)
 static int session_active(void)
 {
     return __atomic_load_n(&g_active, __ATOMIC_ACQUIRE);
+}
+
+static long session_stop(void);
+
+/* A session belongs to exactly one mm.  A different app may observe the
+ * module (QUERY) but must not update or deactivate somebody else's session. */
+static int session_owned(void)
+{
+    return session_active() && mm_of_task(current) == g_sess.mm;
+}
+
+/* Reap a session whose owner process (and therefore every thread of it) is
+ * gone.  Called from sleepable control paths only. */
+static void reap_dead_session(void)
+{
+    if (session_active() && !mm_has_live_user(g_sess.mm))
+        session_stop();
 }
 
 static unsigned request_fake_len(const struct urov_request *q)
@@ -250,22 +289,36 @@ static void session_count_failure(uint64_t far, uint64_t esr, uint32_t opcode, i
 
 /* ---------------------------------------------------------------- VMA setup */
 
+/*
+ * Accept a dedicated, exactly one-page, read-only executable file mapping.
+ *
+ * An ordinary app cannot create the old sealed-memfd shape: SELinux denies
+ * reopening /proc/self/fd/N and a memfd opened O_RDWR cannot be mapped
+ * PROT_EXEC.  It can, however, map one page of a file it may execute - its own
+ * installed native library or a one-page payload file in its data directory -
+ * with either MAP_PRIVATE or MAP_SHARED.  Requiring the VMA to cover exactly
+ * the registered page keeps the vm_page_prot change local: no VMA split and no
+ * effect on any other page of the app.  pgoff is irrelevant because the page is
+ * pinned by VA and the file is only the backing store.
+ *
+ * Writable, COW, PFN/device and special mappings stay rejected: the pinned
+ * original page must remain the page the PTE refers to.
+ */
 static long validate_vma(void *vma, uint64_t address)
 {
-    unsigned long start, end, flags, pgoff;
+    unsigned long start, end, flags;
     void *file;
     if (!vma) return -EFAULT;
     start = *(unsigned long *)((char *)vma + UROV_VMA_START_OFF);
     end = *(unsigned long *)((char *)vma + UROV_VMA_END_OFF);
     flags = *(unsigned long *)((char *)vma + UROV_VMA_FLAGS_OFF);
-    pgoff = *(unsigned long *)((char *)vma + UROV_VMA_PGOFF_OFF);
     file = *(void **)((char *)vma + UROV_VMA_FILE_OFF);
     if (start != address || end != address + UROV_PAGE_BYTES) return -EINVAL;
-    if ((flags & (UROV_VM_READ | UROV_VM_EXEC | UROV_VM_MAYSHARE)) !=
-        (UROV_VM_READ | UROV_VM_EXEC | UROV_VM_MAYSHARE)) return -EINVAL;
+    if ((flags & (UROV_VM_READ | UROV_VM_EXEC)) !=
+        (UROV_VM_READ | UROV_VM_EXEC)) return -EINVAL;
     if (flags & (UROV_VM_WRITE | UROV_VM_MAYWRITE | UROV_VM_PFNMAP |
                  UROV_VM_HUGETLB | UROV_VM_IO | UROV_VM_MIXEDMAP)) return -EINVAL;
-    if (!file || pgoff) return -EINVAL;
+    if (!file) return -EINVAL;
     return 0;
 }
 
@@ -334,6 +387,9 @@ static long session_stop(void)
         g_sess.page = 0;
     }
     f_mmput(mm);
+    /* Do not leave the previous app's code snapshot, fake bytes or counters
+     * in module memory after the session is gone. */
+    memset(&g_sess, 0, sizeof(g_sess));
     return 0;
 }
 
@@ -477,6 +533,13 @@ static long do_register(struct urov_request *q)
         f_mmput(mm);
         return -EOPNOTSUPP;
     }
+    /* Runtime sanity check for UROV_MM_USERS_OFF: the calling task itself must
+     * be visible in mm_users in addition to our new get_task_mm reference. */
+    if (!mm_has_live_user(mm)) {
+        pr_info("urov: mm_users offset mismatch, refusing registration\n");
+        f_mmput(mm);
+        return -EOPNOTSUPP;
+    }
 
     /* Fault the page in and hold a pin for the session. GUP must run before
      * the mmap write lock is taken (it acquires mmap_lock itself). */
@@ -489,13 +552,22 @@ static long do_register(struct urov_request *q)
     f_mmap_write_lock(mm);
     vma = f_find_vma(mm, q->address);
     ret = validate_vma(vma, q->address);
-    if (ret) goto unlock;
+    if (ret) {
+        static int logged;
+        if (logged++ < 8)
+            pr_info("urov: vma shape rejected flags=%lx\n",
+                    vma ? *(unsigned long *)((char *)vma + UROV_VMA_FLAGS_OFF) : 0UL);
+        goto unlock;
+    }
     ptep = pte_of(mm, q->address);
     if (!ptep) { ret = -EFAULT; goto unlock; }
     pte = __atomic_load_n(ptep, __ATOMIC_ACQUIRE);
     if (!(pte & 1ULL) || (pte & 3ULL) != 3ULL || !(pte & PTE_USER) ||
         !(pte & PTE_RDONLY) || (pte & PTE_UXN) || (pte & PTE_CONT) ||
         (pte & PTE_SPECIAL)) {
+        static int logged;
+        if (logged++ < 8)
+            pr_info("urov: pte shape rejected\n");
         ret = -EOPNOTSUPP;
         goto unlock;
     }
@@ -555,7 +627,7 @@ static long do_set(struct urov_request *q)
     uint64_t words[4];
     unsigned len;
 
-    if (!session_active() || q->session != 1) return -ENOENT;
+    if (!session_owned() || q->session != 1) return -ENOENT;
     if (q->expected_generation != g_sess.generation) return -EAGAIN;
     len = request_fake_len(q);
     if (len != g_sess.overlay_len) return -EINVAL;
@@ -577,7 +649,7 @@ static long do_set(struct urov_request *q)
 
 static long do_status(struct urov_request *q)
 {
-    if (!session_active() || q->session != 1) return -ENOENT;
+    if (!session_owned() || q->session != 1) return -ENOENT;
     q->generation = g_sess.generation;
     q->offset = g_sess.overlay_offset;
     q->length = g_sess.overlay_len;
@@ -595,6 +667,7 @@ static long do_status(struct urov_request *q)
 static long do_deactivate(struct urov_request *q)
 {
     if (q->session != 1 && q->session != 0) return -ENOENT;
+    if (session_active() && !session_owned()) return -ENOENT;
     session_stop();
     q->session = 0;
     q->generation = 0;
@@ -610,7 +683,7 @@ static long do_deactivate(struct urov_request *q)
 
 static long do_query(struct urov_request *q)
 {
-    int active = session_active();
+    int active = session_owned();
 
     q->caps = caps_now();
     q->state = active ? UROV_ACTIVE : UROV_INACTIVE;
@@ -618,8 +691,9 @@ static long do_query(struct urov_request *q)
     q->generation = active ? g_sess.generation : 0;
     q->offset = active ? g_sess.overlay_offset : 0;
     q->length = active ? g_sess.overlay_len : 0;
-    q->hits = __atomic_load_n(&g_sess.hits, __ATOMIC_RELAXED);
-    q->failures = __atomic_load_n(&g_sess.failures, __ATOMIC_RELAXED);
+    q->hits = active ? __atomic_load_n(&g_sess.hits, __ATOMIC_RELAXED) : 0;
+    q->failures = active ? __atomic_load_n(&g_sess.failures, __ATOMIC_RELAXED) : 0;
+    q->last_error = active ? 0 : (session_active() ? -EBUSY : 0);
     return 0;
 }
 
@@ -635,6 +709,9 @@ static long notify_dispatch(unsigned int cmd, struct urov_request *user, unsigne
     if (ret) return ret;
     if (!g_ready) return -EOPNOTSUPP;
     if (!ctrl_try_lock()) return -EBUSY;
+    /* A dead app owner must not pin its page (and block every later app)
+     * forever.  This is the only place a foreign mm is ever cleaned up. */
+    reap_dead_session();
     switch (cmd) {
     case UROV_NOTIFY_QUERY: ret = do_query(&q); break;
     case UROV_NOTIFY_REGISTER: ret = do_register(&q); break;
@@ -659,6 +736,24 @@ static void urov_notify_before(hook_fargs4_t *args, void *udata)
     cmd = (unsigned int)sys_arg(args, 1);
     ret = notify_dispatch(cmd, (struct urov_request *)sys_arg(args, 2),
                           (unsigned long)sys_arg(args, 3));
+    args->ret = (uint64_t)ret;
+    args->skip_origin = 1;
+}
+
+static void urov_prctl_before(hook_fargs4_t *args, void *udata)
+{
+    unsigned int cmd;
+    long ret;
+
+    (void)udata;
+    /* __NR_prctl(option, magic, cmd, request, size).  The option is not a
+     * native prctl option; requiring both magic words keeps every real prctl
+     * caller on the undisturbed path. */
+    if (sys_arg(args, 0) != (uint64_t)UROV_PRCTL_OPTION) return;
+    if (sys_arg(args, 1) != (uint64_t)UROV_PRCTL_MAGIC) return;
+    cmd = (unsigned int)sys_arg(args, 2);
+    ret = notify_dispatch(cmd, (struct urov_request *)sys_arg(args, 3),
+                          (unsigned long)sys_arg(args, 4));
     args->ret = (uint64_t)ret;
     args->skip_origin = 1;
 }
@@ -751,6 +846,17 @@ long urov_backend_init(const char *args)
     }
     g_notify_hooked = 1;
 
+    /* App-facing control channel: prctl is on the untrusted_app seccomp
+     * allowlist, unlike kcmp.  This hook is required for the app build. */
+    ret = fp_hook_syscalln(__NR_prctl, 6, urov_prctl_before, 0, 0);
+    if (ret) {
+        pr_info("urov: hook prctl control channel failed: %ld\n", ret);
+        fp_unhook_syscalln(UROV_NOTIFY_NR, urov_notify_before, 0);
+        g_notify_hooked = 0;
+        goto unwind_abort;
+    }
+    g_prctl_hooked = 1;
+
     for (i = 0; i < UROV_GATE_NUM; ++i) {
         ret = fp_hook_syscalln(g_gate_nrs[i], 6, urov_gate_before, 0, (void *)(uintptr_t)i);
         if (ret) {
@@ -763,6 +869,10 @@ long urov_backend_init(const char *args)
         while (i-- > 0) {
             fp_unhook_syscalln(g_gate_nrs[i], urov_gate_before, 0);
             g_gate_hooked[i] = 0;
+        }
+        if (g_prctl_hooked) {
+            fp_unhook_syscalln(__NR_prctl, urov_prctl_before, 0);
+            g_prctl_hooked = 0;
         }
         fp_unhook_syscalln(UROV_NOTIFY_NR, urov_notify_before, 0);
         g_notify_hooked = 0;
@@ -791,6 +901,10 @@ long urov_backend_exit(void)
         fp_unhook_syscalln(g_gate_nrs[i], urov_gate_before, 0);
         g_gate_hooked[i] = 0;
     }
+    if (g_prctl_hooked) {
+        fp_unhook_syscalln(__NR_prctl, urov_prctl_before, 0);
+        g_prctl_hooked = 0;
+    }
     if (g_notify_hooked) {
         fp_unhook_syscalln(UROV_NOTIFY_NR, urov_notify_before, 0);
         g_notify_hooked = 0;
@@ -811,6 +925,7 @@ void urov_backend_get_status(struct urov_backend_status *out)
     out->failures = __atomic_load_n(&g_sess.failures, __ATOMIC_RELAXED);
     out->active = session_active() ? 1U : 0U;
     out->hooks = (g_abort_hooked ? 1U : 0U) | (g_notify_hooked ? 2U : 0U) |
+                 (g_prctl_hooked ? 8U : 0U) |
                  ((g_gate_hooked[0] && g_gate_hooked[1] && g_gate_hooked[2] && g_gate_hooked[3] && g_gate_hooked[4]) ? 4U : 0U);
     out->core_checks = URO_CORE_CHECKS;
     out->last_error = 0;

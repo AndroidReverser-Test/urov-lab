@@ -1,0 +1,133 @@
+﻿install: Serving...
+Performing Incremental Install
+Success
+Install command complete in 361 ms
+load: 
+status: mode=standalone-resident caps=0xeb7 state=inactive hooks=0xf core_checks=4139 gen=0 hits=0 failures=0 notify_nr=272 notify_magic=0x55524f5653595343 prctl_option=0x55524f56
+run 1 : RESULT PASS
+09-30 15:01:07.886 14860 14860 I urovapp : === app test begin pid=14860 uid=10286 ===
+09-30 15:01:07.886 14860 14860 I urovapp : context=u:r:untrusted_app:s0:c30,c257,c512,c768
+09-30 15:01:07.887 14860 14860 I urovapp : prctl passthrough name=urovapp
+09-30 15:01:07.887 14860 14860 I urovapp : QUERY rc=0 errno=0 caps=0xeb7 state=0
+09-30 15:01:07.887 14860 14860 I urovapp : lib_alias: page=0x7569724000 in_page=0x550 file_off=0x3550
+09-30 15:01:07.889 14860 14860 I urovapp : lib_alias vma=7569724000-7569725000 perms=r-xs size=4096 path=/data/app/~~E2V-jY5euWK8YBwzO34VzA==/com.example.urovapp-b_aKBVIOh63ijnv_Fdd7ng==/lib/arm64/liburovapp.so
+09-30 15:01:07.889 14860 14860 I urovapp : lib_alias baseline execution
+09-30 15:01:07.889 14860 14860 I urovapp : lib_alias registered offset=1364 length=16 generation=1
+09-30 15:01:07.889 14860 14860 I urovapp : lib_alias execution after register (fetch original)
+09-30 15:01:07.889 14860 14860 I urovapp : lib_alias execution after SET
+09-30 15:01:07.904 14860 14860 I urovapp : lib_alias bench ns_per_1k normal=358 overlay=225893 overhead=630x
+09-30 15:01:07.904 14860 14860 I urovapp : lib_alias stale SET rejected
+09-30 15:01:07.904 14860 14860 I urovapp : lib_alias STATUS rc=0 hits=65920 failures=0
+09-30 15:01:07.904 14860 14860 I urovapp : lib_alias mprotect gate errno=16
+09-30 15:01:07.904 14860 14860 I urovapp : lib_alias unsupported SIMD access fails closed
+09-30 15:01:07.908 14860 14860 I urovapp : concurrent readers=4 loops=16874 errors=0 generation=130
+09-30 15:01:07.908 14860 14860 I urovapp : lib_alias DEACTIVATE rc=0 state=0
+09-30 15:01:07.908 14860 14860 I urovapp : lib_alias execution after restore
+09-30 15:01:07.908 14860 14860 I urovapp : lib_alias mprotect after restore errno=0
+09-30 15:01:07.908 14860 14860 I urovapp : data_shared: page=0x7569724000 flags=0x1
+09-30 15:01:07.911 14860 14860 I urovapp : data_shared vma=7569724000-7569725000 perms=r-xs size=4096 path=/data/data/com.example.urovapp/files/urov_overlay.bin (deleted)
+09-30 15:01:07.911 14860 14860 I urovapp : data_shared baseline execution
+09-30 15:01:07.911 14860 14860 I urovapp : data_shared registered offset=8 length=16 generation=1
+09-30 15:01:07.911 14860 14860 I urovapp : data_shared execution after register (fetch original)
+09-30 15:01:07.911 14860 14860 I urovapp : data_shared execution after SET
+09-30 15:01:07.931 14860 14860 I urovapp : data_shared bench ns_per_1k normal=357 overlay=307104 overhead=860x
+09-30 15:01:07.931 14860 14860 I urovapp : data_shared stale SET rejected
+09-30 15:01:07.931 14860 14860 I urovapp : data_shared STATUS rc=0 hits=65923 failures=0
+09-30 15:01:07.931 14860 14860 I urovapp : data_shared mprotect gate errno=16
+09-30 15:01:07.931 14860 14860 I urovapp : data_shared unsupported SIMD access fails closed
+09-30 15:01:07.939 14860 14860 I urovapp : concurrent readers=4 loops=12846 errors=0 generation=130
+09-30 15:01:07.939 14860 14860 I urovapp : data_shared DEACTIVATE rc=0 state=0
+09-30 15:01:07.939 14860 14860 I urovapp : data_shared execution after restore
+09-30 15:01:07.939 14860 14860 I urovapp : data_shared mprotect after restore errno=0
+09-30 15:01:07.940 14860 14860 I urovapp : data_private_reject: page=0x7569724000 flags=0x2
+09-30 15:01:07.942 14860 14860 I urovapp : data_private_reject vma=7569724000-7569725000 perms=r-xp size=4096 path=/data/data/com.example.urovapp/files/urov_overlay.bin (deleted)
+09-30 15:01:07.942 14860 14860 I urovapp : data_private_reject: rejected errno=22 as designed
+09-30 15:01:07.942 14860 14860 I urovapp : === result lib_alias=PASS datafile=PASS overall=PASS ===
+09-30 15:01:07.942 14860 14860 I urovapp : RESULT PASS
+run 1 status: mode=standalone-resident caps=0xeb7 state=inactive hooks=0xf core_checks=4139 gen=0 hits=0 failures=0 notify_nr=272 notify_magic=0x55524f5653595343 prctl_option=0x55524f56
+run 2 : RESULT PASS
+09-30 15:01:08.706 14946 14946 I urovapp : === app test begin pid=14946 uid=10286 ===
+09-30 15:01:08.706 14946 14946 I urovapp : context=u:r:untrusted_app:s0:c30,c257,c512,c768
+09-30 15:01:08.706 14946 14946 I urovapp : prctl passthrough name=urovapp
+09-30 15:01:08.706 14946 14946 I urovapp : QUERY rc=0 errno=0 caps=0xeb7 state=0
+09-30 15:01:08.706 14946 14946 I urovapp : lib_alias: page=0x7569724000 in_page=0x550 file_off=0x3550
+09-30 15:01:08.709 14946 14946 I urovapp : lib_alias vma=7569724000-7569725000 perms=r-xs size=4096 path=/data/app/~~E2V-jY5euWK8YBwzO34VzA==/com.example.urovapp-b_aKBVIOh63ijnv_Fdd7ng==/lib/arm64/liburovapp.so
+09-30 15:01:08.709 14946 14946 I urovapp : lib_alias baseline execution
+09-30 15:01:08.709 14946 14946 I urovapp : lib_alias registered offset=1364 length=16 generation=1
+09-30 15:01:08.709 14946 14946 I urovapp : lib_alias execution after register (fetch original)
+09-30 15:01:08.709 14946 14946 I urovapp : lib_alias execution after SET
+09-30 15:01:08.724 14946 14946 I urovapp : lib_alias bench ns_per_1k normal=357 overlay=228156 overhead=639x
+09-30 15:01:08.724 14946 14946 I urovapp : lib_alias stale SET rejected
+09-30 15:01:08.724 14946 14946 I urovapp : lib_alias STATUS rc=0 hits=65920 failures=0
+09-30 15:01:08.724 14946 14946 I urovapp : lib_alias mprotect gate errno=16
+09-30 15:01:08.724 14946 14946 I urovapp : lib_alias unsupported SIMD access fails closed
+09-30 15:01:08.725 14946 14946 I urovapp : concurrent readers=4 loops=2646 errors=0 generation=130
+09-30 15:01:08.725 14946 14946 I urovapp : lib_alias DEACTIVATE rc=0 state=0
+09-30 15:01:08.725 14946 14946 I urovapp : lib_alias execution after restore
+09-30 15:01:08.725 14946 14946 I urovapp : lib_alias mprotect after restore errno=0
+09-30 15:01:08.724 14946 14946 W urovapp : type=1400 audit(0.0:1318): avc:  granted  { execute } for  path="/data/data/com.example.urovapp/files/urov_overlay.bin" dev="dm-53" ino=45529 scontext=u:r:untrusted_app:s0:c30,c257,c512,c768 tcontext=u:object_r:app_data_file:s0:c30,c257,c512,c768 tclass=file app=com.example.urovapp
+09-30 15:01:08.725 14946 14946 I urovapp : data_shared: page=0x7569724000 flags=0x1
+09-30 15:01:08.728 14946 14946 I urovapp : data_shared vma=7569724000-7569725000 perms=r-xs size=4096 path=/data/data/com.example.urovapp/files/urov_overlay.bin (deleted)
+09-30 15:01:08.728 14946 14946 I urovapp : data_shared baseline execution
+09-30 15:01:08.728 14946 14946 I urovapp : data_shared registered offset=8 length=16 generation=1
+09-30 15:01:08.728 14946 14946 I urovapp : data_shared execution after register (fetch original)
+09-30 15:01:08.728 14946 14946 I urovapp : data_shared execution after SET
+09-30 15:01:08.746 14946 14946 I urovapp : data_shared bench ns_per_1k normal=357 overlay=272660 overhead=763x
+09-30 15:01:08.746 14946 14946 I urovapp : data_shared stale SET rejected
+09-30 15:01:08.746 14946 14946 I urovapp : data_shared STATUS rc=0 hits=65923 failures=0
+09-30 15:01:08.746 14946 14946 I urovapp : data_shared mprotect gate errno=16
+09-30 15:01:08.746 14946 14946 I urovapp : data_shared unsupported SIMD access fails closed
+09-30 15:01:08.750 14946 14946 I urovapp : concurrent readers=4 loops=14992 errors=0 generation=130
+09-30 15:01:08.750 14946 14946 I urovapp : data_shared DEACTIVATE rc=0 state=0
+09-30 15:01:08.750 14946 14946 I urovapp : data_shared execution after restore
+09-30 15:01:08.750 14946 14946 I urovapp : data_shared mprotect after restore errno=0
+09-30 15:01:08.751 14946 14946 I urovapp : data_private_reject: page=0x7569724000 flags=0x2
+09-30 15:01:08.748 14946 14946 W urovapp : type=1400 audit(0.0:1319): avc:  granted  { execute } for  path=2F646174612F646174612F636F6D2E6578616D706C652E75726F766170702F66696C65732F75726F765F6F7665726C61792E62696E202864656C6574656429 dev="dm-53" ino=45529 scontext=u:r:untrusted_app:s0:c30,c257,c512,c768 tcontext=u:object_r:app_data_file:s0:c30,c257,c512,c768 tclass=file app=com.example.urovapp
+09-30 15:01:08.748 14946 14946 W urovapp : type=1400 audit(0.0:1320): avc:  granted  { execute } for  path="/data/data/com.example.urovapp/files/urov_overlay.bin" dev="dm-53" ino=45513 scontext=u:r:untrusted_app:s0:c30,c257,c512,c768 tcontext=u:object_r:app_data_file:s0:c30,c257,c512,c768 tclass=file app=com.example.urovapp
+09-30 15:01:08.753 14946 14946 I urovapp : data_private_reject vma=7569724000-7569725000 perms=r-xp size=4096 path=/data/data/com.example.urovapp/files/urov_overlay.bin (deleted)
+09-30 15:01:08.753 14946 14946 I urovapp : data_private_reject: rejected errno=22 as designed
+09-30 15:01:08.753 14946 14946 I urovapp : === result lib_alias=PASS datafile=PASS overall=PASS ===
+09-30 15:01:08.753 14946 14946 I urovapp : RESULT PASS
+run 2 status: mode=standalone-resident caps=0xeb7 state=inactive hooks=0xf core_checks=4139 gen=0 hits=0 failures=0 notify_nr=272 notify_magic=0x55524f5653595343 prctl_option=0x55524f56
+run 3 : RESULT PASS
+09-30 15:01:09.517 15003 15003 I urovapp : === app test begin pid=15003 uid=10286 ===
+09-30 15:01:09.517 15003 15003 I urovapp : context=u:r:untrusted_app:s0:c30,c257,c512,c768
+09-30 15:01:09.517 15003 15003 I urovapp : prctl passthrough name=urovapp
+09-30 15:01:09.517 15003 15003 I urovapp : QUERY rc=0 errno=0 caps=0xeb7 state=0
+09-30 15:01:09.517 15003 15003 I urovapp : lib_alias: page=0x7569724000 in_page=0x550 file_off=0x3550
+09-30 15:01:09.519 15003 15003 I urovapp : lib_alias vma=7569724000-7569725000 perms=r-xs size=4096 path=/data/app/~~E2V-jY5euWK8YBwzO34VzA==/com.example.urovapp-b_aKBVIOh63ijnv_Fdd7ng==/lib/arm64/liburovapp.so
+09-30 15:01:09.519 15003 15003 I urovapp : lib_alias baseline execution
+09-30 15:01:09.519 15003 15003 I urovapp : lib_alias registered offset=1364 length=16 generation=1
+09-30 15:01:09.519 15003 15003 I urovapp : lib_alias execution after register (fetch original)
+09-30 15:01:09.519 15003 15003 I urovapp : lib_alias execution after SET
+09-30 15:01:09.535 15003 15003 I urovapp : lib_alias bench ns_per_1k normal=357 overlay=234616 overhead=657x
+09-30 15:01:09.535 15003 15003 I urovapp : lib_alias stale SET rejected
+09-30 15:01:09.535 15003 15003 I urovapp : lib_alias STATUS rc=0 hits=65920 failures=0
+09-30 15:01:09.535 15003 15003 I urovapp : lib_alias mprotect gate errno=16
+09-30 15:01:09.535 15003 15003 I urovapp : lib_alias unsupported SIMD access fails closed
+09-30 15:01:09.537 15003 15003 I urovapp : concurrent readers=4 loops=5669 errors=0 generation=130
+09-30 15:01:09.537 15003 15003 I urovapp : lib_alias DEACTIVATE rc=0 state=0
+09-30 15:01:09.537 15003 15003 I urovapp : lib_alias execution after restore
+09-30 15:01:09.537 15003 15003 I urovapp : lib_alias mprotect after restore errno=0
+09-30 15:01:09.537 15003 15003 I urovapp : data_shared: page=0x7569724000 flags=0x1
+09-30 15:01:09.539 15003 15003 I urovapp : data_shared vma=7569724000-7569725000 perms=r-xs size=4096 path=/data/data/com.example.urovapp/files/urov_overlay.bin (deleted)
+09-30 15:01:09.539 15003 15003 I urovapp : data_shared baseline execution
+09-30 15:01:09.539 15003 15003 I urovapp : data_shared registered offset=8 length=16 generation=1
+09-30 15:01:09.539 15003 15003 I urovapp : data_shared execution after register (fetch original)
+09-30 15:01:09.539 15003 15003 I urovapp : data_shared execution after SET
+09-30 15:01:09.554 15003 15003 I urovapp : data_shared bench ns_per_1k normal=357 overlay=224205 overhead=628x
+09-30 15:01:09.554 15003 15003 I urovapp : data_shared stale SET rejected
+09-30 15:01:09.554 15003 15003 I urovapp : data_shared STATUS rc=0 hits=65923 failures=0
+09-30 15:01:09.554 15003 15003 I urovapp : data_shared mprotect gate errno=16
+09-30 15:01:09.554 15003 15003 I urovapp : data_shared unsupported SIMD access fails closed
+09-30 15:01:09.555 15003 15003 I urovapp : concurrent readers=4 loops=1006 errors=0 generation=130
+09-30 15:01:09.555 15003 15003 I urovapp : data_shared DEACTIVATE rc=0 state=0
+09-30 15:01:09.555 15003 15003 I urovapp : data_shared execution after restore
+09-30 15:01:09.555 15003 15003 I urovapp : data_shared mprotect after restore errno=0
+09-30 15:01:09.555 15003 15003 I urovapp : data_private_reject: page=0x7569724000 flags=0x2
+09-30 15:01:09.557 15003 15003 I urovapp : data_private_reject vma=7569724000-7569725000 perms=r-xp size=4096 path=/data/data/com.example.urovapp/files/urov_overlay.bin (deleted)
+09-30 15:01:09.558 15003 15003 I urovapp : data_private_reject: rejected errno=22 as designed
+09-30 15:01:09.558 15003 15003 I urovapp : === result lib_alias=PASS datafile=PASS overall=PASS ===
+09-30 15:01:09.558 15003 15003 I urovapp : RESULT PASS
+run 3 status: mode=standalone-resident caps=0xeb7 state=inactive hooks=0xf core_checks=4139 gen=0 hits=0 failures=0 notify_nr=272 notify_magic=0x55524f5653595343 prctl_option=0x55524f56
+final modules: 

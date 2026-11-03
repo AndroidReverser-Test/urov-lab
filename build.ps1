@@ -45,12 +45,12 @@ if ($LASTEXITCODE -ne 0 -or ($imports -match 'kpm_lifecycle_v2|kp_urov_backend_v
 $userFlags = @('--target=aarch64-linux-android31','-std=gnu11','-O2','-Wall','-Wextra',
     '-Werror','-Wformat=2','-Wshadow','-fPIE','-pie','-pthread')
 $core = @('decode.c','emulate.c','core_selftest.c') | ForEach-Object { Join-Path $PSScriptRoot $_ }
-$direct = @('urov_overlay_test','urov_hold_test','urov_hold2_test')
+$direct = @('urov_overlay_test','urov_hold_test','urov_hold2_test','urov_foreign_test')
 foreach ($test in @('emulate_test','native_test','kpm_check_test','copy_probe','vector_fault_probe',
-                    'urov_overlay_test','urov_hold_test','urov_hold2_test')) {
+                    'urov_overlay_test','urov_hold_test','urov_hold2_test','urov_foreign_test')) {
     $filename = if ($direct -contains $test) { $test } else { 'urov_' + $test }
     $sources = @()
-    if ($test -notmatch '^urov_hold') { $sources += $core }
+    if ($test -notmatch '^urov_(hold|foreign)') { $sources += $core }
     & $clang @userFlags ('-I' + $repo) ('-I' + (Join-Path $repo 'kernel/patch/include')) `
         -idirafter (Join-Path $repo 'kernel/include') @sources `
         (Join-Path $PSScriptRoot ('tests/' + $test + '.c')) -o (Join-Path $out $filename)
@@ -59,8 +59,8 @@ foreach ($test in @('emulate_test','native_test','kpm_check_test','copy_probe','
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-lab-check.kpm')
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-lab.kpm')
 $built = @('urov-lab.kpm', 'urov-lab-check.kpm', 'urov_overlay_test', 'urov_hold_test',
-    'urov_hold2_test', 'urov_copy_probe', 'urov_vector_fault_probe', 'urov_emulate_test',
-    'urov_native_test', 'urov_kpm_check_test')
+    'urov_hold2_test', 'urov_foreign_test', 'urov_copy_probe', 'urov_vector_fault_probe',
+    'urov_emulate_test', 'urov_native_test', 'urov_kpm_check_test')
 $sums = foreach ($name in $built) {
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out $name)).Hash.ToLowerInvariant()
     "$hash  $name"

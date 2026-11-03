@@ -1,0 +1,463 @@
+--- urov module lines ---
+[ 9096.044799] [+] KP I module_control0: name urov-lab, args: status
+[ 9168.127158] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[ 9168.127286] [+] KP D     name: urov-lab
+[ 9168.127305] [+] KP D     author: UROV-LAB
+[ 9168.127918] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[ 9168.128073] urov: resident backend ready, notify nr=272
+[ 9168.128079] [+] KP I load_module: [urov-lab] succeed with [active] 
+[ 9171.188649] urov: emulation failure far=7c84a27004 esr=9200000f opcode=3dc00120 result=-3
+[ 9171.262322] [-] KP E unload_module: name: urov-lab
+[ 9171.262420] [+] KP I unload_module: name: urov-lab, rc: 0
+[ 9522.668230] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[ 9522.668302] [+] KP D     name: urov-lab
+[ 9522.668310] [+] KP D     author: UROV-LAB
+[ 9522.668602] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[ 9522.668692] urov: resident backend ready, notify nr=272
+[ 9522.668694] [+] KP I load_module: [urov-lab] succeed with [active] 
+[ 9522.822888] [-] KP E unload_module: name: urov-lab
+[ 9522.823028] [+] KP I unload_module: name: urov-lab, rc: 0
+[ 9544.067699] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[ 9544.067794] [+] KP D     name: urov-lab
+[ 9544.067804] [+] KP D     author: UROV-LAB
+[ 9544.068151] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[ 9544.068270] urov: resident backend ready, notify nr=272
+[ 9544.068274] [+] KP I load_module: [urov-lab] succeed with [active] 
+[ 9547.172608] urov: emulation failure far=7f2083c004 esr=9200000f opcode=3dc00120 result=-3
+[ 9547.281472] [-] KP E unload_module: name: urov-lab
+[ 9547.281645] [+] KP I unload_module: name: urov-lab, rc: 0
+[ 9567.160753] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[ 9567.160855] [+] KP D     name: urov-lab
+[ 9567.160868] [+] KP D     author: UROV-LAB
+[ 9567.161406] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[ 9567.161539] urov: resident backend ready, notify nr=272
+[ 9567.161545] [+] KP I load_module: [urov-lab] succeed with [active] 
+[ 9570.287450] urov: emulation failure far=71d814c004 esr=9200000f opcode=3dc00120 result=-3
+[ 9570.365733] [-] KP E unload_module: name: urov-lab
+[ 9570.365928] [+] KP I unload_module: name: urov-lab, rc: 0
+[ 9590.446238] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[ 9590.446432] [+] KP D     name: urov-lab
+[ 9590.446451] [+] KP D     author: UROV-LAB
+[ 9590.447119] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[ 9590.447329] urov: resident backend ready, notify nr=272
+[ 9590.447336] [+] KP I load_module: [urov-lab] succeed with [active] 
+[ 9593.788846] urov: emulation failure far=7827b51004 esr=9200000f opcode=3dc00120 result=-3
+[ 9593.933977] [-] KP E unload_module: name: urov-lab
+[ 9593.934112] [+] KP I unload_module: name: urov-lab, rc: 0
+[ 9602.697927] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[ 9602.698064] [+] KP D     name: urov-lab
+[ 9602.698082] [+] KP D     author: UROV-LAB
+[ 9602.698692] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[ 9602.698856] urov: resident backend ready, notify nr=272
+[ 9602.698862] [+] KP I load_module: [urov-lab] succeed with [active] 
+[ 9605.800841] urov: emulation failure far=74d0247004 esr=9200000f opcode=3dc00120 result=-3
+[ 9605.891144] [-] KP E unload_module: name: urov-lab
+[ 9605.891334] [+] KP I unload_module: name: urov-lab, rc: 0
+[ 9605.994713] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[ 9605.994783] [+] KP D     name: urov-lab
+[ 9605.994791] [+] KP D     author: UROV-LAB
+[ 9605.995066] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[ 9605.995151] urov: resident backend ready, notify nr=272
+[ 9605.995153] [+] KP I load_module: [urov-lab] succeed with [active] 
+[ 9609.097785] urov: emulation failure far=7d4f90a004 esr=9200000f opcode=3dc00120 result=-3
+[ 9609.178843] [-] KP E unload_module: name: urov-lab
+[ 9609.179027] [+] KP I unload_module: name: urov-lab, rc: 0
+[ 9609.280767] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[ 9609.280842] [+] KP D     name: urov-lab
+[ 9609.280849] [+] KP D     author: UROV-LAB
+[ 9609.281141] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[ 9609.281227] urov: resident backend ready, notify nr=272
+[ 9609.281230] [+] KP I load_module: [urov-lab] succeed with [active] 
+[ 9612.404547] urov: emulation failure far=767b7fd004 esr=9200000f opcode=3dc00120 result=-3
+[ 9612.494794] [-] KP E unload_module: name: urov-lab
+[ 9612.494953] [+] KP I unload_module: name: urov-lab, rc: 0
+[ 9612.611897] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[ 9612.612133] [+] KP D     name: urov-lab
+[ 9612.612157] [+] KP D     author: UROV-LAB
+[ 9612.612932] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[ 9612.613176] urov: resident backend ready, notify nr=272
+[ 9612.613184] [+] KP I load_module: [urov-lab] succeed with [active] 
+[ 9615.726927] urov: emulation failure far=7b28e03004 esr=9200000f opcode=3dc00120 result=-3
+[ 9615.797918] [-] KP E unload_module: name: urov-lab
+[ 9615.798014] [+] KP I unload_module: name: urov-lab, rc: 0
+[ 9615.886602] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[ 9615.886826] [+] KP D     name: urov-lab
+[ 9615.886845] [+] KP D     author: UROV-LAB
+[ 9615.887524] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[ 9615.887711] urov: resident backend ready, notify nr=272
+[ 9615.887718] [+] KP I load_module: [urov-lab] succeed with [active] 
+[ 9619.003224] urov: emulation failure far=7c64847004 esr=9200000f opcode=3dc00120 result=-3
+[ 9619.092350] [-] KP E unload_module: name: urov-lab
+[ 9619.092516] [+] KP I unload_module: name: urov-lab, rc: 0
+[ 9630.611635] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[ 9630.611735] [+] KP D     name: urov-lab
+[ 9630.611747] [+] KP D     author: UROV-LAB
+[ 9630.612237] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[ 9630.612365] urov: resident backend ready, notify nr=272
+[ 9630.612369] [+] KP I load_module: [urov-lab] succeed with [active] 
+[ 9630.837070] [-] KP E unload_module: name: urov-lab
+[ 9630.837186] [+] KP I unload_module: name: urov-lab, rc: 0
+[ 9644.175717] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[ 9644.175821] [+] KP D     name: urov-lab
+[ 9644.175834] [+] KP D     author: UROV-LAB
+[ 9644.176325] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[ 9644.176452] urov: resident backend ready, notify nr=272
+[ 9644.176457] [+] KP I load_module: [urov-lab] succeed with [active] 
+[ 9644.227495] [+] KP I module_control0: name urov-lab, args: status
+[ 9644.227524] [+] KP I module_control0: name: urov-lab, rc: 0
+[ 9644.291696] [-] KP E unload_module: name: urov-lab
+[ 9644.291883] [+] KP I unload_module: name: urov-lab, rc: 0
+[ 9716.003018] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[ 9716.003243] [+] KP D     name: urov-lab
+[ 9716.003264] [+] KP D     author: UROV-LAB
+[ 9716.003971] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[ 9716.004180] urov: resident backend ready, notify nr=272
+[ 9716.004185] [+] KP I load_module: [urov-lab] succeed with [active] 
+[ 9716.210467] [-] KP E unload_module: name: urov-lab
+[ 9716.210587] [+] KP I unload_module: name: urov-lab, rc: 0
+[10448.589140] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[10448.589239] [+] KP D     name: urov-lab
+[10448.589251] [+] KP D     author: UROV-LAB
+[10448.589795] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[10448.589918] urov: resident backend ready, notify nr=272
+[10448.589922] [+] KP I load_module: [urov-lab] succeed with [active] 
+[10448.753657] [-] KP E unload_module: name: urov-lab
+[10448.753847] [+] KP I unload_module: name: urov-lab, rc: 0
+[10618.267912] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[10618.267970] [+] KP D     name: urov-lab
+[10618.267975] [+] KP D     author: UROV-LAB
+[10618.268170] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[10618.268237] urov: resident backend ready, notify nr=272
+[10618.268239] [+] KP I load_module: [urov-lab] succeed with [active] 
+[10622.554656] [-] KP E unload_module: name: urov-lab
+[10622.554768] [+] KP I unload_module: name: urov-lab, rc: 0
+[10647.526286] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[10647.526400] [+] KP D     name: urov-lab
+[10647.526412] [+] KP D     author: UROV-LAB
+[10647.526872] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[10647.526995] urov: resident backend ready, notify nr=272
+[10647.526999] [+] KP I load_module: [urov-lab] succeed with [active] 
+[10651.937238] [-] KP E unload_module: name: urov-lab
+[10651.937330] [+] KP I unload_module: name: urov-lab, rc: 0
+[11226.200902] [+] KP I module_control0: name urov-lab, args: status
+[11231.486066] [+] KP I module_control0: name urov-lab, args: status
+[11410.875480] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[11410.875559] [+] KP D     name: urov-lab
+[11410.875566] [+] KP D     author: UROV-LAB
+[11410.875859] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[11410.875942] urov: resident backend ready, notify nr=272
+[11410.875944] [+] KP I load_module: [urov-lab] succeed with [active] 
+[11410.994594] [+] KP I module_control0: name urov-lab, args: status
+[11410.994659] [+] KP I module_control0: name: urov-lab, rc: 0
+[11414.154815] urov: emulation failure far=794abd5004 esr=9200000f opcode=3dc00120 result=-3
+[11620.482117] [-] KP E unload_module: name: urov-lab
+[11620.482303] [+] KP I unload_module: name: urov-lab, rc: 0
+[11620.578576] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[11620.578787] [+] KP D     name: urov-lab
+[11620.578806] [+] KP D     author: UROV-LAB
+[11620.579372] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[11620.579530] urov: resident backend ready, notify nr=272
+[11620.579535] [+] KP I load_module: [urov-lab] succeed with [active] 
+[11620.649750] [+] KP I module_control0: name urov-lab, args: status
+[11620.649801] [+] KP I module_control0: name: urov-lab, rc: 0
+[11623.768077] urov: emulation failure far=7c2ae9a004 esr=9200000f opcode=3dc00120 result=-3
+[11733.012667] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[11769.321457] urov: emulation failure far=7569724e44 esr=9200000f opcode=3dc00260 result=-3
+[11769.324482] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[11887.357849] [-] KP E unload_module: name: urov-lab
+[11887.358023] [+] KP I unload_module: name: urov-lab, rc: 0
+[11887.430098] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[11887.430262] [+] KP D     name: urov-lab
+[11887.430271] [+] KP D     author: UROV-LAB
+[11887.430698] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[11887.430843] urov: resident backend ready, notify nr=272
+[11887.430847] [+] KP I load_module: [urov-lab] succeed with [active] 
+[11887.469436] [+] KP I module_control0: name urov-lab, args: status
+[11887.469481] [+] KP I module_control0: name: urov-lab, rc: 0
+[11890.440348] urov: emulation failure far=7569724ea4 esr=9200000f opcode=3dc00260 result=-3
+[11890.444236] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[11925.155555] [+] KP I module_control0: name urov-lab, args: status
+[11925.155586] [+] KP I module_control0: name: urov-lab, rc: 0
+[11927.664275] [+] KP I module_control0: name urov-lab, args: status
+[11927.664338] [+] KP I module_control0: name: urov-lab, rc: 0
+[11933.334157] [+] KP I module_control0: name urov-lab, args: status
+[11933.334235] [+] KP I module_control0: name: urov-lab, rc: 0
+[11936.252360] urov: emulation failure far=7569724ea4 esr=9200000f opcode=3dc00260 result=-3
+[11936.256058] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[11952.337278] [-] KP E unload_module: name: urov-lab
+[11952.337387] [+] KP I unload_module: name: urov-lab, rc: 0
+[11967.706350] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[11967.706449] [+] KP D     name: urov-lab
+[11967.706455] [+] KP D     author: UROV-LAB
+[11967.706804] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[11967.706910] urov: resident backend ready, notify nr=272
+[11967.706912] [+] KP I load_module: [urov-lab] succeed with [active] 
+[11967.743604] [+] KP I module_control0: name urov-lab, args: status
+[11967.743653] [+] KP I module_control0: name: urov-lab, rc: 0
+[12000.041469] [-] KP E unload_module: name: urov-lab
+[12000.041609] [+] KP I unload_module: name: urov-lab, rc: 0
+[12010.396295] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12010.396372] [+] KP D     name: urov-lab
+[12010.396380] [+] KP D     author: UROV-LAB
+[12010.396661] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12010.396754] urov: resident backend ready, notify nr=272
+[12010.396756] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12013.676546] [+] KP I module_control0: name urov-lab, args: status
+[12013.676593] [+] KP I module_control0: name: urov-lab, rc: 0
+[12013.720341] [-] KP E unload_module: name: urov-lab
+[12013.720442] [+] KP I unload_module: name: urov-lab, rc: 0
+[12022.243069] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12022.243261] [+] KP D     name: urov-lab
+[12022.243277] [+] KP D     author: UROV-LAB
+[12022.243916] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12022.244113] urov: resident backend ready, notify nr=272
+[12022.244119] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12025.471119] [-] KP E unload_module: name: urov-lab
+[12025.471258] [+] KP I unload_module: name: urov-lab, rc: 0
+[12037.026320] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12037.026499] [+] KP D     name: urov-lab
+[12037.026517] [+] KP D     author: UROV-LAB
+[12037.027107] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12037.027267] urov: resident backend ready, notify nr=272
+[12037.027272] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12040.145819] urov: emulation failure far=7a75828004 esr=9200000f opcode=3dc00120 result=-3
+[12040.224267] [-] KP E unload_module: name: urov-lab
+[12040.224423] [+] KP I unload_module: name: urov-lab, rc: 0
+[12040.345370] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12040.345659] [+] KP D     name: urov-lab
+[12040.345680] [+] KP D     author: UROV-LAB
+[12040.346375] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12040.346594] urov: resident backend ready, notify nr=272
+[12040.346603] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12043.465976] urov: emulation failure far=7317600004 esr=9200000f opcode=3dc00120 result=-3
+[12043.542148] [-] KP E unload_module: name: urov-lab
+[12043.542252] [+] KP I unload_module: name: urov-lab, rc: 0
+[12046.978089] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12046.978199] [+] KP D     name: urov-lab
+[12046.978211] [+] KP D     author: UROV-LAB
+[12046.978711] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12046.978850] urov: resident backend ready, notify nr=272
+[12046.978854] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12047.779875] urov: emulation failure far=7569724ea4 esr=9200000f opcode=3dc00260 result=-3
+[12047.785189] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12051.856140] [+] KP I module_control0: name urov-lab, args: status
+[12051.856178] [+] KP I module_control0: name: urov-lab, rc: 0
+[12052.211605] urov: emulation failure far=7569724ea4 esr=9200000f opcode=3dc00260 result=-3
+[12052.215063] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12056.301633] [+] KP I module_control0: name urov-lab, args: status
+[12056.301714] [+] KP I module_control0: name: urov-lab, rc: 0
+[12056.652480] urov: emulation failure far=7569724ea4 esr=9200000f opcode=3dc00260 result=-3
+[12056.656191] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12060.734973] [+] KP I module_control0: name urov-lab, args: status
+[12060.735007] [+] KP I module_control0: name: urov-lab, rc: 0
+[12061.102766] urov: emulation failure far=7569724ea4 esr=9200000f opcode=3dc00260 result=-3
+[12061.105960] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12065.191157] [+] KP I module_control0: name urov-lab, args: status
+[12065.191206] [+] KP I module_control0: name: urov-lab, rc: 0
+[12065.548815] urov: emulation failure far=7569724ea4 esr=9200000f opcode=3dc00260 result=-3
+[12065.552228] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12069.659555] [+] KP I module_control0: name urov-lab, args: status
+[12069.659633] [+] KP I module_control0: name: urov-lab, rc: 0
+[12099.870289] [-] KP E unload_module: name: urov-lab
+[12099.870466] [+] KP I unload_module: name: urov-lab, rc: 0
+[12099.967583] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12099.967710] [+] KP D     name: urov-lab
+[12099.967726] [+] KP D     author: UROV-LAB
+[12099.968340] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12099.968511] urov: resident backend ready, notify nr=272
+[12099.968516] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12100.009060] [+] KP I module_control0: name urov-lab, args: status
+[12100.009101] [+] KP I module_control0: name: urov-lab, rc: 0
+[12106.745145] urov: emulation failure far=7569724f44 esr=9200000f opcode=3dc00260 result=-3
+[12106.748101] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12130.513316] [-] KP E unload_module: name: urov-lab
+[12130.513424] [+] KP I unload_module: name: urov-lab, rc: 0
+[12130.599384] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12130.599568] [+] KP D     name: urov-lab
+[12130.599585] [+] KP D     author: UROV-LAB
+[12130.600204] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12130.600393] urov: resident backend ready, notify nr=272
+[12130.600399] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12130.948828] urov: emulation failure far=7569724f44 esr=9200000f opcode=3dc00260 result=-3
+[12130.951966] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12130.955766] urov: vma reject start=7569724000 end=7569725000 flags=75 file=ffffff892c064000
+[12178.189629] [-] KP E unload_module: name: urov-lab
+[12178.189735] [+] KP I unload_module: name: urov-lab, rc: 0
+[12178.245643] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12178.245712] [+] KP D     name: urov-lab
+[12178.245717] [+] KP D     author: UROV-LAB
+[12178.245923] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12178.245990] urov: resident backend ready, notify nr=272
+[12178.245991] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12178.559204] urov: emulation failure far=75697240d4 esr=9200000f opcode=3dc00260 result=-3
+[12178.564070] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12178.567852] urov: vma reject start=7569724000 end=7569725000 flags=75 file=ffffff8911e19900
+[12186.676188] [+] KP I module_control0: name urov-lab, args: status
+[12186.676242] [+] KP I module_control0: name: urov-lab, rc: 0
+[12239.607649] [-] KP E unload_module: name: urov-lab
+[12239.607757] [+] KP I unload_module: name: urov-lab, rc: 0
+[12239.692735] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12239.692805] [+] KP D     name: urov-lab
+[12239.692811] [+] KP D     author: UROV-LAB
+[12239.693064] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12239.693143] urov: resident backend ready, notify nr=272
+[12239.693145] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12239.726171] [+] KP I module_control0: name urov-lab, args: status
+[12239.726205] [+] KP I module_control0: name: urov-lab, rc: 0
+[12240.039608] urov: emulation failure far=75697240d4 esr=9200000f opcode=3dc00260 result=-3
+[12240.052479] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12240.058076] urov: vma reject start=7569724000 end=7569725000 flags=75 file=ffffff8029cb5180
+[12240.534165] [+] KP I module_control0: name urov-lab, args: status
+[12240.534219] [+] KP I module_control0: name: urov-lab, rc: 0
+[12240.858999] urov: emulation failure far=75697240d4 esr=9200000f opcode=3dc00260 result=-3
+[12240.862611] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12240.867708] urov: vma reject start=7569724000 end=7569725000 flags=75 file=ffffff88739fcdc0
+[12241.328456] [+] KP I module_control0: name urov-lab, args: status
+[12241.328509] [+] KP I module_control0: name: urov-lab, rc: 0
+[12241.703128] urov: emulation failure far=75697240d4 esr=9200000f opcode=3dc00260 result=-3
+[12241.706356] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12241.712318] urov: vma reject start=7569724000 end=7569725000 flags=75 file=ffffff88b8eab180
+[12242.173662] [+] KP I module_control0: name urov-lab, args: status
+[12242.173713] [+] KP I module_control0: name: urov-lab, rc: 0
+[12242.221877] [-] KP E unload_module: name: urov-lab
+[12242.222008] [+] KP I unload_module: name: urov-lab, rc: 0
+[12267.714538] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12267.714615] [+] KP D     name: urov-lab
+[12267.714622] [+] KP D     author: UROV-LAB
+[12267.714865] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12267.714946] urov: resident backend ready, notify nr=272
+[12267.714948] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12268.044087] urov: emulation failure far=7569724334 esr=9200000f opcode=3dc00260 result=-3
+[12268.054380] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12268.065320] urov: vma reject start=7569724000 end=7569725000 flags=75 file=ffffff88fd243a40
+[12288.782329] urov: emulation failure far=7569724354 esr=9200000f opcode=3dc00260 result=-3
+[12288.801852] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12288.806599] urov: vma reject start=7569724000 end=7569725000 flags=75 file=ffffff89131ef540
+[12311.330860] urov: emulation failure far=75697244e4 esr=9200000f opcode=3dc00260 result=-3
+[12311.359237] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12311.362580] urov: vma reject start=7569724000 end=7569725000 flags=75 file=ffffff884f200b40
+[12363.225524] [-] KP E unload_module: name: urov-lab
+[12363.225681] [+] KP I unload_module: name: urov-lab, rc: 0
+[12363.309834] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12363.309976] [+] KP D     name: urov-lab
+[12363.309991] [+] KP D     author: UROV-LAB
+[12363.310437] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12363.310756] urov: resident backend ready, notify nr=272
+[12363.310762] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12363.344018] [+] KP I module_control0: name urov-lab, args: status
+[12363.344054] [+] KP I module_control0: name: urov-lab, rc: 0
+[12363.676086] urov: emulation failure far=7569724554 esr=9200000f opcode=3dc00260 result=-3
+[12363.720111] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12363.731840] urov: vma shape rejected flags=75
+[12364.114789] [+] KP I module_control0: name urov-lab, args: status
+[12364.114826] [+] KP I module_control0: name: urov-lab, rc: 0
+[12364.452075] urov: emulation failure far=7569724554 esr=9200000f opcode=3dc00260 result=-3
+[12364.471266] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12364.476589] urov: vma shape rejected flags=75
+[12364.913521] [+] KP I module_control0: name urov-lab, args: status
+[12364.913601] [+] KP I module_control0: name: urov-lab, rc: 0
+[12365.241164] urov: emulation failure far=7569724554 esr=9200000f opcode=3dc00260 result=-3
+[12365.260490] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12365.265417] urov: vma shape rejected flags=75
+[12365.692101] [+] KP I module_control0: name urov-lab, args: status
+[12365.692154] [+] KP I module_control0: name: urov-lab, rc: 0
+[12365.720830] [-] KP E unload_module: name: urov-lab
+[12365.720950] [+] KP I unload_module: name: urov-lab, rc: 0
+[12375.494796] [-] KP E unload_module: name: urov-lab
+[12375.584502] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12375.584566] [+] KP D     name: urov-lab
+[12375.584572] [+] KP D     author: UROV-LAB
+[12375.584826] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12375.584906] urov: resident backend ready, notify nr=272
+[12375.584908] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12375.615817] [+] KP I module_control0: name urov-lab, args: status
+[12375.615860] [+] KP I module_control0: name: urov-lab, rc: 0
+[12375.992785] urov: emulation failure far=7569724554 esr=9200000f opcode=3dc00260 result=-3
+[12376.020818] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12376.025872] urov: vma shape rejected flags=75
+[12376.429889] [+] KP I module_control0: name urov-lab, args: status
+[12376.429925] [+] KP I module_control0: name: urov-lab, rc: 0
+[12376.473277] [-] KP E unload_module: name: urov-lab
+[12376.473472] [+] KP I unload_module: name: urov-lab, rc: 0
+[12383.360756] [-] KP E unload_module: name: urov-lab
+[12383.415673] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12383.415849] [+] KP D     name: urov-lab
+[12383.415866] [+] KP D     author: UROV-LAB
+[12383.416498] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12383.416665] urov: resident backend ready, notify nr=272
+[12383.416670] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12386.568822] urov: emulation failure far=73026dc004 esr=9200000f opcode=3dc00120 result=-3
+[12386.691625] [+] KP I module_control0: name urov-lab, args: status
+[12386.691692] [+] KP I module_control0: name: urov-lab, rc: 0
+[12395.804386] [+] KP I module_control0: name urov-lab, args: status
+[12395.804427] [+] KP I module_control0: name: urov-lab, rc: 0
+[12399.183593] [+] KP I module_control0: name urov-lab, args: status
+[12399.183657] [+] KP I module_control0: name: urov-lab, rc: 0
+[12401.481673] [+] KP I module_control0: name urov-lab, args: status
+[12401.481721] [+] KP I module_control0: name: urov-lab, rc: 0
+[12405.233361] urov: emulation failure far=7569724554 esr=9200000f opcode=3dc00260 result=-3
+[12405.269785] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12405.275951] urov: vma shape rejected flags=75
+[12411.311311] [+] KP I module_control0: name urov-lab, args: status
+[12411.311363] [+] KP I module_control0: name: urov-lab, rc: 0
+[12418.656861] [-] KP E unload_module: name: urov-lab
+[12418.656961] [+] KP I unload_module: name: urov-lab, rc: 0
+[12560.403572] [-] KP E unload_module: name: urov-lab
+[12560.477917] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12560.477987] [+] KP D     name: urov-lab
+[12560.477994] [+] KP D     author: UROV-LAB
+[12560.478245] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12560.478321] urov: resident backend ready, notify nr=272
+[12560.478323] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12560.512459] [+] KP I module_control0: name urov-lab, args: status
+[12560.512482] [+] KP I module_control0: name: urov-lab, rc: 0
+[12560.832939] urov: emulation failure far=7569724554 esr=9200000f opcode=3dc00260 result=-3
+[12560.860200] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12560.871234] urov: vma shape rejected flags=75
+[12561.309524] [+] KP I module_control0: name urov-lab, args: status
+[12561.309623] [+] KP I module_control0: name: urov-lab, rc: 0
+[12561.652843] urov: emulation failure far=7569724554 esr=9200000f opcode=3dc00260 result=-3
+[12561.675044] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12561.681939] urov: vma shape rejected flags=75
+[12562.123749] [+] KP I module_control0: name urov-lab, args: status
+[12562.123815] [+] KP I module_control0: name: urov-lab, rc: 0
+[12562.463989] urov: emulation failure far=7569724554 esr=9200000f opcode=3dc00260 result=-3
+[12562.483145] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12562.486553] urov: vma shape rejected flags=75
+[12562.920737] [+] KP I module_control0: name urov-lab, args: status
+[12562.920795] [+] KP I module_control0: name: urov-lab, rc: 0
+[12562.957997] [-] KP E unload_module: name: urov-lab
+[12562.958110] [+] KP I unload_module: name: urov-lab, rc: 0
+[12568.542849] [-] KP E unload_module: name: urov-lab
+[12568.597844] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12568.598116] [+] KP D     name: urov-lab
+[12568.598138] [+] KP D     author: UROV-LAB
+[12568.598895] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12568.599127] urov: resident backend ready, notify nr=272
+[12568.599134] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12571.732275] urov: emulation failure far=7057efa004 esr=9200000f opcode=3dc00120 result=-3
+[12571.815004] [-] KP E unload_module: name: urov-lab
+[12571.815128] [+] KP I unload_module: name: urov-lab, rc: 0
+[12612.773446] [-] KP E unload_module: name: urov-lab
+[12612.851456] [+] KP D load_module_path: /data/local/tmp/urov-lab.kpm
+[12612.851513] [+] KP D     name: urov-lab
+[12612.851518] [+] KP D     author: UROV-LAB
+[12612.851719] urov: abort=ffffffe7a523bbc4 task_mm=ffffffe7a52a99ac mmput=ffffffe7a52a9180 mmap=ffffffe7a5605990/ffffffe7a55107b8 tlb=ffffffe7a56446c4 sig=ffffffe7a52c3f34 copy=ffffffe7a54c1574/ffffffe7a54c16c4 wrapper=1
+[12612.851785] urov: resident backend ready, notify nr=272
+[12612.851786] [+] KP I load_module: [urov-lab] succeed with [active] 
+[12612.901995] [+] KP I module_control0: name urov-lab, args: status
+[12612.902044] [+] KP I module_control0: name: urov-lab, rc: 0
+[12613.291877] urov: emulation failure far=7569724554 esr=9200000f opcode=3dc00260 result=-3
+[12613.329087] urov: emulation failure far=7569724008 esr=9200000f opcode=3dc00260 result=-3
+[12613.334004] urov: vma shape rejected flags=75
+[12613.686070] [+] KP I module_control0: name urov-lab, args: status
+[12613.686104] [+] KP I module_control0: name: urov-lab, rc: 0
+[12613.721208] [-] KP E unload_module: name: urov-lab
+[12613.721337] [+] KP I unload_module: name: urov-lab, rc: 0
+--- kernel BUG/WARNING/Oops/Call trace/RCU stall/watchdog grep (case-sensitive) ---
+(no matches)
+--- expected SELinux grants for the app payload page ---
+[11508.826598] type=1400 audit(1759214615.896:1081): avc:  granted  { execute } for  comm="example.urovapp" path="/data/data/com.example.urovapp/files/urovprobe.bin" dev="dm-53" ino=47047 scontext=u:r:untrusted_app:s0:c30,c257,c512,c768 tcontext=u:object_r:app_data_file:s0:c30,c257,c512,c768 tclass=file app=com.example.urovapp
+[11733.012748] type=1400 audit(1759214840.080:1090): avc:  granted  { execute } for  comm="example.urovapp" path="/data/data/com.example.urovapp/files/urov_overlay.bin" dev="dm-53" ino=47142 scontext=u:r:untrusted_app:s0:c30,c257,c512,c768 tcontext=u:object_r:app_data_file:s0:c30,c257,c512,c768 tclass=file app=com.example.urovapp
+[11733.013185] type=1400 audit(1759214840.080:1091): avc:  granted  { execute } for  comm="example.urovapp" path=2F646174612F646174612F636F6D2E6578616D706C652E75726F766170702F66696C65732F75726F765F6F7665726C61792E62696E202864656C6574656429 dev="dm-53" ino=47142 scontext=u:r:untrusted_app:s0:c30,c257,c512,c768 tcontext=u:object_r:app_data_file:s0:c30,c257,c512,c768 tclass=file app=com.example.urovapp
+[12047.781950] type=1400 audit(1759215154.852:1145): avc:  granted  { execute } for  comm="example.urovapp" path="/data/data/com.example.urovapp/files/urov_overlay.bin" dev="dm-53" ino=47638 scontext=u:r:untrusted_app:s0:c30,c257,c512,c768 tcontext=u:object_r:app_data_file:s0:c30,c257,c512,c768 tclass=file app=com.example.urovapp

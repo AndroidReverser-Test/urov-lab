@@ -1,6 +1,8 @@
 # UROV-LAB：ARM64 读取异常覆盖完整设计
 
 > 历史记录（2026-11-02）。设计中的“KPM 内独立异常后端”已于 2026-11-03 实现并完成真机活动覆盖，见 [README.md](README.md) 与 [RESULTS_OVERLAY.md](RESULTS_OVERLAY.md)。下文保留当时设计与证据；其中 CORE-1 常驻内核部分未采用。
+>
+> 2026-11-04 增补：普通 app 支持（`__NR_prctl` 控制通道、一页只读可执行文件映射、mm 所有权与死 owner 回收）已实现并验收，见 [APP_OVERLAY.md](APP_OVERLAY.md)。本文 LAB-1 的 sealed memfd/单页 `MAP_SHARED` 约束仍是 root 验收路径；app 路径不再要求 memfd，但页仍需“一页、只读、可执行、文件后备、无 `VM_MAYWRITE`”。
 
 日期：2026-11-02。状态：设计、解码/模拟核心、预检KPM及部分真机测试已完成，活动覆盖后端尚未实现；不是已通过完整真机覆盖验收的 KPM。最新证据见 `IMPLEMENTATION_RESULTS.md`，下一阶段详细实施契约见 `BACKEND_CONTRACT.md`。
 
