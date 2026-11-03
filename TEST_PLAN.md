@@ -1,6 +1,6 @@
 # UROV 实验后端：审计记录与分阶段测试计划
 
-> 历史计划与记录（2026-11-02）。2026-11-03 当前代码交付见 [DELIVERY.md](DELIVERY.md)，最新结果见 [CURRENT_RESULTS.md](CURRENT_RESULTS.md)。S3–S7 仍未完成。
+> 历史计划与记录（2026-11-02）。2026-11-03 的独立 KPM 实现已完成活动覆盖，见 [README.md](README.md) 与 [RESULTS_OVERLAY.md](RESULTS_OVERLAY.md)；本文的 S3–S7 条目作为背景保留。
 
 日期：2026-11-02（Asia/Shanghai）。适用范围：当前设备绑定的、单个自有测试进程、单个 4 KiB sealed memfd RX 页、单个可原子更新的 8 字节覆盖区间。
 

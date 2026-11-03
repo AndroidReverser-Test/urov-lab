@@ -1,6 +1,6 @@
 # UROV-LAB：ARM64 读取异常覆盖完整设计
 
-> 历史记录（2026-11-02）。2026-11-03 已新增常驻后端候选实现，仍未通过活动覆盖验收；当前状态见 [DELIVERY.md](DELIVERY.md) 和 [CURRENT_RESULTS.md](CURRENT_RESULTS.md)。下文保留当时设计与证据。
+> 历史记录（2026-11-02）。设计中的“KPM 内独立异常后端”已于 2026-11-03 实现并完成真机活动覆盖，见 [README.md](README.md) 与 [RESULTS_OVERLAY.md](RESULTS_OVERLAY.md)。下文保留当时设计与证据；其中 CORE-1 常驻内核部分未采用。
 
 日期：2026-11-02。状态：设计、解码/模拟核心、预检KPM及部分真机测试已完成，活动覆盖后端尚未实现；不是已通过完整真机覆盖验收的 KPM。最新证据见 `IMPLEMENTATION_RESULTS.md`，下一阶段详细实施契约见 `BACKEND_CONTRACT.md`。
 

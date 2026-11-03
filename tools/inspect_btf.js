@@ -132,17 +132,19 @@ function flattened(type, prefix = '', base = 0, depth = 0) {
   return result;
 }
 const wanted = {
-  mm_struct: ['mmap_lock', 'pgd', 'mm_users', 'mm_count', 'flags'],
+  mm_struct: ['mmap_lock', 'pgd', 'mm_users', 'mm_count', 'flags', 'mm_lock_seq'],
   task_struct: ['mm', 'active_mm', 'pid', 'tgid'],
-  vm_area_struct: ['vm_start', 'vm_end', 'vm_mm', 'vm_flags', 'vm_page_prot', 'vm_file', 'vm_pgoff', 'vm_ops'],
-  file: ['f_inode', 'f_mapping', 'f_mode', 'f_op'],
+  vm_area_struct: ['vm_start', 'vm_end', 'vm_mm', 'vm_flags', 'vm_page_prot', 'vm_file', 'vm_pgoff', 'vm_ops', 'vm_lock', 'vm_lock_seq'],
+  file: ['f_inode', 'f_mapping', 'f_mode', 'f_op', 'private_data'],
   inode: ['i_ino', 'i_sb', 'i_mapping', 'i_size', 'i_mode'],
   super_block: ['s_magic', 's_type'],
   address_space: ['host', 'a_ops', 'i_mmap_rwsem'],
   shmem_inode_info: ['seals', 'vfs_inode'],
   rw_semaphore: ['count', 'owner'],
   page: ['flags', '_refcount', '_mapcount', 'mapping', 'index'],
-  pt_regs: ['user_regs', 'regs', 'sp', 'pc', 'pstate']
+  pt_regs: ['user_regs', 'regs', 'sp', 'pc', 'pstate'],
+  userfaultfd_ctx: ['mm'],
+  vma_lock: ['lock']
 };
 const structs = {};
 for (const [name, fields] of Object.entries(wanted)) {

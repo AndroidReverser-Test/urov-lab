@@ -21,20 +21,16 @@
 #include <asm/pgtable.h>
 #include <asm/tlbflush.h>
 #include "emulate.h"
-#include "urov_abi.h"
+#include "control_core.h"
 
 struct urov_session {
 	struct mm_struct *mm; /* mm_count only; never pins mm_users until exit */
 	struct page *page;
 	struct uro_view view;
-	u64 id, registration_id, initial_value, flags;
-	u64 value __aligned(8), generation;
-	u64 last_set_id, last_set_expected, last_set_value;
+	struct urov_control_record ctl;
 	unsigned long original_flags;
 	pgprot_t original_prot;
 	atomic64_t hits, failures;
-	u32 state;
-	int error;
 	u8 bytes[UROV_PAGE_BYTES];
 };
 
@@ -168,7 +164,7 @@ unlock:
 	mmap_write_unlock(s->mm);
 	/* mmput must be outside urov_lock: it may be the last reference and
 	 * synchronously re-enter urov_mm_release(). The caller drops it later. */
-	if (ret) { s->state = UROV_RETAINED; s->error = ret; return ret; }
+	if (ret) { s->ctl.state = UROV_RETAINED; s->ctl.error = ret; return ret; }
 	rcu_assign_pointer(urov_current, NULL);
 	synchronize_rcu();
 	static_branch_disable(&urov_active);
@@ -206,10 +202,9 @@ static int register_self(struct urov_request *q)
 	if (!core_ready || !current->mm || is_compat_task()) return -EOPNOTSUPP;
 	if (!epan && (!(q->flags & UROV_F_RAW_XOM) || !IS_ENABLED(CONFIG_UROV_LAB_RAW_XOM)))
 		return -EOPNOTSUPP;
-	if (!q->request_id || q->session || q->expected_generation ||
-	    q->address < PAGE_SIZE || !PAGE_ALIGNED(q->address) ||
-	    q->address >= TASK_SIZE - PAGE_SIZE || q->offset > PAGE_SIZE - 8)
-		return -EINVAL;
+	/* The shared control core validated the wire fields and page alignment.
+	 * The address limit belongs to this task and remains a native check. */
+	if (q->address >= TASK_SIZE - PAGE_SIZE) return -EINVAL;
 	if (next_id == U64_MAX) return -EOVERFLOW;
 	s = kzalloc(sizeof(*s), GFP_KERNEL);
 	if (!s) return -ENOMEM;
@@ -218,12 +213,7 @@ static int register_self(struct urov_request *q)
 	s->view.base = q->address;
 	s->view.user_limit = TASK_SIZE;
 	s->view.overlay_offset = q->offset;
-	s->id = ++next_id;
-	s->registration_id = q->request_id;
-	s->initial_value = s->value = q->value;
-	s->flags = q->flags;
-	s->generation = 1;
-	s->state = UROV_ACTIVE;
+	urov_record_begin(&s->ctl, ++next_id, q);
 	atomic64_set(&s->hits, 0);
 	atomic64_set(&s->failures, 0);
 	/* GUP may take mmap_lock internally. Revalidate every field afterwards. */
@@ -267,20 +257,6 @@ free:
 	return ret;
 }
 
-static void report(struct urov_request *q, struct urov_session *s)
-{
-	q->caps = capabilities();
-	q->session = s->id;
-	q->address = s->view.base;
-	q->offset = s->view.overlay_offset;
-	q->value = s->value;
-	q->generation = s->generation;
-	q->state = s->state;
-	q->last_error = s->error;
-	q->hits = atomic64_read(&s->hits);
-	q->failures = atomic64_read(&s->failures);
-}
-
 /* Kernel callers are trusted; USER requests are copied/validated here. The
  * bridge is called only from KP v2's sleepable, counted callback context. */
 long urov_backend_v1(unsigned int call, void *request, unsigned long size)
@@ -294,10 +270,6 @@ long urov_backend_v1(unsigned int call, void *request, unsigned long size)
 	if (call == UROV_BACKEND_USER) {
 		if (!request || size != sizeof(q)) return -EINVAL;
 		if (copy_from_user(&q, (void __user *)request, sizeof(q))) return -EFAULT;
-		if (q.size != sizeof(q) || q.version != UROV_ABI_VERSION || q.reserved0 ||
-		    q.reserved[0] || q.reserved[1] || q.reserved[2] || (q.flags & ~UROV_F_RAW_XOM))
-			return -EINVAL;
-		if (q.op < UROV_QUERY || q.op > UROV_DEACTIVATE) return -EINVAL;
 	}
 	mutex_lock(&urov_lock);
 	s = locked_session();
@@ -305,54 +277,19 @@ long urov_backend_v1(unsigned int call, void *request, unsigned long size)
 		if (s) goto drain;
 		goto unlock;
 	}
-	q.caps = capabilities();
-	if (q.op == UROV_QUERY) {
-		q.state = UROV_INACTIVE;
-		q.session = q.generation = q.hits = q.failures = 0;
-		q.last_error = 0;
-		goto unlock;
-	}
-	if (q.op == UROV_REGISTER) {
-		if (s) {
-			if (s->mm == current->mm && s->registration_id == q.request_id &&
-			    s->view.base == q.address && s->view.overlay_offset == q.offset &&
-			    s->initial_value == q.value && s->flags == q.flags && !q.session &&
-			    !q.expected_generation) report(&q, s);
-			else ret = -EBUSY;
-		} else {
-			ret = register_self(&q);
-			if (!ret) report(&q, locked_session());
+	ret = urov_control_decide(&q, s ? &s->ctl : NULL, s && s->mm == current->mm,
+				  capabilities(), s ? atomic64_read(&s->hits) : 0,
+				  s ? atomic64_read(&s->failures) : 0);
+	if (ret == UROV_CTL_REGISTER) {
+		ret = register_self(&q);
+		if (!ret) {
+			s = locked_session();
+			urov_record_report(&q, &s->ctl, atomic64_read(&s->hits),
+					   atomic64_read(&s->failures));
 		}
 		goto unlock;
 	}
-	if (!s) {
-		/* Deactivation is idempotent; an absent handle never restores a PTE. */
-		if (q.op == UROV_DEACTIVATE) { q.state = UROV_INACTIVE; goto unlock; }
-		ret = -ENOENT; goto unlock;
-	}
-	if (s->mm != current->mm) { ret = -EPERM; goto unlock; }
-	if (q.session != s->id && !(q.op == UROV_STATUS && !q.session && q.request_id == s->registration_id)) {
-		ret = -ESTALE; goto unlock;
-	}
-	if (q.op == UROV_STATUS) { report(&q, s); goto unlock; }
-	if (q.op == UROV_SET) {
-		if (s->state != UROV_ACTIVE) { ret = -EBUSY; goto unlock; }
-		if (!q.request_id) { ret = -EINVAL; goto unlock; }
-		if (q.request_id == s->last_set_id) {
-			if (q.value != s->last_set_value || q.expected_generation != s->last_set_expected)
-				ret = -EINVAL;
-		} else if (q.expected_generation != s->generation) ret = -EAGAIN;
-		else if (s->generation == U64_MAX) ret = -EOVERFLOW;
-		else {
-			s->last_set_id = q.request_id;
-			s->last_set_expected = q.expected_generation;
-			s->last_set_value = q.value;
-			smp_store_release(&s->value, q.value);
-			++s->generation;
-		}
-		if (!ret) report(&q, s);
-		goto unlock;
-	}
+	if (ret != UROV_CTL_DEACTIVATE) goto unlock;
 drain:
 	ret = deactivate(s);
 	/* deactivate took exactly one temporary mm_users on every path except
@@ -397,7 +334,7 @@ bool urov_handle_abort(unsigned long far, unsigned long esr, struct pt_regs *reg
 	}
 	for (i = 0; i < 31; ++i) model.x[i] = regs->regs[i];
 	model.sp = regs->sp; model.pc = regs->pc; model.pstate = regs->pstate;
-	result = uro_emulate(&s->view, opcode, esr, far, smp_load_acquire(&s->value), &model);
+	result = uro_emulate(&s->view, opcode, esr, far, smp_load_acquire(&s->ctl.value), &model);
 	if (result != URO_OK) { failed = true; goto finish; }
 	for (i = 0; i < 31; ++i) regs->regs[i] = model.x[i];
 	regs->sp = model.sp; regs->pc = model.pc;
@@ -412,12 +349,13 @@ finish:
 static int __init urov_init(void)
 {
 	u8 *scratch = kmalloc(PAGE_SIZE, GFP_KERNEL);
-	unsigned int checks;
+	unsigned int checks, control_checks;
 	int ret;
 	if (!scratch) return -ENOMEM;
 	ret = uro_core_selftest(scratch, &checks);
 	kfree(scratch);
-	core_ready = !ret && checks == 4114;
+	core_ready = !ret && checks == 4114 &&
+		!urov_control_selftest(&control_checks) && control_checks > 0;
 	return core_ready ? 0 : -EINVAL;
 }
 late_initcall(urov_init);

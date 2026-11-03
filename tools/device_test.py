@@ -19,7 +19,7 @@ import subprocess
 import uuid
 
 LAB = Path(__file__).resolve().parents[1]
-ARTIFACTS = ("urov-lab.kpm", "urov_lab_test", "urov_copy_probe", "urov_vector_fault_probe")
+TEST_PROGRAMS = ("urov_lab_test", "urov_copy_probe", "urov_vector_fault_probe")
 
 
 def credential(fd):
@@ -103,7 +103,9 @@ def main():
     parser.add_argument("--out", type=Path, default=LAB / "out")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--key-fd", type=int)
-    parser.add_argument("--activate", action="store_true", help="requires all baselines to pass")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--activate", action="store_true", help="requires all baselines to pass")
+    mode.add_argument("--inspect", action="store_true", help="load, query and unload the KPM in read-only mode")
     parser.add_argument("--allow-raw-xom", action="store_true")
     parser.add_argument("--iterations", type=int, default=100)
     args = parser.parse_args()
@@ -112,7 +114,9 @@ def main():
     if not 1 <= args.iterations <= 10000:
         parser.error("--iterations must be 1..10000")
     # Validate local inputs before requesting a credential or changing the device.
-    hashes = {name: hashlib.sha256((args.out / name).read_bytes()).hexdigest() for name in ARTIFACTS}
+    module = "urov-lab-native.kpm" if args.activate else "urov-lab.kpm"
+    hashes = {name: hashlib.sha256((args.out / name).read_bytes()).hexdigest()
+              for name in (module, *TEST_PROGRAMS)}
     try:
         key = credential(args.key_fd)
     except (OSError, ValueError, UnicodeError) as exc:
@@ -122,7 +126,8 @@ def main():
     report_path = args.report or args.out / ("device-report-" + uuid.uuid4().hex + ".json")
     report = {"schema": 1, "utc": datetime.now(timezone.utc).isoformat(), "serial": args.serial,
               "remote_directory": remote, "artifacts_sha256": hashes, "runs": device.runs,
-              "activate_requested": args.activate, "raw_xom_requested": args.allow_raw_xom,
+              "activate_requested": args.activate, "inspect_requested": args.inspect,
+              "raw_xom_requested": args.allow_raw_xom,
               "outcome": "ERROR", "overlay_test": "NOT_RUN"}
     exit_code = 1
     try:
@@ -153,13 +158,24 @@ def main():
         baselines.append(result["returncode"] == 0 and
                          "PASS scope=self_text_baseline overlay=NOT_ENABLED" in result["output"])
         report["baselines_passed"] = all(baselines)
-        if not all(baselines):
+        if args.inspect:
+            command = (shlex.quote(remote + "/urov_lab_test") + " --inspect-only --key-fd 0 --module " +
+                       shlex.quote(remote + "/" + module))
+            result = device.root("standalone_inspection", command, key_input=True)
+            passed = (result["returncode"] == 0 and
+                      "PASS scope=standalone_inspection protocol=verified unloaded=1" in result["output"])
+            report["inspection_test"] = "PASS" if passed else "FAIL"
+            report["outcome"] = "INSPECTION_FAIL"
+            if passed:
+                report["outcome"] = "INSPECTION_PASS" if all(baselines) else "INSPECTION_PASS_BASELINE_BLOCKED"
+            exit_code = 0 if passed else 1
+        elif not all(baselines):
             report["outcome"], exit_code = "BLOCKED_BASELINE", 3
         elif not args.activate:
             report["outcome"], exit_code = "BASELINE_PASS", 0
         else:
             command = (shlex.quote(remote + "/urov_lab_test") + " --key-fd 0 --module " +
-                       shlex.quote(remote + "/urov-lab.kpm") + " --iterations " + str(args.iterations))
+                       shlex.quote(remote + "/" + module) + " --iterations " + str(args.iterations))
             if args.allow_raw_xom:
                 command += " --allow-raw-xom"
             result = device.root("active_overlay", command, key_input=True)

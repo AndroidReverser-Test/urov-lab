@@ -14,7 +14,7 @@ static unsigned difference(const volatile uint8_t *a, const uint8_t *b)
     for (i = 0; i < 64; ++i) if (a[i] != b[i]) return i;
     return 64;
 }
-int main(void)
+static int vector_store_first_touch(void)
 {
     _Alignas(16) uint8_t input[64], saved[64];
     unsigned i, mode, prefault, cross, failures = 0;
@@ -49,4 +49,75 @@ int main(void)
     }
     printf("vector_fault failures=%u overlay=NOT_ENABLED\n", failures);
     return failures ? 1 : 0;
+}
+
+/* Snapshot all four Q registers using only GPRs and scalar stores. Taking
+ * both snapshots this way makes the destination store's instruction class
+ * independent of the instruction class used to record the live lanes. */
+#define CAPTURE_Q_LANES(buffer)                                  \
+    "umov x9, v0.d[0]\n umov x10, v0.d[1]\n"                    \
+    "stp x9, x10, [%[" #buffer "], #0]\n"                        \
+    "umov x9, v1.d[0]\n umov x10, v1.d[1]\n"                    \
+    "stp x9, x10, [%[" #buffer "], #16]\n"                       \
+    "umov x9, v2.d[0]\n umov x10, v2.d[1]\n"                    \
+    "stp x9, x10, [%[" #buffer "], #32]\n"                       \
+    "umov x9, v3.d[0]\n umov x10, v3.d[1]\n"                    \
+    "stp x9, x10, [%[" #buffer "], #48]\n"
+
+static int scalar_first_touch(void)
+{
+    _Alignas(16) uint8_t expected[64], before[64], after[64];
+    const unsigned marker = 0xa5;
+    const long page_size = sysconf(_SC_PAGESIZE);
+    unsigned i, memfd, warm, failures = 0;
+    if (page_size <= 0) { fprintf(stderr, "Could not determine page size\n"); return 1; }
+    for (i = 0; i < sizeof(expected); ++i)
+        ((volatile uint8_t *)expected)[i] = (uint8_t)(i * 37U + 19U);
+
+    for (memfd = 0; memfd < 2; ++memfd) for (warm = 0; warm < 2; ++warm) {
+        int fd = -1, flags = MAP_PRIVATE | MAP_ANONYMOUS;
+        uint8_t *target;
+        unsigned before_diff, after_diff, observed;
+        if (memfd) {
+            fd = memfd_create("urov-scalar-first-touch", MFD_CLOEXEC);
+            if (fd < 0) { perror("memfd_create"); return 1; }
+            if (ftruncate(fd, page_size)) { perror("ftruncate"); close(fd); return 1; }
+            flags = MAP_SHARED;
+        }
+        target = mmap(NULL, (size_t)page_size, PROT_READ | PROT_WRITE, flags, fd, 0);
+        if (fd >= 0) close(fd);
+        if (target == MAP_FAILED) { perror("mmap"); return 1; }
+        for (i = 0; i < sizeof(before); ++i) {
+            ((volatile uint8_t *)before)[i] = 0;
+            ((volatile uint8_t *)after)[i] = 0;
+        }
+        if (warm) *(volatile uint8_t *)target = 0x5a;
+        __asm__ volatile(
+            "ldp q0, q1, [%[src]]\n ldp q2, q3, [%[src], #32]\n"
+            CAPTURE_Q_LANES(before)
+            "strb %w[marker], [%[target]]\n"
+            CAPTURE_Q_LANES(after)
+            : : [src] "r"(expected), [before] "r"(before), [after] "r"(after),
+                [marker] "r"(marker), [target] "r"(target)
+            : "x9", "x10", "v0", "v1", "v2", "v3", "memory");
+        observed = *(volatile uint8_t *)target;
+        before_diff = difference(before, expected);
+        after_diff = difference(after, expected);
+        printf("scalar_first_touch backing=%s prefault=%u before_first_diff=%u "
+               "after_first_diff=%u target_byte=%u expected_byte=%u\n",
+               memfd ? "memfd" : "anonymous", warm, before_diff, after_diff, observed, marker);
+        if (before_diff != sizeof(before) || after_diff != sizeof(after) || observed != marker)
+            ++failures;
+        if (munmap(target, (size_t)page_size)) { perror("munmap"); return 1; }
+    }
+    printf("scalar_first_touch failures=%u overlay=NOT_ENABLED\n", failures);
+    return failures ? 1 : 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 1) return vector_store_first_touch();
+    if (argc == 2 && !strcmp(argv[1], "--scalar-first-touch")) return scalar_first_touch();
+    fprintf(stderr, "Usage: %s [--scalar-first-touch]\n", argv[0]);
+    return 2;
 }

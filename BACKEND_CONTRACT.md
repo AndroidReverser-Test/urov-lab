@@ -1,6 +1,6 @@
 # 常驻后端与 KPM 生命周期接口：实施契约
 
-> 历史契约（2026-11-02）。2026-11-03 的候选实现和受限 ABI 见 [DELIVERY.md](DELIVERY.md)，实际结果见 [CURRENT_RESULTS.md](CURRENT_RESULTS.md)。本文不代表当前运行内核已有这些接口。
+> 历史契约（2026-11-02）。实际交付采用模块内 hook 的独立后端，见 [STANDALONE.md](STANDALONE.md)、[RESULTS_OVERLAY.md](RESULTS_OVERLAY.md)。本文的 CORE-1 内核常驻接口未部署。
 
 日期：2026-11-02。此文件把 `DESIGN.md` 第4、11节细化为下一阶段的实施规范；不是已部署的接口。实测见 `IMPLEMENTATION_RESULTS.md`。
 

@@ -5,6 +5,7 @@
 #include <inttypes.h>
 #include <pthread.h>
 #include <sched.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -12,6 +13,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
+#include <sys/ucontext.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -31,9 +33,11 @@ __asm__(".pushsection .text.urov_subject,\"ax\",%progbits\n"
 extern int urov_subject(void);
 __asm__(".pushsection .text.urov_reader,\"ax\",%progbits\n"
         ".p2align 4\n.global urov_reader\n.type urov_reader,%function\n"
-        "urov_reader:\n hint #34\n ldr x0, [x0]\n ret\n nop\n"
+        "urov_reader:\n hint #34\n.global urov_reader_ldr_site\n"
+        "urov_reader_ldr_site:\n ldr x0, [x0]\n ret\n nop\n"
         ".size urov_reader, .-urov_reader\n.popsection\n");
 extern uint64_t urov_reader(const void *);
+extern const char urov_reader_ldr_site[];
 
 static const uint64_t fake_a = UINT64_C(0x8877665544332211);
 static const uint64_t fake_b = UINT64_C(0x1020304050607080);
@@ -172,6 +176,76 @@ out:
     if (fd >= 0) close(fd);
     return ret;
 }
+/* Child exit codes distinguish observed read permissions from harness errors. */
+enum { PROBE_READABLE = 40, PROBE_READ_FAULT, PROBE_ERROR };
+static volatile sig_atomic_t probe_read_stage;
+static _Atomic(void *) probe_address;
+_Static_assert(ATOMIC_POINTER_LOCK_FREE == 2, "signal handler requires lock-free pointer loads");
+
+static void probe_segv(int signo, siginfo_t *info, void *context)
+{
+    ucontext_t *uc = context;
+    if (probe_read_stage && signo == SIGSEGV && info && info->si_code == SEGV_ACCERR &&
+        info->si_addr == atomic_load_explicit(&probe_address, memory_order_relaxed) &&
+        uc && uc->uc_mcontext.pc == (uintptr_t)urov_reader_ldr_site)
+        _exit(PROBE_READ_FAULT);
+    _exit(PROBE_ERROR);
+}
+
+static int probe_public_xom_child(unsigned cpu)
+{
+    cpu_set_t one;
+    sigset_t signals;
+    struct sigaction action = { .sa_sigaction = probe_segv, .sa_flags = SA_SIGINFO };
+    uint64_t observed, original = expected(4, 8, 0, 0);
+    CPU_ZERO(&one);
+    CPU_SET((int)cpu, &one);
+    if (sched_setaffinity(0, sizeof(one), &one) || sched_getcpu() != (int)cpu)
+        return PROBE_ERROR;
+    sigemptyset(&action.sa_mask);
+    sigemptyset(&signals);
+    sigaddset(&signals, SIGSEGV);
+    if (sigaction(SIGSEGV, &action, NULL) || sigprocmask(SIG_UNBLOCK, &signals, NULL))
+        return PROBE_ERROR;
+    if (urov_reader(code + 4) != original) return PROBE_ERROR;
+    if (mprotect(code, UROV_PAGE_BYTES, PROT_EXEC)) { perror("mprotect(PROT_EXEC)"); return PROBE_ERROR; }
+    /* Require successful execution under PROT_EXEC before arming the handler. */
+    if (((int (*)(void))code)() != 42) return PROBE_ERROR;
+    atomic_store_explicit(&probe_address, code + 4, memory_order_relaxed);
+    probe_read_stage = 1;
+    observed = urov_reader(code + 4);
+    probe_read_stage = 0;
+    return observed == original ? PROBE_READABLE : PROBE_ERROR;
+}
+
+static int probe_public_xom(void)
+{
+    cpu_set_t allowed;
+    unsigned i, cpus = 0, readable = 0, read_fault = 0;
+    int rc = 1;
+    if (make_code_page()) goto out;
+    if (sched_getaffinity(0, sizeof(allowed), &allowed)) { perror("sched_getaffinity"); goto out; }
+    for (i = 0; i < CPU_SETSIZE; ++i) if (CPU_ISSET((int)i, &allowed)) {
+        pid_t child, waited;
+        int status;
+        ++cpus;
+        child = fork();
+        if (child < 0) { perror("fork"); goto out; }
+        if (!child) _exit(probe_public_xom_child(i));
+        do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+        if (waited < 0) { perror("waitpid"); goto out; }
+        if (WIFEXITED(status) && WEXITSTATUS(status) == PROBE_READABLE) ++readable;
+        else if (WIFEXITED(status) && WEXITSTATUS(status) == PROBE_READ_FAULT) ++read_fault;
+        else { fprintf(stderr, "public_prot_exec cpu=%u unexpected_wait_status=0x%x\n", i, status); goto out; }
+    }
+    if (cpus && cpus == readable + read_fault) rc = 0;
+out:
+    if (code != MAP_FAILED && munmap(code, UROV_PAGE_BYTES)) { perror("munmap"); rc = 1; }
+    if (!rc) printf("PASS scope=public_prot_exec cpus=%u readable=%u read_fault=%u\n",
+                    cpus, readable, read_fault);
+    return rc;
+}
+
 static int number(const char *text, unsigned maximum, unsigned *out)
 {
     char *end;
@@ -188,9 +262,10 @@ int main(int argc, char **argv)
     const char *module = NULL;
     uint64_t session = 0, generation = 0, flags = 0, last_hits = 0;
     unsigned fd = 0, iterations = 100, count = 0, i, round;
-    int loaded = 0, active = 0, rc = 1, have_fd = 0, text_only = 0;
+    int loaded = 0, active = 0, rc = 1, have_fd = 0, text_only = 0, inspect_only = 0;
     long result;
     setvbuf(stdout, NULL, _IONBF, 0);
+    if (argc == 2 && !strcmp(argv[1], "--probe-xom")) return probe_public_xom();
     for (i = 1; i < (unsigned)argc; ++i) {
         if (!strcmp(argv[i], "--module") && i + 1 < (unsigned)argc) module = argv[++i];
         else if (!strcmp(argv[i], "--key-fd") && i + 1 < (unsigned)argc) {
@@ -200,14 +275,15 @@ int main(int argc, char **argv)
             if (number(argv[++i], 10000, &iterations) || !iterations) goto usage;
         } else if (!strcmp(argv[i], "--allow-raw-xom")) flags = UROV_F_RAW_XOM;
         else if (!strcmp(argv[i], "--text-only")) text_only = 1;
+        else if (!strcmp(argv[i], "--inspect-only")) inspect_only = 1;
         else goto usage;
     }
     if (text_only) {
-        if (module || have_fd || flags) goto usage;
+        if (module || have_fd || flags || inspect_only) goto usage;
         if (!make_code_page()) { puts("PASS scope=self_text_baseline overlay=NOT_ENABLED"); rc = 0; }
         goto out;
     }
-    if (!module || module[0] != '/' || !have_fd) goto usage;
+    if (!module || module[0] != '/' || !have_fd || (inspect_only && flags)) goto usage;
     if (read_key((int)fd)) { fprintf(stderr, "Invalid key input\n"); goto out; }
     errno = 0;
     if (norm(syscall(__NR_supercall, key, command(SUPERCALL_HELLO))) != SUPERCALL_HELLO_MAGIC) {
@@ -218,9 +294,10 @@ int main(int argc, char **argv)
     result = control(&q);
     if (result != -ENOENT) { fprintf(stderr, "Module already present or status ambiguous: %ld\n", result); goto out; }
     errno = 0;
-    result = norm(syscall(__NR_supercall, key, command(SUPERCALL_KPM_LOAD), module, "", NULL));
+    result = norm(syscall(__NR_supercall, key, command(SUPERCALL_KPM_LOAD), module,
+                         inspect_only ? "inspect" : "", NULL));
     if (result) {
-        fprintf(stderr, "module_load=%ld overlay_test=NOT_RUN requires=KP_lifecycle_v2_and_native_UROV\n", result);
+        fprintf(stderr, "module_load=%ld overlay_test=NOT_RUN\n", result);
         rc = result == -ENOENT || result == -EOPNOTSUPP ? 2 : 1;
         goto out;
     }
@@ -228,8 +305,25 @@ int main(int argc, char **argv)
 #define CHECK(expr) do { if (!(expr)) { fprintf(stderr, "FAIL line=%d errno=%d\n", __LINE__, errno); goto out; } } while (0)
 #define OK(expr) do { result = (expr); if (result) { fprintf(stderr, "FAIL line=%d result=%ld\n", __LINE__, result); goto out; } } while (0)
     q = request(UROV_QUERY); OK(control(&q));
-    CHECK((q.caps & (UROV_CAP_READY | UROV_CAP_MM_GATES)) == (UROV_CAP_READY | UROV_CAP_MM_GATES));
     printf("backend_caps=0x%" PRIx64 "\n", q.caps);
+    if (inspect_only) {
+        char response[192] = { 0 };
+        CHECK(q.caps == UROV_CAP_MODEL_CORE && q.state == UROV_INACTIVE && !q.session);
+        OK(norm(syscall(__NR_supercall, key, command(SUPERCALL_KPM_CONTROL),
+                        UROV_MODULE_NAME, "status", response, sizeof(response))));
+        CHECK(strstr(response, "mode=standalone-inspect") && strstr(response, "core_checks=4114"));
+        fputs(response, stdout);
+        q = request(UROV_QUERY); q.version++; CHECK(control(&q) == -EINVAL);
+        q = request(UROV_QUERY); q.reserved[2] = 1; CHECK(control(&q) == -EINVAL);
+        q = request(UROV_REGISTER); CHECK(control(&q) == -EOPNOTSUPP);
+        q = request(UROV_STATUS); CHECK(control(&q) == -ENOENT);
+        q = request(UROV_SET); CHECK(control(&q) == -ENOENT);
+        q = request(UROV_DEACTIVATE); OK(control(&q)); CHECK(q.state == UROV_INACTIVE);
+        rc = 0; goto out;
+    }
+    if ((q.caps & (UROV_CAP_READY | UROV_CAP_MM_GATES)) != (UROV_CAP_READY | UROV_CAP_MM_GATES)) {
+        fprintf(stderr, "backend_capability=inactive overlay_test=NOT_RUN\n"); rc = 2; goto out;
+    }
     if (!(q.caps & UROV_CAP_EPAN) && (!(q.caps & UROV_CAP_RAW_XOM) || !flags)) {
         fprintf(stderr, "Platform requires explicit laboratory raw-XOM configuration and option\n"); rc = 2; goto out;
     }
@@ -312,12 +406,14 @@ out:
     }
     if (code != MAP_FAILED && !active) munmap(code, UROV_PAGE_BYTES);
     for (i = 0; i < sizeof(key); ++i) ((volatile char *)key)[i] = 0;
-    if (!rc && !text_only)
+    if (!rc && inspect_only)
+        puts("PASS scope=standalone_inspection protocol=verified unloaded=1 overlay=NOT_ENABLED");
+    if (!rc && !text_only && !inspect_only)
         printf("PASS cpus=%u updates=%u fault_hits=%" PRIu64
                " ordinary_loads=1,2,4,8,16 execution=42 restored=verified unloaded=1 scope=active_overlay\n",
                count, iterations, last_hits);
     return rc;
 usage:
-    fprintf(stderr, "Usage: %s --text-only | --module /absolute/urov-lab.kpm --key-fd FD [--iterations N] [--allow-raw-xom]\n", argv[0]);
+    fprintf(stderr, "Usage: %s --text-only | --probe-xom | --module /absolute/urov-lab.kpm --key-fd FD [--inspect-only | --iterations N [--allow-raw-xom]]\n", argv[0]);
     goto out;
 }
