@@ -1,0 +1,17 @@
+config UROV_LAB
+	bool "Self-mm ARM64 read overlay laboratory backend"
+	depends on ARM64 && ARM64_4K_PAGES && SHMEM && MMU
+	depends on !CPU_BIG_ENDIAN
+	help
+	  Built-in dispatcher and MM gates for a single sealed memfd code page.
+	  Only ordinary A64 integer loads are supported. KPM management requires
+	  KernelPatch lifecycle v2. Default operation requires system EPAN.
+
+config UROV_LAB_RAW_XOM
+	bool "Allow explicit raw-XOM laboratory sessions without EPAN"
+	depends on UROV_LAB
+	default n
+	help
+	  Permit UROV_F_RAW_XOM on hardware without EPAN. These mappings lose PAN
+	  read isolation at EL1. Intended for an explicitly configured laboratory
+	  kernel only; this does not change PAN or other mappings globally.

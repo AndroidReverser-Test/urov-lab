@@ -114,7 +114,7 @@ static long check_exit(void *reserved)
 {
     (void)reserved;
     /* No pointers or resources escaped this module's synchronous callbacks. */
-    return __atomic_load_n(&exit_veto, __ATOMIC_ACQUIRE) ? -EBUSY : 0;
+    return __atomic_exchange_n(&exit_veto, 0, __ATOMIC_ACQ_REL) ? -EBUSY : 0;
 }
 KPM_INIT(check_init);
 KPM_CTL0(check_ctl);

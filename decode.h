@@ -2,7 +2,11 @@
 #ifndef URO_LAB_DECODE_H
 #define URO_LAB_DECODE_H
 
+#ifdef __KERNEL__
+#include <linux/types.h>
+#else
 #include <stdint.h>
+#endif
 
 struct uro_regs {
     uint64_t x[31];

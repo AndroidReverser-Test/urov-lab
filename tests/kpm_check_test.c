@@ -119,6 +119,15 @@ int main(int argc, char **argv)
     if (result == -ENOENT) {
         loaded = 0;
         printf("loader_exit_veto=NOT_RETAINED result=-EBUSY module_after=absent activation_gate=FAIL\n");
+    } else if (result == -EBUSY) {
+        errno = 0;
+        EXPECT(norm(syscall(__NR_supercall, key, word(SUPERCALL_KPM_INFO),
+                           "urov-lab-check", output, (long)sizeof(output))) > 0 ? 0 : -1, 0);
+        if (!strstr(output, "lifecycle=2") || !strstr(output, "state=retained")) {
+            fprintf(stderr, "FAIL retained loader state\n"); goto done;
+        }
+        printf("loader_exit_veto=RETAINED lifecycle=2 business_ctl=BLOCKED\n");
+        EXPECT(unload(key), 0); loaded = 0;
     } else if (result == 0) {
         printf("loader_exit_veto=RETAINED other_lifecycle_guarantees=UNVERIFIED\n");
         EXPECT(ctl(key, "allow-exit", output, sizeof(output)), 0);

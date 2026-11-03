@@ -29,13 +29,19 @@ foreach ($name in @('decode','emulate','core_selftest','urov_check','fault_signa
 if ($LASTEXITCODE -ne 0) { throw 'KPM link failed' }
 & $readelf -h -s (Join-Path $out 'urov-lab-check.kpm')
 if ($LASTEXITCODE -ne 0) { throw 'KPM ELF inspection failed' }
+& $clang @flags @includes -c (Join-Path $PSScriptRoot 'urov_kpm.c') -o (Join-Path $out 'urov_kpm.o')
+if ($LASTEXITCODE -ne 0) { throw 'Active KPM compile failed' }
+& $linker -r -o (Join-Path $out 'urov-lab.kpm') (Join-Path $out 'urov_kpm.o')
+if ($LASTEXITCODE -ne 0) { throw 'Active KPM link failed' }
 $userFlags = @('--target=aarch64-linux-android31','-std=gnu11','-O2','-Wall','-Wextra',
     '-Werror','-Wformat=2','-Wshadow','-fPIE','-pie','-pthread')
 $core = @('decode.c','emulate.c','core_selftest.c') | ForEach-Object { Join-Path $PSScriptRoot $_ }
-foreach ($test in @('emulate_test','native_test','kpm_check_test','copy_probe')) {
+foreach ($test in @('emulate_test','native_test','kpm_check_test','copy_probe','vector_fault_probe','urov_lab_test')) {
+    $filename = if ($test -eq 'urov_lab_test') { 'urov_lab_test' } else { 'urov_' + $test }
     & $clang @userFlags ('-I' + $repo) ('-I' + (Join-Path $repo 'kernel/patch/include')) `
         -idirafter (Join-Path $repo 'kernel/include') @core `
-        (Join-Path $PSScriptRoot ('tests/' + $test + '.c')) -o (Join-Path $out ('urov_' + $test))
+        (Join-Path $PSScriptRoot ('tests/' + $test + '.c')) -o (Join-Path $out $filename)
     if ($LASTEXITCODE -ne 0) { throw "Android compile failed: $test" }
 }
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-lab-check.kpm')
+Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-lab.kpm')
