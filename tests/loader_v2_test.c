@@ -70,6 +70,14 @@ int main(void)
 {
     char info[1024], reply[16];pthread_t thread;void *result;
     module_init();CHECK(kpm_lifecycle_v2()==2);
+    CHECK(load_module_path("fixture", "", NULL)==-ENOENT);
+    test_file_present=1;test_file_length=0;
+    CHECK(load_module_path("fixture", "", NULL)==-ENOEXEC);CHECK(test_file_closes==1);
+    test_file_length=-EIO;
+    CHECK(load_module_path("fixture", "", NULL)==-EIO);CHECK(test_file_closes==2);
+    test_file_length=0x80000000LL;
+    CHECK(load_module_path("fixture", "", NULL)==-ENOEXEC);CHECK(test_file_closes==3);
+    test_file_present=0;
     atomic_store(&veto,1);CHECK(!load_fixture("veto"));CHECK(unload_module("veto",NULL)==-EBUSY);
     CHECK(get_module_nums()==1);CHECK(atomic_load(&executable_allocations)==1);
     CHECK(get_module_info("veto",info,sizeof(info))>0 && strstr(info,"state=retained"));

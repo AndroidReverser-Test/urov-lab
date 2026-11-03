@@ -1,22 +1,52 @@
 # UROV-LAB
 
-ARM64 用户代码页读取异常覆盖的受限实验设计。禁止硬件断点；不在每次读取时切换页表。
+Android ARM64 自有测试进程的代码页读取覆盖实验。目标语义：**普通整数 load 读取覆盖值，CPU 取指仍执行原始代码。**
 
-**当前有可加载的预检 KPM，但没有活动覆盖 KPM，也没有通过 Android 读取异常覆盖功能测试。** 不要将模拟核心/原生差分的 PASS 或相邻 `urov-probe` 的能力探测误认为覆盖后端已工作。
+2026-11-03 状态：已提供内核常驻后端候选源码、KP loader v2 改动、管理 KPM 和自验证二进制。KPM/测试程序及 KP 核心构建通过；常驻后端完成四个对象的头文件/API 编译检查。**当前设备没有启用活动覆盖，尚未完成完整内核链接、启动和端到端验收，不能视为已验证稳定的通用内存修改模块。**
 
-- [完整设计](DESIGN.md)：实验契约、ABI、异常入口、映射事务、并发更新、恢复/卸载、常驻可靠后端。
-- [测试计划与真实复验结果](TEST_PLAN.md)：S0–S7 门槛和验收。
-- [本次实现与真机结果](IMPLEMENTATION_RESULTS.md)：软件核心、8核原生差分、预检装卸，以及实际失败的loader安全门槛。
-- [常驻后端与生命周期契约](BACKEND_CONTRACT.md)：根据实测选定的下一阶段架构和接口。
-- `decode.c` / `decode.h`：普通 A64 GPR load 解码器；不访问目标内存、不修改真实 pt_regs。
-- `tests/decode_test.c`：host 不变量测试和独立汇编编码核对。
-- `tools/inspect_btf.js`：只读核对本机 BTF 布局/原型。
-- `emulate.c/.h`：纯软件的字节合并与零部分提交核心；不操作真实映射。
-- `urov_check.c` / `out/urov-lab-check.kpm`：预检与内核核心自测，无fault hook；`register`明确拒绝。
-- `build.ps1`：构建预检KPM和四个Android测试二进制。
+## 当前交付
 
-2026-11-02 复验：`PASS checks=211127 vectors=50 random=100000 independent_assembler=verified`，ASAN/UBSAN、NDK freestanding 编译通过。不是原生 ARM64 全语义差分。
+| 文件 | 用途 |
+|---|---|
+| [DELIVERY.md](DELIVERY.md) | 当前架构、构建、操作协议、适用范围和限制 |
+| [CURRENT_RESULTS.md](CURRENT_RESULTS.md) | 本轮实际验证、失败基线、未执行项目 |
+| [native/urov.c](native/urov.c) | 随匹配内核内置的异常与映射后端 |
+| [urov_kpm.c](urov_kpm.c)、[urov_abi.h](urov_abi.h) | 薄 KPM、固定 128 字节管理协议 |
+| [tests/urov_lab_test.c](tests/urov_lab_test.c) | 读取自身 ELF 字节，在封存测试页上检查普通读取与原始执行 |
+| [tools/device_test.py](tools/device_test.py) | 上传并校验散列，检查基线；通过后才允许请求活动测试 |
+| [tools/prepare_native.py](tools/prepare_native.py) | 针对内核 commit 前缀 `66e758f7d0c0` 的源码集成脚本 |
+| [tools/test_host.sh](tools/test_host.sh) | 解码、模拟及真实 loader 源码的 ASAN/UBSAN 测试 |
+| [build.ps1](build.ps1) | 构建管理 KPM、预检 KPM、六个 Android 二进制 |
+| [results/2026-11-03-device.json](results/2026-11-03-device.json) | 本轮可复核的真机记录，不包含管理凭据 |
 
-新增核心host/Android用例通过288090检查，原生差分在8核完成41600次比较。预检KPM最终10轮装卸通过，但**实际运行的KP在exit返回EBUSY后仍移除模块**，装卸安全门槛失败；另有root首次触页复制基线异常待定位。
+KP 核心修改位于父仓库的 `kernel/patch/module/module.c`、`kernel/patch/include/module.h`、`kernel/include/kpmodule.h`、`kernel/patch/common/supercall.c`、`kernel/patch/common/urov_bridge.c` 和 `kernel/linux/include/linux/rcupdate.h`。单独复制此目录的 `.kpm` 无法为旧 KP/内核增加后端。
 
-当前设备无 EPAN，raw-XOM 实验会损失相关映射的 PAN 读取隔离。当前禁止启用活动覆盖；下一阶段选用常驻后端与原生 MM 生命周期集成，详见设计第11节及新增实施契约。
+## 构建与基线复核
+
+在 KernelPatch 根目录运行：
+
+```powershell
+./kpms/urov-lab/build.ps1 -Ndk D:\androidSDK\ndk\26.1.10909125
+wsl -d Ubuntu-24.04 bash kpms/urov-lab/tools/test_host.sh
+python kpms/urov-lab/tools/device_test.py --serial 25091FDF60063J
+```
+
+设备脚本交互读取凭据，或从 `--key-fd FD` 读取；不把凭据写入源码或报告。现有 kpatch CLI 会在设备进程参数中短暂接收凭据。默认只跑基线；退出 `3 / BLOCKED_BASELINE` 表示平台基线未通过，覆盖测试未执行。
+
+产物位于 `out/`：`urov-lab.kpm`、`urov_lab_test`、`urov_copy_probe`、`urov_vector_fault_probe` 等。最终二进制可运行 `urov_lab_test --text-only`；此模式明确输出 `overlay=NOT_ENABLED`。
+
+交付包：`out/urov-lab-delivery-20261103.zip`，包含源码、KP 核心补丁、八个产物与本轮报告；内部 `SHA256SUMS` 可校验内容。该包不是启动镜像。
+
+## 当前结果
+
+- root 自身代码读取、封存页原始执行返回 42：通过。
+- shell 复制和 SIMD 基线：通过。
+- root 首次触页 memfd libc 复制失败，SIMD 探针有两个失败用例；根因尚未定位。
+- 当前 KP `0xc00` 缺少新导出；此前活动 KPM 加载被拒绝。本轮基线脚本没有尝试加载。
+- 本轮前后模块列表均为空，boot_id 相同；用户选择先交付代码，本轮未准备启动镜像。
+
+当前受限于单 session、调用者自身 mm、一页 4 KiB sealed memfd RX、一个 8 字节覆盖区间和白名单 GPR load。没有通用 SIMD、acquire/exclusive、跨页读取或任意进程/ELF VMA 支持。
+
+## 历史材料
+
+[DESIGN.md](DESIGN.md)、[BACKEND_CONTRACT.md](BACKEND_CONTRACT.md)、[IMPLEMENTATION_RESULTS.md](IMPLEMENTATION_RESULTS.md) 和 [TEST_PLAN.md](TEST_PLAN.md) 保留 2026-11-02 的设计与测试证据；其中“后端尚未实现”描述的是当时状态。请以本页和当前交付/结果文档判断实现进度。

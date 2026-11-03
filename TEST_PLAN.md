@@ -1,5 +1,7 @@
 # UROV 实验后端：审计记录与分阶段测试计划
 
+> 历史计划与记录（2026-11-02）。2026-11-03 当前代码交付见 [DELIVERY.md](DELIVERY.md)，最新结果见 [CURRENT_RESULTS.md](CURRENT_RESULTS.md)。S3–S7 仍未完成。
+
 日期：2026-11-02（Asia/Shanghai）。适用范围：当前设备绑定的、单个自有测试进程、单个 4 KiB sealed memfd RX 页、单个可原子更新的 8 字节覆盖区间。
 
 更新：本文件第1–2节保留最初设计阶段的历史记录。后续已实现软件模拟核心、预检KPM和原生差分测试；最新真实结果见 `IMPLEMENTATION_RESULTS.md`。S2的loader保留门槛已实际失败，S3–S7真实异常覆盖仍未执行。根据实测选定的常驻后端契约见 `BACKEND_CONTRACT.md`。

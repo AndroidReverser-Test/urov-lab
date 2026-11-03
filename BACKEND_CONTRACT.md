@@ -1,5 +1,7 @@
 # 常驻后端与 KPM 生命周期接口：实施契约
 
+> 历史契约（2026-11-02）。2026-11-03 的候选实现和受限 ABI 见 [DELIVERY.md](DELIVERY.md)，实际结果见 [CURRENT_RESULTS.md](CURRENT_RESULTS.md)。本文不代表当前运行内核已有这些接口。
+
 日期：2026-11-02。此文件把 `DESIGN.md` 第4、11节细化为下一阶段的实施规范；不是已部署的接口。实测见 `IMPLEMENTATION_RESULTS.md`。
 
 ## 1. 根据实测作出的架构决策

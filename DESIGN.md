@@ -1,5 +1,7 @@
 # UROV-LAB：ARM64 读取异常覆盖完整设计
 
+> 历史记录（2026-11-02）。2026-11-03 已新增常驻后端候选实现，仍未通过活动覆盖验收；当前状态见 [DELIVERY.md](DELIVERY.md) 和 [CURRENT_RESULTS.md](CURRENT_RESULTS.md)。下文保留当时设计与证据。
+
 日期：2026-11-02。状态：设计、解码/模拟核心、预检KPM及部分真机测试已完成，活动覆盖后端尚未实现；不是已通过完整真机覆盖验收的 KPM。最新证据见 `IMPLEMENTATION_RESULTS.md`，下一阶段详细实施契约见 `BACKEND_CONTRACT.md`。
 
 本文承接仓库根目录 `ARM64_USER_READ_OVERLAY_DESIGN.md` 与 `../urov-probe/` 的设备验证。原文的通用目标不变；这里明确当前设备能做的受限实验、不能省略的可靠性条件，以及实验到完整后端的实现边界。测试细则见 `TEST_PLAN.md`。

@@ -64,10 +64,13 @@ static inline unsigned long symbol_lookup_name(const char *name) { (void)name; r
 static inline void *memdup_user(const void *p, size_t n) { void *q=malloc(n); if(q) memcpy(q,p,n); return q; }
 static inline int compat_copy_to_user(void *dest,const void *src,size_t n) { memcpy(dest,src,n); return (int)n; }
 struct file { int unused; };
-static inline struct file *filp_open(const char *p,int flags,int mode) { (void)p;(void)flags;(void)mode;return (void *)-ENOENT; }
-static inline loff_t vfs_llseek(struct file *f,loff_t o,int w) { (void)f;(void)o;(void)w;return -EINVAL; }
+static struct file test_file;
+static int test_file_present, test_file_closes;
+static loff_t test_file_length;
+static inline struct file *filp_open(const char *p,int flags,int mode) { (void)p;(void)flags;(void)mode;return test_file_present ? &test_file : (void *)-ENOENT; }
+static inline loff_t vfs_llseek(struct file *f,loff_t o,int w) { (void)f;(void)o;return w == SEEK_END ? test_file_length : 0; }
 static inline long kernel_read(struct file *f,void *p,size_t n,loff_t *o) { (void)f;(void)p;(void)n;(void)o;return -EINVAL; }
-static inline void filp_close(struct file *f,void *unused) { (void)f;(void)unused; }
+static inline void filp_close(struct file *f,void *unused) { (void)f;(void)unused;++test_file_closes; }
 struct module;
 static inline int apply_relocate(Elf64_Shdr *s,const char *t,unsigned int i,unsigned int r,struct module *m) { (void)s;(void)t;(void)i;(void)r;(void)m;return -ENOEXEC; }
 #define apply_relocate_add apply_relocate

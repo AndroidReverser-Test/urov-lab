@@ -381,7 +381,8 @@ bool urov_handle_abort(unsigned long far, unsigned long esr, struct pt_regs *reg
 	int result;
 	bool failed = false;
 	if (!static_branch_unlikely(&urov_active) || !user_mode(regs) ||
-	    ESR_ELx_EC(esr) != ESR_ELx_EC_DABT_LOW || (esr & ESR_ELx_WNR)) return false;
+	    ESR_ELx_EC(esr) != ESR_ELx_EC_DABT_LOW || (esr & ESR_ELx_WNR) ||
+	    (esr & ESR_ELx_FSC) != (ESR_ELx_FSC_PERM | 3)) return false;
 	rcu_read_lock();
 	s = rcu_dereference(urov_current);
 	if (!s || s->mm != current->mm || far < s->view.base || far - s->view.base >= PAGE_SIZE) {
