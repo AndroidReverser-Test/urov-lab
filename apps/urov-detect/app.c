@@ -32,6 +32,7 @@
 #include "urov_observe.h"
 #include "../../urov_abi.h"
 #include "../../urov_x_abi.h"
+#include "../../urov_y_abi.h"
 
 #define LOG(...) __android_log_print(ANDROID_LOG_INFO, "urovdetect", __VA_ARGS__)
 #define REQUIRE(c, ...) do { ++g_checks; if (!(c)) { ++g_fail; LOG("FAIL " __VA_ARGS__); } } while (0)
@@ -1152,6 +1153,10 @@ finish:
     page_close(&p);
 }
 
+/* urov-y (site-trap variant) fixtures live in their own include so the
+ * detector core and the urov-x fixtures stay untouched. */
+#include "uy_fixture.inc"
+
 JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
     JNIEnv *env, jclass cls, jstring mode_value, jint repeats, jstring key_value)
 {
@@ -1184,6 +1189,15 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
         else if (!strcmp(mode, "x-simd")) stealth_simd(key);
         else if (!strcmp(mode, "x-fork")) stealth_fork(key);
         else stealth_clean();
+        snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
+                 g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
+        goto done;
+    }
+    if (!strncmp(mode, "y-", 2)) {
+        /* urov-y fixtures: the detector calls stay unmodified and unkeyed. */
+        if (!strcmp(mode, "y-active")) elimination_active(key, (int)repeats);
+        else if (!strcmp(mode, "y-hold")) elimination_hold(key);
+        else elimination_clean();
         snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
                  g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
         goto done;

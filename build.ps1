@@ -50,15 +50,24 @@ foreach ($name in @('urov_x','urov_x_backend')) {
     (Join-Path $out 'urov_x_backend.o') (Join-Path $out 'decode.o') `
     (Join-Path $out 'emulate.o') (Join-Path $out 'core_selftest.o')
 if ($LASTEXITCODE -ne 0) { throw 'UROV-X KPM link failed' }
+foreach ($name in @('urov_y','urov_y_backend')) {
+    & $clang @flags @includes -c (Join-Path $PSScriptRoot ($name + '.c')) -o (Join-Path $out ($name + '.o'))
+    if ($LASTEXITCODE -ne 0) { throw "UROV-Y KPM compile failed: $name" }
+}
+& $linker -r -o (Join-Path $out 'urov-y.kpm') (Join-Path $out 'urov_y.o') `
+    (Join-Path $out 'urov_y_backend.o') (Join-Path $out 'decode.o') `
+    (Join-Path $out 'emulate.o') (Join-Path $out 'core_selftest.o')
+if ($LASTEXITCODE -ne 0) { throw 'UROV-Y KPM link failed' }
 $userFlags = @('--target=aarch64-linux-android31','-std=gnu11','-O2','-Wall','-Wextra',
     '-Werror','-Wformat=2','-Wshadow','-fPIE','-pie','-pthread')
 $core = @('decode.c','emulate.c','core_selftest.c') | ForEach-Object { Join-Path $PSScriptRoot $_ }
-$direct = @('urov_overlay_test','urov_hold_test','urov_hold2_test','urov_foreign_test')
+$direct = @('urov_overlay_test','urov_hold_test','urov_hold2_test','urov_foreign_test','urov_y_test')
 foreach ($test in @('emulate_test','native_test','kpm_check_test','copy_probe','vector_fault_probe',
-                    'urov_overlay_test','urov_hold_test','urov_hold2_test','urov_foreign_test')) {
+                    'urov_overlay_test','urov_hold_test','urov_hold2_test','urov_foreign_test',
+                    'urov_y_test')) {
     $filename = if ($direct -contains $test) { $test } else { 'urov_' + $test }
     $sources = @()
-    if ($test -notmatch '^urov_(hold|foreign)') { $sources += $core }
+    if ($test -notmatch '^urov_(hold|foreign|y_test)') { $sources += $core }
     & $clang @userFlags ('-I' + $repo) ('-I' + (Join-Path $repo 'kernel/patch/include')) `
         -idirafter (Join-Path $repo 'kernel/include') @sources `
         (Join-Path $PSScriptRoot ('tests/' + $test + '.c')) -o (Join-Path $out $filename)

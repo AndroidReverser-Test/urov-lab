@@ -1,5 +1,11 @@
 # UROV-X 无密钥检测复核与 App 实测
 
+后续（2026-11-04）：针对本文第 3、4 节两项检测的读取点陷阱变体
+`urov-y` 已完成真机验证，活动页上两项均 0 命中，业务调用窗口仍返回伪值；
+新引入的读取点代码页差异已实测记录。见
+[ELIMINATION_DESIGN.md](ELIMINATION_DESIGN.md) 与
+[ELIMINATION_RESULTS.md](ELIMINATION_RESULTS.md)。本文保留为 `urov-x` 的检测记录。
+
 日期：2026-11-04（Asia/Shanghai）。复核对象是 STEALTH_RESULTS.md 的同一个
 `urov-x.kpm`，SHA256 为
 `c2a5c3d3bb272f4bd2db6205f69cd277739f6e32e5c6cd67cecf2b3e7f393575`。

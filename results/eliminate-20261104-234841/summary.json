@@ -1,0 +1,395 @@
+{
+  "host_time_utc8": "20261104-234841",
+  "serial": "25091FDF60063J",
+  "repeats": 10,
+  "cycles": 2,
+  "runs": [
+    {
+      "label": "01-no-module",
+      "mode": "y-clean",
+      "pid": "10314",
+      "result": "DETECT_RESULT PASS mode=y-clean worker_ms=350 ui_ticks=127 ui_max_gap_ms=22 native=PASS cases=2 assertions=33 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "idle_unregistered",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "features": [],
+      "business": [],
+      "log": "01-no-module-10314.log",
+      "uid": 10284
+    },
+    {
+      "label": "02-urov-x-control",
+      "mode": "observe-active",
+      "pid": "10422",
+      "result": "DETECT_RESULT PASS mode=observe-active worker_ms=1729 ui_ticks=260 ui_max_gap_ms=18 native=PASS cases=15 assertions=479 failures=0",
+      "app_pass": true,
+      "cases": [],
+      "features": [],
+      "business": [],
+      "log": "02-urov-x-control-10422.log",
+      "uid": 10284
+    },
+    {
+      "label": "03-loaded-idle",
+      "mode": "y-clean",
+      "pid": "10514",
+      "result": "DETECT_RESULT PASS mode=y-clean worker_ms=350 ui_ticks=126 ui_max_gap_ms=18 native=PASS cases=2 assertions=33 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "idle_unregistered",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "features": [],
+      "business": [],
+      "log": "03-loaded-idle-10514.log",
+      "uid": 10284
+    },
+    {
+      "label": "04-active-1",
+      "mode": "y-active",
+      "pid": "10585",
+      "result": "DETECT_RESULT PASS mode=y-active worker_ms=613 ui_ticks=154 ui_max_gap_ms=19 native=PASS cases=7 assertions=385 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "10",
+          "exclusive_match": "0",
+          "exclusive_clean": "10",
+          "exclusive_unknown": "0",
+          "accepted": "960",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "10",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_page",
+          "result": "PASS",
+          "n": "10",
+          "exclusive_match": "0",
+          "exclusive_clean": "10",
+          "exclusive_unknown": "0",
+          "accepted": "960",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "10",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_outside_window",
+          "result": "PASS",
+          "n": "10",
+          "exclusive_match": "0",
+          "exclusive_clean": "10",
+          "exclusive_unknown": "0",
+          "accepted": "960",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "10",
+          "reader_unknown": "0",
+          "direct": "0x0",
+          "file": "0x0"
+        },
+        {
+          "name": "active_after_set",
+          "result": "PASS",
+          "n": "10",
+          "exclusive_match": "0",
+          "exclusive_clean": "10",
+          "exclusive_unknown": "0",
+          "accepted": "960",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "10",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_equal_value",
+          "result": "PASS",
+          "n": "10",
+          "exclusive_match": "0",
+          "exclusive_clean": "10",
+          "exclusive_unknown": "0",
+          "accepted": "960",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "10",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "deactivated",
+          "result": "PASS",
+          "n": "10",
+          "exclusive_match": "0",
+          "exclusive_clean": "10",
+          "exclusive_unknown": "0",
+          "accepted": "960",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "10",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "features": [
+        "ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1"
+      ],
+      "business": [
+        "ELIM_BUSINESS ops=121984 errors=0 execution=original"
+      ],
+      "log": "04-active-1-10585.log",
+      "uid": 10284
+    },
+    {
+      "label": "04-active-2",
+      "mode": "y-active",
+      "pid": "10660",
+      "result": "DETECT_RESULT PASS mode=y-active worker_ms=577 ui_ticks=150 ui_max_gap_ms=20 native=PASS cases=7 assertions=385 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "10",
+          "exclusive_match": "0",
+          "exclusive_clean": "10",
+          "exclusive_unknown": "0",
+          "accepted": "960",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "10",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_page",
+          "result": "PASS",
+          "n": "10",
+          "exclusive_match": "0",
+          "exclusive_clean": "10",
+          "exclusive_unknown": "0",
+          "accepted": "960",
+          "failed": "0",
+          "control_failed": "1",
+          "reader_match": "0",
+          "reader_clean": "10",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_outside_window",
+          "result": "PASS",
+          "n": "10",
+          "exclusive_match": "0",
+          "exclusive_clean": "10",
+          "exclusive_unknown": "0",
+          "accepted": "960",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "10",
+          "reader_unknown": "0",
+          "direct": "0x0",
+          "file": "0x0"
+        },
+        {
+          "name": "active_after_set",
+          "result": "PASS",
+          "n": "10",
+          "exclusive_match": "0",
+          "exclusive_clean": "10",
+          "exclusive_unknown": "0",
+          "accepted": "960",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "10",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_equal_value",
+          "result": "PASS",
+          "n": "10",
+          "exclusive_match": "0",
+          "exclusive_clean": "10",
+          "exclusive_unknown": "0",
+          "accepted": "960",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "10",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "deactivated",
+          "result": "PASS",
+          "n": "10",
+          "exclusive_match": "0",
+          "exclusive_clean": "10",
+          "exclusive_unknown": "0",
+          "accepted": "960",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "10",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "features": [
+        "ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1"
+      ],
+      "business": [
+        "ELIM_BUSINESS ops=116736 errors=0 execution=original"
+      ],
+      "log": "04-active-2-10660.log",
+      "uid": 10284
+    },
+    {
+      "label": "05-hold-after-unload",
+      "mode": "y-hold",
+      "pid": "10736",
+      "result": "DETECT_RESULT PASS mode=y-hold worker_ms=351 ui_ticks=127 ui_max_gap_ms=18 native=PASS cases=1 assertions=4 failures=0",
+      "restored": [
+        "ELIM_HOLD_RESTORED pid=10736 opcode=f9400000 direct=f2c66881f2aaacc1"
+      ],
+      "log": "05-hold-after-unload-10736.log"
+    },
+    {
+      "label": "06-post-unload",
+      "mode": "y-clean",
+      "pid": "10816",
+      "result": "DETECT_RESULT PASS mode=y-clean worker_ms=351 ui_ticks=127 ui_max_gap_ms=18 native=PASS cases=2 assertions=33 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "idle_unregistered",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "features": [],
+      "business": [],
+      "log": "06-post-unload-10816.log",
+      "uid": 10284
+    }
+  ],
+  "passed": true,
+  "initial_modules": "",
+  "root": "uid=0(root) gid=0(root) groups=0(root) context=u:r:shell:s0",
+  "kernel": "Linux localhost 6.1.134-android14-11-g66e758f7d0c0-ab13748739 #1 SMP PREEMPT Tue Jul  8 09:17:32 UTC 2025 aarch64 Toybox",
+  "fingerprint": "google/oriole_beta/oriole:16/BP31.250610.009/13905196:user/release-keys",
+  "device_time": "2025-10-01T14:22:59+0800",
+  "kpver": "c00",
+  "artifacts": {
+    "y_kpm": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\out\\urov-y.kpm",
+      "sha256": "0da468166586d311b8b49587d9739944a712ffc9996ac2da0225bb62d61f59e5"
+    },
+    "x_kpm": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\out\\urov-x.kpm",
+      "sha256": "c2a5c3d3bb272f4bd2db6205f69cd277739f6e32e5c6cd67cecf2b3e7f393575"
+    },
+    "apk": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\apps\\urov-detect\\out\\urovdetect.apk",
+      "sha256": "eafb05913953d8cc90431b95abdcbaf5bf9509ec0ef3492b86814dd8ef0b4779"
+    }
+  },
+  "control_status": "mode=site-bound state=inactive sites=0 hits=0 failures=0 hooks=0x1f core_checks=4139",
+  "control": {
+    "active_changed": {
+      "match": 10,
+      "clean": 0,
+      "reader_match": 10
+    },
+    "cpu_cases": 8,
+    "cpu_exclusive_matches": 24,
+    "cpu_reader_matches": 24
+  },
+  "loaded_status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 imm=1ada hooks=0x1f core_checks=4139",
+  "hold_status": "mode=site-trap state=active sites=2 armed=2 hits=2 replays=0 failures=0 imm=1ada hooks=0x1f core_checks=4139",
+  "unload_while_active": "",
+  "final_modules": "",
+  "kernel_issues": [],
+  "totals": {
+    "runs": 7,
+    "elim_cases": 15,
+    "observations": 129,
+    "exclusive_matches": 0,
+    "exclusive_clean": 129,
+    "exclusive_unknown": 0,
+    "accepted_triplets": 12384,
+    "failed_target_stores": 0,
+    "control_failed_stores": 1,
+    "reader_matches": 0,
+    "reader_clean": 129,
+    "reader_unknown": 0,
+    "feature_business_reads": 2
+  }
+}
