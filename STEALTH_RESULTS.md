@@ -1,5 +1,9 @@
 # UROV-X 设备验证结果
 
+后续复核发现了不依赖密钥和耗时阈值的活动页观察方法，见
+[KEYLESS_DETECTION_RESULTS.md](KEYLESS_DETECTION_RESULTS.md)。本文保留原检测核心
+的历史结果；“原核心不可判”不能推广为所有普通 App 检测均不可判。
+
 日期：2026-11-04（Asia/Shanghai）。设计与实现见
 [STEALTH_DESIGN.md](STEALTH_DESIGN.md)；被消除的特征点定义见
 [DETECTION_RESULTS.md](DETECTION_RESULTS.md)。

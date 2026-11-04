@@ -15,6 +15,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -28,6 +29,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "urov_detect.h"
+#include "urov_observe.h"
 #include "../../urov_abi.h"
 #include "../../urov_x_abi.h"
 
@@ -906,6 +908,250 @@ static void log_context(void)
     }
 }
 
+/* Observation fixtures know the key only to establish ground truth. Neither
+ * detector API accepts a key, context, selector, request, or expected verdict.
+ */
+static void observation_case(const char *name, const struct page *p, unsigned delta,
+                             int repeats, int expected_exclusive, int expected_reader)
+{
+    const uint8_t *at = p->address + p->entry + delta;
+    const uint8_t *reference = (const uint8_t *)(uintptr_t)&ud_payload + delta;
+    const off_t offset = p->file_offset + p->entry + delta;
+    struct ud_exclusive_observation ex = {0};
+    struct ud_reader_observation rd = {0};
+    uint64_t costs[200];
+    unsigned matches = 0, clean = 0, unknown = 0, reader_matches = 0;
+    unsigned accepted = 0, failed = 0, control_failed = 0;
+    unsigned failures_before = g_fail;
+    const int signals[] = {SIGSEGV, SIGBUS, SIGSYS, SIGPIPE};
+    struct sigaction old[4], after;
+    struct ud_mapping oldmap, newmap;
+    char name_before[17] = {0}, name_after[17] = {0};
+    int probe_fds = probe_fd_count();
+    off_t position = lseek(p->fd, 0, SEEK_CUR);
+    for (unsigned i = 0; i < 4; ++i) sigaction(signals[i], NULL, &old[i]);
+    prctl(PR_GET_NAME, name_before, 0L, 0L, 0L);
+    REQUIRE(!ud_mapping_at("/proc/self/smaps", at, &oldmap), "%s before mapping", name);
+    ++g_cases;
+    for (int i = 0; i < repeats; ++i) {
+        errno = EDOM;
+        ud_observe_exclusive(at, reference, p->fd, offset, &ex);
+        REQUIRE(errno == EDOM, "%s exclusive changed errno", name);
+        /* A native read can lose its reservation to an unrelated interrupt.
+         * The detector must report UNKNOWN for that partial pattern. Such a
+         * sample is not a clean negative and is never an allowed positive.
+         */
+        REQUIRE((int)ex.reservation_loss == expected_exclusive ||
+                (expected_exclusive == UD_NO_MATCH && ex.reservation_loss == UD_UNKNOWN &&
+                 ex.error == EAGAIN),
+                "%s exclusive=%d expected=%d accepted=%u failed=%u control=%u error=%d",
+                name, ex.reservation_loss, expected_exclusive, ex.accepted,
+                ex.target_failed, ex.control_failed, ex.error);
+        costs[i] = ex.elapsed_ns;
+        matches += ex.reservation_loss == UD_MATCH;
+        clean += ex.reservation_loss == UD_NO_MATCH;
+        unknown += ex.reservation_loss == UD_UNKNOWN;
+        accepted += ex.accepted;
+        failed += ex.target_failed;
+        control_failed += ex.control_failed;
+        errno = EDOM;
+        ud_observe_reader(at, p->fd, offset, ux_site_ldr, &rd);
+        REQUIRE(errno == EDOM, "%s reader changed errno", name);
+        REQUIRE((int)rd.reader_diff == expected_reader && rd.completed == UD_REPEATS,
+                "%s reader=%d expected=%d rounds=%u error=%d", name,
+                rd.reader_diff, expected_reader, rd.completed, rd.error);
+        reader_matches += rd.reader_diff == UD_MATCH;
+    }
+    for (unsigned i = 0; i < 4; ++i) {
+        sigaction(signals[i], NULL, &after);
+        REQUIRE(same_signal(&old[i], &after), "%s changed signal %d", name, signals[i]);
+    }
+    prctl(PR_GET_NAME, name_after, 0L, 0L, 0L);
+    REQUIRE(!strcmp(name_before, name_after), "%s thread name changed", name);
+    REQUIRE(lseek(p->fd, 0, SEEK_CUR) == position, "%s file position changed", name);
+    REQUIRE(probe_fds == probe_fd_count(), "%s leaked metadata fd", name);
+    REQUIRE(!ud_mapping_at("/proc/self/smaps", at, &newmap) &&
+            oldmap.start == newmap.start && oldmap.end == newmap.end &&
+            oldmap.offset == newmap.offset && oldmap.readable == newmap.readable &&
+            oldmap.writable == newmap.writable && oldmap.executable == newmap.executable &&
+            oldmap.dontcopy == newmap.dontcopy && oldmap.randomread == newmap.randomread &&
+            oldmap.maywrite == newmap.maywrite, "%s VMA changed", name);
+    qsort(costs, (size_t)repeats, sizeof(costs[0]), cmp_u64);
+    LOG("OBS_CASE name=%s result=%s n=%d match=%u clean=%u unknown=%u "
+        "accepted=%u failed=%u control_failed=%u reader_match=%u "
+        "direct=0x%llx reader=0x%llx file=0x%llx p50_us=%llu p95_us=%llu max_us=%llu",
+        name, failures_before == g_fail ? "PASS" : "FAIL", repeats, matches, clean, unknown,
+        accepted, failed, control_failed, reader_matches,
+        (unsigned long long)rd.direct_value, (unsigned long long)rd.reader_value,
+        (unsigned long long)rd.file_value,
+        (unsigned long long)(costs[(repeats - 1) / 2] / 1000),
+        (unsigned long long)(costs[(repeats * 95 + 99) / 100 - 1] / 1000),
+        (unsigned long long)(costs[repeats - 1] / 1000));
+}
+
+static unsigned observation_alternation;
+
+static uint64_t observation_unstable_reader(const void *address)
+{
+    return ux_site_ldr(address) ^ (uint64_t)(observation_alternation++ & 1U);
+}
+
+static void observation_contract_cases(const struct page *p)
+{
+    struct ud_exclusive_observation ex;
+    struct ud_reader_observation rd;
+    const void *at = p->address + p->entry + 8;
+    const void *reference = (const uint8_t *)(uintptr_t)&ud_payload + 8;
+    off_t offset = p->file_offset + p->entry + 8;
+    unsigned before = g_fail;
+    ++g_cases;
+    errno = EDOM;
+    ud_observe_exclusive(at, at, p->fd, offset, &ex);
+    REQUIRE(errno == EDOM && ex.reservation_loss == UD_UNKNOWN && ex.error == EINVAL,
+            "OBS same-page control accepted");
+    ud_observe_exclusive(at, reference, p->fd, offset + 1, &ex);
+    REQUIRE(ex.reservation_loss == UD_UNKNOWN && ex.error == ESTALE, "OBS wrong offset accepted");
+    ud_observe_exclusive(at, reference, -1, offset, &ex);
+    REQUIRE(ex.reservation_loss == UD_UNKNOWN && ex.error == EBADF, "OBS bad fd accepted");
+    ud_observe_reader(at, p->fd, offset, NULL, &rd);
+    REQUIRE(rd.reader_diff == UD_UNKNOWN && rd.error == EINVAL, "OBS missing reader accepted");
+    ud_observe_reader((const uint8_t *)at + 1, p->fd, offset + 1, ux_site_ldr, &rd);
+    REQUIRE(rd.reader_diff == UD_UNKNOWN && rd.error == EINVAL, "OBS unaligned reader accepted");
+    observation_alternation = 0;
+    ud_observe_reader(at, p->fd, offset, observation_unstable_reader, &rd);
+    REQUIRE(rd.reader_diff == UD_UNKNOWN && rd.error == EAGAIN,
+            "OBS unstable reader reported a finding");
+    void *rw = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    REQUIRE(rw != MAP_FAILED, "OBS RW negative fixture allocation");
+    if (rw != MAP_FAILED) {
+        ud_observe_exclusive(rw, reference, p->fd, offset, &ex);
+        REQUIRE(ex.reservation_loss == UD_UNKNOWN && ex.error == EACCES,
+                "OBS writable/non-executable target accepted");
+        munmap(rw, 4096);
+    }
+    REQUIRE(errno == EDOM, "OBS contract probes changed errno");
+    LOG("OBS_CONTRACT result=%s rejected=7 unstable_reader=unknown",
+        before == g_fail ? "PASS" : "FAIL");
+}
+
+static void observation_normal_variants(const struct page *p, int repeats)
+{
+    REQUIRE(!madvise(p->address, 4096, MADV_RANDOM), "OBS MADV_RANDOM fixture");
+    observation_case("normal_madv_random", p, 8, repeats, UD_NO_MATCH, UD_NO_MATCH);
+    REQUIRE(!madvise(p->address, 4096, MADV_NORMAL), "OBS MADV_NORMAL fixture");
+    REQUIRE(!madvise(p->address, 4096, MADV_DONTFORK), "OBS DONTFORK fixture");
+    observation_case("normal_madv_dontfork", p, 8, repeats, UD_NO_MATCH, UD_NO_MATCH);
+    REQUIRE(!madvise(p->address, 4096, MADV_DOFORK), "OBS DOFORK fixture");
+    REQUIRE(!madvise(p->address, 4096, MADV_DONTNEED), "OBS DONTNEED fixture");
+    observation_case("normal_cold_pte", p, 8, repeats, UD_NO_MATCH, UD_NO_MATCH);
+}
+
+static void observation_each_cpu(const struct page *p)
+{
+    cpu_set_t available;
+    unsigned tested = 0;
+    if (sched_getaffinity(0, sizeof(available), &available)) {
+        LOG("OBS_CPUS skipped=getaffinity errno=%d", errno); return;
+    }
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+        cpu_set_t selected;
+        char label[40];
+        if (!CPU_ISSET(cpu, &available)) continue;
+        CPU_ZERO(&selected); CPU_SET(cpu, &selected);
+        if (sched_setaffinity(0, sizeof(selected), &selected)) {
+            LOG("OBS_CPU skipped=%d errno=%d", cpu, errno); continue;
+        }
+        snprintf(label, sizeof(label), "active_cpu_%d", cpu);
+        observation_case(label, p, 8, 3, UD_MATCH, UD_MATCH);
+        ++tested;
+    }
+    REQUIRE(!sched_setaffinity(0, sizeof(available), &available), "OBS restore worker affinity");
+    LOG("OBS_CPUS tested=%u worker_affinity_restored=1", tested);
+}
+
+static void observation_matrix(const char *key, int repeats, int active)
+{
+    struct page p;
+    struct ux_ctx ctx;
+    struct business business;
+    pthread_t thread;
+    int have_thread;
+    if (sysconf(_SC_PAGESIZE) != 4096 || page_open(&p, MAP_SHARED)) {
+        REQUIRE(0, "OBS owned page errno=%d", errno); return;
+    }
+    memset(&business, 0, sizeof(business));
+    atomic_init(&business.stop, 0); atomic_init(&business.errors, 0); atomic_init(&business.ops, 0);
+    business.fn = (payload_fn)(void *)(p.address + p.entry);
+    have_thread = pthread_create(&thread, NULL, business_main, &business) == 0;
+    REQUIRE(have_thread, "OBS business worker");
+    usleep(10000);
+    observation_case("baseline", &p, 8, repeats, UD_NO_MATCH, UD_NO_MATCH);
+    observation_contract_cases(&p);
+    if (!active) observation_normal_variants(&p, repeats);
+    if (active) {
+        if (ux_init_key(&ctx, key)) { REQUIRE(0, "OBS fixture key missing"); goto finish; }
+        struct urov_x_request reg = ux_req(UROV_X_REGISTER);
+        reg.address = (uintptr_t)p.address;
+        reg.offset = p.entry + 8;
+        reg.length = 8;
+        reg.value = UINT64_C(0x8877665544332211);
+        reg.site_count = 2;
+        reg.sites[0] = (uintptr_t)&ux_site_ldr;
+        reg.sites[1] = (uintptr_t)&ux_site_ldrb;
+        if (ux_control(&ctx, UROV_X_REGISTER, &reg)) {
+            REQUIRE(0, "OBS register errno=%d", errno); goto finish;
+        }
+        observation_case("active_changed", &p, 8, repeats, UD_MATCH, UD_MATCH);
+        observation_case("active_outside_window", &p, 96, repeats, UD_MATCH, UD_NO_MATCH);
+        struct page alias;
+        if (!page_open(&alias, MAP_SHARED)) {
+            observation_case("active_normal_alias", &alias, 8, repeats, UD_NO_MATCH, UD_NO_MATCH);
+            page_close(&alias);
+        } else REQUIRE(0, "OBS second native alias");
+        observation_each_cpu(&p);
+        struct urov_x_request st = ux_req(UROV_X_STATUS);
+        st.session = 1;
+        REQUIRE(!ux_control(&ctx, UROV_X_STATUS, &st) && st.state == UROV_X_ACTIVE &&
+                st.generation == 1 && st.failures == 0 && st.site_count == 2 &&
+                st.value == reg.value, "OBS detector affected active session");
+        LOG("OBS_STATE active=%u generation=%llu sites=%u failures=%llu hits=%llu",
+            st.state, (unsigned long long)st.generation, st.site_count,
+            (unsigned long long)st.failures, (unsigned long long)st.hits);
+        /* Equal fake bytes defeat content comparisons but retain every fault.
+         * These SETs are fixture actions, outside both detector implementations.
+         */
+        uint64_t original;
+        REQUIRE(!app_pread(p.fd, p.file_offset + p.entry + 8, (uint8_t *)&original, 8),
+                "OBS equal-value fixture pread");
+        struct urov_x_request same = ux_req(UROV_X_SET);
+        same.session = 1; same.expected_generation = 1; same.length = 8; same.value = original;
+        REQUIRE(!ux_control(&ctx, UROV_X_SET, &same) && same.generation == 2,
+                "OBS equal-value fixture SET");
+        observation_case("active_equal_original", &p, 8, repeats, UD_MATCH, UD_NO_MATCH);
+        st = ux_req(UROV_X_STATUS); st.session = 1;
+        REQUIRE(!ux_control(&ctx, UROV_X_STATUS, &st) && st.state == UROV_X_ACTIVE &&
+                st.generation == 2 && st.value == original && st.failures == 0,
+                "OBS equal-value detection affected session");
+        LOG("OBS_STATE active=%u generation=%llu sites=%u failures=%llu hits=%llu",
+            st.state, (unsigned long long)st.generation, st.site_count,
+            (unsigned long long)st.failures, (unsigned long long)st.hits);
+        struct urov_x_request deact = ux_req(UROV_X_DEACTIVATE);
+        deact.session = 1;
+        REQUIRE(!ux_control(&ctx, UROV_X_DEACTIVATE, &deact), "OBS fixture deactivate");
+        observation_case("deactivated", &p, 8, repeats, UD_NO_MATCH, UD_NO_MATCH);
+    }
+finish:
+    if (have_thread) {
+        atomic_store_explicit(&business.stop, 1, memory_order_release);
+        pthread_join(thread, NULL);
+        REQUIRE(atomic_load(&business.errors) == 0 && atomic_load(&business.ops) > 0,
+                "OBS business failed");
+        LOG("OBS_BUSINESS ops=%llu errors=%d execution=original normal_io=ok",
+            (unsigned long long)atomic_load(&business.ops), atomic_load(&business.errors));
+    }
+    page_close(&p);
+}
+
 JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
     JNIEnv *env, jclass cls, jstring mode_value, jint repeats, jstring key_value)
 {
@@ -925,6 +1171,12 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
     g_checks = g_fail = g_cases = 0;
     log_context();
     LOG("BEGIN mode=%s repeats=%d", mode, (int)repeats);
+    if (!strncmp(mode, "observe-", 8)) {
+        observation_matrix(key, (int)repeats, !strcmp(mode, "observe-active"));
+        snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
+                 g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
+        goto done;
+    }
     if (!strncmp(mode, "x-", 2)) {
         /* urov-x fixtures: the detector calls stay unmodified and unkeyed. */
         if (!strcmp(mode, "x-active")) stealth_active(key, (int)repeats);

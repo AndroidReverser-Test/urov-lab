@@ -1,5 +1,10 @@
 # UROV-LAB
 
+2026-11-04 后续无密钥复核：新增独占监视器观察和实际读取点一致性校验，可发现
+`urov-x` 自身 mm 内的活动受保护页；不依赖耗时阈值，不结束会话。342 次活动页
+观测全部命中，870 次正常页观测无误报（3 次 UNKNOWN）。实现、边界和原始结果见
+[KEYLESS_DETECTION_RESULTS.md](KEYLESS_DETECTION_RESULTS.md)。本轮未修改 KPM。
+
 2026-11-04 普通 App 检测复核已完成，见 [DETECTION_RESULTS.md](DETECTION_RESULTS.md)。
 新增独立检测器与双 UID 测试 App，未修改 KPM。复核发现当前 `0x10000` 实际产生
 smaps `rr`，并非文中原先描述的 `dc`；对 raw-XOM 地址执行 pipe write 还可能持续

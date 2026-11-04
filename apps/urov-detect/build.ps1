@@ -25,7 +25,8 @@ New-Item -ItemType Directory -Force -Path $out, $classes, $dex | Out-Null
     -Wall -Wextra -Werror -Wformat=2 -Wshadow -fno-omit-frame-pointer -pthread `
     '-Wl,--build-id=sha1' '-Wl,-z,noexecstack' '-Wl,-z,max-page-size=16384' `
     -I (Join-Path $lab 'native') (Join-Path $here 'app.c') `
-    (Join-Path $lab 'native\urov_detect.c') -o (Join-Path $out 'liburovdetect.so') -llog -ldl
+    (Join-Path $lab 'native\urov_detect.c') (Join-Path $lab 'native\urov_observe.c') `
+    -o (Join-Path $out 'liburovdetect.so') -llog -ldl
 if ($LASTEXITCODE -ne 0) { throw 'Native build failed' }
 & javac -encoding UTF-8 -source 8 -target 8 -Xlint:-options `
     -bootclasspath "$jar;$tools\core-lambda-stubs.jar" -d $classes `

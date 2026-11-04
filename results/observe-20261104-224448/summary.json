@@ -1,0 +1,220 @@
+{
+  "host_time_utc8": "20261104-224448",
+  "serial": "25091FDF60063J",
+  "repeats": 3,
+  "cycles": 1,
+  "runs": [
+    {
+      "label": "01-clean",
+      "mode": "observe-clean",
+      "pid": "20525",
+      "package": "com.example.urovdetect",
+      "result": "PASS",
+      "ui": "DETECT_RESULT PASS mode=observe-clean worker_ms=350 ui_ticks=127 ui_max_gap_ms=20 native=PASS cases=1 assertions=23 failures=0",
+      "log": "01-clean-20525.log",
+      "uid": 10284,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "3",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "reader": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1",
+          "p50_us": "6808",
+          "p95_us": "13007",
+          "max_us": "13007"
+        }
+      ],
+      "state": [],
+      "business": [
+        "OBS_BUSINESS ops=22016 errors=0 execution=original normal_io=ok"
+      ]
+    },
+    {
+      "label": "02-loaded-idle",
+      "mode": "observe-clean",
+      "pid": "20633",
+      "package": "com.example.urovdetect",
+      "result": "PASS",
+      "ui": "DETECT_RESULT PASS mode=observe-clean worker_ms=350 ui_ticks=127 ui_max_gap_ms=18 native=PASS cases=1 assertions=23 failures=0",
+      "log": "02-loaded-idle-20633.log",
+      "uid": 10284,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "3",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "reader": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1",
+          "p50_us": "7668",
+          "p95_us": "13609",
+          "max_us": "13609"
+        }
+      ],
+      "state": [],
+      "business": [
+        "OBS_BUSINESS ops=22912 errors=0 execution=original normal_io=ok"
+      ]
+    },
+    {
+      "label": "03-active-1",
+      "mode": "observe-active",
+      "pid": "20705",
+      "package": "com.example.urovdetect",
+      "result": "PASS",
+      "ui": "DETECT_RESULT PASS mode=observe-active worker_ms=350 ui_ticks=128 ui_max_gap_ms=21 native=PASS cases=4 assertions=88 failures=0",
+      "log": "03-active-1-20705.log",
+      "uid": 10284,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "3",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "reader": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1",
+          "p50_us": "9175",
+          "p95_us": "9555",
+          "max_us": "9555"
+        },
+        {
+          "name": "active_changed",
+          "result": "PASS",
+          "n": "3",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "reader_match": "3",
+          "direct": "0xf2c66881f2aaacc1",
+          "reader": "0x8877665544332211",
+          "file": "0xf2c66881f2aaacc1",
+          "p50_us": "4382",
+          "p95_us": "5200",
+          "max_us": "5200"
+        },
+        {
+          "name": "active_outside_window",
+          "result": "PASS",
+          "n": "3",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "1",
+          "reader_match": "0",
+          "direct": "0xf2c00049d2801009",
+          "reader": "0xf2c00049d2801009",
+          "file": "0xf2c00049d2801009",
+          "p50_us": "3757",
+          "p95_us": "3847",
+          "max_us": "3847"
+        },
+        {
+          "name": "deactivated",
+          "result": "PASS",
+          "n": "3",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "reader": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1",
+          "p50_us": "3865",
+          "p95_us": "5376",
+          "max_us": "5376"
+        }
+      ],
+      "state": [
+        "OBS_STATE active=1 generation=1 sites=2 failures=0 hits=697"
+      ],
+      "business": [
+        "OBS_BUSINESS ops=43264 errors=0 execution=original normal_io=ok"
+      ]
+    },
+    {
+      "label": "05-post-unload",
+      "mode": "observe-clean",
+      "pid": "20781",
+      "package": "com.example.urovdetect",
+      "result": "PASS",
+      "ui": "DETECT_RESULT PASS mode=observe-clean worker_ms=351 ui_ticks=128 ui_max_gap_ms=17 native=PASS cases=1 assertions=23 failures=0",
+      "log": "05-post-unload-20781.log",
+      "uid": 10284,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "3",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "reader": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1",
+          "p50_us": "8062",
+          "p95_us": "9340",
+          "max_us": "9340"
+        }
+      ],
+      "state": [],
+      "business": [
+        "OBS_BUSINESS ops=28416 errors=0 execution=original normal_io=ok"
+      ]
+    }
+  ],
+  "passed": true,
+  "initial_modules": "",
+  "root": "uid=0(root) gid=0(root) groups=0(root) context=u:r:shell:s0",
+  "kernel": "Linux localhost 6.1.134-android14-11-g66e758f7d0c0-ab13748739 #1 SMP PREEMPT Tue Jul  8 09:17:32 UTC 2025 aarch64 Toybox",
+  "fingerprint": "google/oriole_beta/oriole:16/BP31.250610.009/13905196:user/release-keys",
+  "device_time": "2025-10-01T13:19:06+0800",
+  "kpver": "c00",
+  "artifacts": {
+    "kpm": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\out\\urov-x.kpm",
+      "sha256": "c2a5c3d3bb272f4bd2db6205f69cd277739f6e32e5c6cd67cecf2b3e7f393575"
+    },
+    "owner": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\apps\\urov-detect\\out\\urovdetect.apk",
+      "sha256": "8189a5794d6952a3bae528953dfcd806fcc761c75f0798e6bd26b510f0a6e8ad"
+    }
+  },
+  "loaded_status": "mode=site-bound state=inactive sites=0 hits=0 failures=0 hooks=0x1f core_checks=4139",
+  "final_modules": "",
+  "kernel_issues": []
+}

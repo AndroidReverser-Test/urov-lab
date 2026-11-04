@@ -1,0 +1,14 @@
+--------- beginning of main
+10-01 13:23:32.928 21105 21129 I urovdetect: CONTEXT pid=21105 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768
+10-01 13:23:32.929 21105 21129 I urovdetect: CONTEXT CapEff:	0000000000000000
+10-01 13:23:32.929 21105 21129 I urovdetect: CONTEXT Seccomp:	2
+10-01 13:23:32.929 21105 21129 I urovdetect: BEGIN mode=observe-clean repeats=30
+10-01 13:23:33.226 21105 21129 I urovdetect: OBS_CASE name=baseline result=PASS n=30 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=3695 p95_us=7023 max_us=14003
+10-01 13:23:33.234 21105 21129 I urovdetect: OBS_CONTRACT result=PASS rejected=7 unstable_reader=unknown
+10-01 13:23:33.444 21105 21129 I urovdetect: OBS_CASE name=normal_madv_random result=PASS n=30 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=3689 p95_us=3793 max_us=3856
+10-01 13:23:33.658 21105 21129 I urovdetect: OBS_CASE name=normal_madv_dontfork result=PASS n=30 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=3693 p95_us=3796 max_us=3978
+10-01 13:23:33.714 21105 21129 I urovdetect: FAIL normal_cold_pte exclusive=-1 expected=0 accepted=64 failed=1 control=0 error=11
+10-01 13:23:33.867 21105 21129 I urovdetect: OBS_CASE name=normal_cold_pte result=FAIL n=30 match=0 clean=29 unknown=1 accepted=2848 failed=1 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=3693 p95_us=3772 max_us=3846
+10-01 13:23:33.868 21105 21129 I urovdetect: OBS_BUSINESS ops=187776 errors=0 execution=original normal_io=ok
+10-01 13:23:33.868 21105 21129 I urovdetect: NATIVE_RESULT FAIL cases=5 assertions=532 failures=1 mode=observe-clean
+10-01 13:23:33.871 21105 21105 I urovdetect: DETECT_RESULT FAIL mode=observe-clean worker_ms=941 ui_ticks=186 ui_max_gap_ms=19 native=FAIL cases=5 assertions=532 failures=1

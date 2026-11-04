@@ -1,0 +1,13 @@
+--------- beginning of main
+10-01 13:24:57.186 21323 21347 I urovdetect: CONTEXT pid=21323 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768
+10-01 13:24:57.187 21323 21347 I urovdetect: CONTEXT CapEff:	0000000000000000
+10-01 13:24:57.187 21323 21347 I urovdetect: CONTEXT Seccomp:	2
+10-01 13:24:57.187 21323 21347 I urovdetect: BEGIN mode=observe-clean repeats=30
+10-01 13:24:57.476 21323 21347 I urovdetect: OBS_CASE name=baseline result=PASS n=30 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=3762 p95_us=9041 max_us=13849
+10-01 13:24:57.484 21323 21347 I urovdetect: OBS_CONTRACT result=PASS rejected=7 unstable_reader=unknown
+10-01 13:24:57.698 21323 21347 I urovdetect: OBS_CASE name=normal_madv_random result=PASS n=30 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=3770 p95_us=3836 max_us=3910
+10-01 13:24:57.911 21323 21347 I urovdetect: OBS_CASE name=normal_madv_dontfork result=PASS n=30 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=3765 p95_us=3804 max_us=3890
+10-01 13:24:58.125 21323 21347 I urovdetect: OBS_CASE name=normal_cold_pte result=PASS n=30 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=1 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=3759 p95_us=3828 max_us=3838
+10-01 13:24:58.125 21323 21347 I urovdetect: OBS_BUSINESS ops=188416 errors=0 execution=original normal_io=ok
+10-01 13:24:58.125 21323 21347 I urovdetect: NATIVE_RESULT PASS cases=5 assertions=532 failures=0 mode=observe-clean
+10-01 13:24:58.129 21323 21323 I urovdetect: DETECT_RESULT PASS mode=observe-clean worker_ms=939 ui_ticks=185 ui_max_gap_ms=19 native=PASS cases=5 assertions=532 failures=0

@@ -1,0 +1,13 @@
+--------- beginning of main
+10-01 13:23:30.390 20991 21015 I urovdetect: CONTEXT pid=20991 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768
+10-01 13:23:30.391 20991 21015 I urovdetect: CONTEXT CapEff:	0000000000000000
+10-01 13:23:30.391 20991 21015 I urovdetect: CONTEXT Seccomp:	2
+10-01 13:23:30.391 20991 21015 I urovdetect: BEGIN mode=observe-clean repeats=30
+10-01 13:23:30.675 20991 21015 I urovdetect: OBS_CASE name=baseline result=PASS n=30 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=3633 p95_us=5323 max_us=9225
+10-01 13:23:30.684 20991 21015 I urovdetect: OBS_CONTRACT result=PASS rejected=7 unstable_reader=unknown
+10-01 13:23:30.889 20991 21015 I urovdetect: OBS_CASE name=normal_madv_random result=PASS n=30 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=3636 p95_us=3698 max_us=3751
+10-01 13:23:31.094 20991 21015 I urovdetect: OBS_CASE name=normal_madv_dontfork result=PASS n=30 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=3631 p95_us=3657 max_us=3721
+10-01 13:23:31.300 20991 21015 I urovdetect: OBS_CASE name=normal_cold_pte result=PASS n=30 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=3638 p95_us=3690 max_us=3702
+10-01 13:23:31.301 20991 21015 I urovdetect: OBS_BUSINESS ops=181888 errors=0 execution=original normal_io=ok
+10-01 13:23:31.301 20991 21015 I urovdetect: NATIVE_RESULT PASS cases=5 assertions=532 failures=0 mode=observe-clean
+10-01 13:23:31.305 20991 20991 I urovdetect: DETECT_RESULT PASS mode=observe-clean worker_ms=912 ui_ticks=184 ui_max_gap_ms=18 native=PASS cases=5 assertions=532 failures=0

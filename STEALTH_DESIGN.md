@@ -1,5 +1,9 @@
 # UROV-X：UROV-LAB 检测特征点的消除设计与实现
 
+后续复核：[KEYLESS_DETECTION_RESULTS.md](KEYLESS_DETECTION_RESULTS.md) 新增了
+独占监视器观察，证明同步异常除耗时以外还留下可测的架构状态变化。以下为本变体
+原设计及原检测器结果的历史记录，不再将“仅有耗时残留”视作完整结论。
+
 日期：2026-11-04（Asia/Shanghai）。对象为 `kpms/urov-lab` 当前实现（提交
 `74d6d83`，检测结论见 [DETECTION_RESULTS.md](DETECTION_RESULTS.md)）。本轮新增
 `urov-x` 变体，原 `urov-lab` 保持不变，用于同一设备上的前后对照。
