@@ -1,5 +1,11 @@
 # UROV-LAB 普通 app 使用方案与真机验收
 
+> 检测复核更正（2026-11-04）：当前源码把 `0x10000` 命名为 VM_DONTCOPY，
+> 真机实际出现的是 VM_RAND_READ / `rr`，不是 `dc`；旧 fork 用例不能证明 VMA
+> 未继承。普通 App 的 `/proc/self/mem` 被拒绝，向 pipe 直接 write raw-XOM 地址
+> 还会持续重试。本文保留历史验收记录，这些相关结论以
+> [DETECTION_RESULTS.md](DETECTION_RESULTS.md) 的源码复核和新实测为准。
+
 日期：2026-11-04。设备：Pixel 6 / Android 16（`BP31.250610.009`，内核
 `6.1.134-android14-11-g66e758f7d0c0-ab13748739`，4 KiB 基础页）。
 模块：`urov-lab.kpm`，由 root 通过 `kpatch kpm load` 加载；普通 app 只作为使用方。

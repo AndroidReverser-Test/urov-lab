@@ -1,0 +1,13 @@
+--------- beginning of main
+10-01 12:13:28.316  9830  9854 I urovdetect: CONTEXT pid=9830 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768
+10-01 12:13:28.316  9830  9854 I urovdetect: CONTEXT CapEff:	0000000000000000
+10-01 12:13:28.316  9830  9854 I urovdetect: CONTEXT Seccomp:	2
+10-01 12:13:28.316  9830  9854 I urovdetect: BEGIN mode=idle repeats=30
+10-01 12:13:28.737  9830  9854 I urovdetect: CASE baseline_owned result=PASS n=30 ctl=1 scope=0 caps=0xeb7 file=0 dc=0 rr=0 diff_at=-1 views_us_p50=2757 views_us_p95=5441 views_us_max=28788 ctl_us_p50=4 ctl_us_p95=7 smaps_us_p50=8000 smaps_us_p95=16261 fd_delta=-1 probe_fd_delta=0
+10-01 12:13:29.071  9830  9854 I urovdetect: CASE legitimate_dontfork result=PASS n=30 ctl=1 scope=0 caps=0xeb7 file=0 dc=1 rr=0 diff_at=-1 views_us_p50=2760 views_us_p95=3095 views_us_max=3153 ctl_us_p50=4 ctl_us_p95=5 smaps_us_p50=8026 smaps_us_p95=8396 fd_delta=0 probe_fd_delta=0
+10-01 12:13:29.403  9830  9854 I urovdetect: CASE legitimate_random result=PASS n=30 ctl=1 scope=0 caps=0xeb7 file=0 dc=0 rr=1 diff_at=-1 views_us_p50=2753 views_us_p95=2906 views_us_max=3084 ctl_us_p50=3 ctl_us_p95=5 smaps_us_p50=8012 smaps_us_p95=8217 fd_delta=0 probe_fd_delta=0
+10-01 12:13:29.408  9830  9854 I urovdetect: SKIP ordinary_private_patch execmod denied errno=13
+10-01 12:13:29.408  9830  9854 I urovdetect: NEGATIVE_CASES done no faults or process signal handlers required
+10-01 12:13:29.409  9830  9854 I urovdetect: BUSINESS ops=221312 errors=0 execution=original normal_io=ok
+10-01 12:13:29.412  9830  9854 I urovdetect: NATIVE_RESULT PASS cases=3 assertions=572 failures=0 module=1 scope=0 integrity_diff=0 mode=idle
+10-01 12:13:29.416  9830  9830 I urovdetect: DETECT_RESULT PASS mode=idle worker_ms=1097 ui_ticks=201 ui_max_gap_ms=20 native=PASS cases=3 assertions=572 failures=0 module=1 scope=0 integrity_diff=0

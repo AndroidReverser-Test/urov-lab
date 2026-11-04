@@ -1,0 +1,64 @@
+--------- beginning of main
+10-01 12:00:52.517  8753  8778 I urovdetect: CONTEXT pid=8753 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768
+10-01 12:00:52.517  8753  8778 I urovdetect: CONTEXT CapEff:	0000000000000000
+10-01 12:00:52.517  8753  8778 I urovdetect: CONTEXT Seccomp:	2
+10-01 12:00:52.517  8753  8778 I urovdetect: BEGIN mode=active repeats=3
+10-01 12:00:52.615  8753  8778 I urovdetect: CASE baseline_owned result=PASS n=3 ctl=1 caps=0xeb7 kernel=0 file=0 kernel_eq_file=1 dc=0 diff_at=-1/-1 views_us_p50=5610 p95=5610 max=6736 ctl_us_p50=7 p95=7 smaps_us_p50=16849 p95=16849 fd_delta=-1 pipe_fd_delta=0
+10-01 12:02:20.091  8753  8778 I urovdetect: FAIL active_8_A kernel=0 file=0 done=3 errors=0/0
+10-01 12:02:20.100  8753  8778 I urovdetect: FAIL active_8_A smaps error=0 dc=0 expected=1
+10-01 12:02:20.100  8753  8778 I urovdetect: FAIL active_8_A combined decision
+10-01 12:02:20.100  8753  8778 I urovdetect: FAIL active_8_A control=0 expected=1 error=0
+10-01 12:02:20.103  8753  8778 I urovdetect: FAIL active_8_A kernel=0 file=0 done=3 errors=0/0
+10-01 12:02:20.111  8753  8778 I urovdetect: FAIL active_8_A smaps error=0 dc=0 expected=1
+10-01 12:02:20.111  8753  8778 I urovdetect: FAIL active_8_A combined decision
+10-01 12:02:20.111  8753  8778 I urovdetect: FAIL active_8_A control=0 expected=1 error=0
+10-01 12:02:20.114  8753  8778 I urovdetect: FAIL active_8_A kernel=0 file=0 done=3 errors=0/0
+10-01 12:02:20.122  8753  8778 I urovdetect: FAIL active_8_A smaps error=0 dc=0 expected=1
+10-01 12:02:20.122  8753  8778 I urovdetect: FAIL active_8_A combined decision
+10-01 12:02:20.131  8753  8778 I urovdetect: CASE active_8_A result=FAIL n=3 ctl=0 caps=0x0 kernel=0 file=0 kernel_eq_file=1 dc=0 diff_at=-1/-1 views_us_p50=2983 p95=2983 max=87475264 ctl_us_p50=1 p95=1 smaps_us_p50=8439 p95=8439 fd_delta=-3 pipe_fd_delta=0
+10-01 12:02:20.131  8753  8778 I urovdetect: FAIL detection must not fail emulator or update session len=8
+10-01 12:02:20.131  8753  8778 I urovdetect: ORACLE len=8 gen=0 hits_delta=0 failures=0
+10-01 12:02:20.131  8753  8778 I urovdetect: FAIL SET len=8 rc=-1 errno=22
+10-01 12:02:20.131  8753  8778 I urovdetect: FAIL active_8_B control=0 expected=1 error=0
+10-01 12:02:20.134  8753  8778 I urovdetect: FAIL active_8_B kernel=0 file=0 done=3 errors=0/0
+10-01 12:02:20.143  8753  8778 I urovdetect: FAIL active_8_B smaps error=0 dc=0 expected=1
+10-01 12:02:20.143  8753  8778 I urovdetect: FAIL active_8_B combined decision
+10-01 12:02:20.143  8753  8778 I urovdetect: FAIL active_8_B control=0 expected=1 error=0
+10-01 12:02:20.146  8753  8778 I urovdetect: FAIL active_8_B kernel=0 file=0 done=3 errors=0/0
+10-01 12:02:20.155  8753  8778 I urovdetect: FAIL active_8_B smaps error=0 dc=0 expected=1
+10-01 12:02:20.155  8753  8778 I urovdetect: FAIL active_8_B combined decision
+10-01 12:02:20.155  8753  8778 I urovdetect: FAIL active_8_B control=0 expected=1 error=0
+10-01 12:02:20.158  8753  8778 I urovdetect: FAIL active_8_B kernel=0 file=0 done=3 errors=0/0
+10-01 12:02:20.166  8753  8778 I urovdetect: FAIL active_8_B smaps error=0 dc=0 expected=1
+10-01 12:02:20.166  8753  8778 I urovdetect: FAIL active_8_B combined decision
+10-01 12:02:20.175  8753  8778 I urovdetect: CASE active_8_B result=FAIL n=3 ctl=0 caps=0x0 kernel=0 file=0 kernel_eq_file=1 dc=0 diff_at=-1/-1 views_us_p50=3001 p95=3001 max=3012 ctl_us_p50=0 p95=0 smaps_us_p50=8581 p95=8581 fd_delta=2 pipe_fd_delta=0
+10-01 12:02:20.175  8753  8778 I urovdetect: FAIL active_8_outside_window control=0 expected=1 error=0
+10-01 12:02:20.187  8753  8778 I urovdetect: FAIL active_8_outside_window smaps error=0 dc=0 expected=1
+10-01 12:02:20.187  8753  8778 I urovdetect: FAIL active_8_outside_window control=0 expected=1 error=0
+10-01 12:02:20.198  8753  8778 I urovdetect: FAIL active_8_outside_window smaps error=0 dc=0 expected=1
+10-01 12:02:20.198  8753  8778 I urovdetect: FAIL active_8_outside_window control=0 expected=1 error=0
+10-01 12:02:20.209  8753  8778 I urovdetect: FAIL active_8_outside_window smaps error=0 dc=0 expected=1
+10-01 12:02:20.217  8753  8778 I urovdetect: CASE active_8_outside_window result=FAIL n=3 ctl=0 caps=0x0 kernel=0 file=0 kernel_eq_file=1 dc=0 diff_at=-1/-1 views_us_p50=2807 p95=2807 max=2983 ctl_us_p50=1 p95=1 smaps_us_p50=8291 p95=8291 fd_delta=0 pipe_fd_delta=0
+10-01 12:02:20.217  8753  8778 I urovdetect: FAIL SET len=8 rc=-1 errno=22
+10-01 12:02:20.218  8753  8778 I urovdetect: FAIL active_8_identity control=0 expected=1 error=0
+10-01 12:02:20.229  8753  8778 I urovdetect: FAIL active_8_identity smaps error=0 dc=0 expected=1
+10-01 12:02:20.229  8753  8778 I urovdetect: FAIL active_8_identity control=0 expected=1 error=0
+10-01 12:02:20.239  8753  8778 I urovdetect: FAIL active_8_identity smaps error=0 dc=0 expected=1
+10-01 12:02:20.239  8753  8778 I urovdetect: FAIL active_8_identity control=0 expected=1 error=0
+10-01 12:02:20.251  8753  8778 I urovdetect: FAIL active_8_identity smaps error=0 dc=0 expected=1
+10-01 12:02:20.260  8753  8778 I urovdetect: CASE active_8_identity result=FAIL n=3 ctl=0 caps=0x0 kernel=0 file=0 kernel_eq_file=1 dc=0 diff_at=-1/-1 views_us_p50=2812 p95=2812 max=2840 ctl_us_p50=1 p95=1 smaps_us_p50=8184 p95=8184 fd_delta=0 pipe_fd_delta=0
+10-01 12:02:20.260  8753  8778 I urovdetect: FAIL DEACTIVATE rc=-1 errno=22
+10-01 12:02:20.260  8753  8778 I urovdetect: FAIL restored_8 control=0 expected=1 error=0
+10-01 12:02:20.271  8753  8778 I urovdetect: FAIL restored_8 control=0 expected=1 error=0
+10-01 12:02:20.282  8753  8778 I urovdetect: FAIL restored_8 control=0 expected=1 error=0
+10-01 12:02:20.301  8753  8778 I urovdetect: CASE restored_8 result=FAIL n=3 ctl=0 caps=0x0 kernel=0 file=0 kernel_eq_file=1 dc=0 diff_at=-1/-1 views_us_p50=2783 p95=2783 max=2879 ctl_us_p50=1 p95=1 smaps_us_p50=8203 p95=8203 fd_delta=0 pipe_fd_delta=0
+10-01 12:02:20.301  8753  8778 I urovdetect: FAIL REGISTER len=16 rc=-1 errno=22
+10-01 12:02:20.301  8753  8778 I urovdetect: FAIL legitimate_dontfork control=0 expected=1 error=0
+10-01 12:02:20.312  8753  8778 I urovdetect: FAIL legitimate_dontfork control=0 expected=1 error=0
+10-01 12:02:20.323  8753  8778 I urovdetect: FAIL legitimate_dontfork control=0 expected=1 error=0
+10-01 12:02:20.343  8753  8778 I urovdetect: CASE legitimate_dontfork result=FAIL n=3 ctl=0 caps=0x0 kernel=0 file=0 kernel_eq_file=1 dc=1 diff_at=-1/-1 views_us_p50=2760 p95=2760 max=2812 ctl_us_p50=1 p95=1 smaps_us_p50=8009 p95=8009 fd_delta=-2 pipe_fd_delta=0
+10-01 12:02:20.350  8753  8778 I urovdetect: SKIP ordinary_private_patch execmod denied errno=13
+10-01 12:02:20.350  8753  8778 I urovdetect: NEGATIVE_CASES done no faults or process signal handlers required
+10-01 12:02:20.351  8753  8778 I urovdetect: BUSINESS ops=17525760 errors=0 execution=original normal_io=ok
+10-01 12:02:20.351  8753  8778 I urovdetect: NATIVE_RESULT FAIL cases=7 assertions=212 failures=46 mode=active
+10-01 12:02:20.352  8753  8753 I urovdetect: DETECT_RESULT FAIL mode=active worker_ms=87835 ui_ticks=6842 ui_max_gap_ms=17966 native=FAIL cases=7 assertions=212 failures=46
