@@ -1,6 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  * Test fixtures below REGISTER/SET/DEACTIVATE only their own dedicated alias.
  * The reusable detector is native/urov_detect.c and performs none of those.
+ *
+ * The x-* modes exercise urov-x (the covert, read-site-bound variant).  They
+ * are still fixture code: the detector calls (ud_probe_control, ud_check_views,
+ * ud_mapping_at) are used unchanged and must stay blind while the overlay is
+ * active at the registered read sites.
  */
 #define _GNU_SOURCE
 #include <android/log.h>
@@ -19,10 +24,12 @@
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include "urov_detect.h"
 #include "../../urov_abi.h"
+#include "../../urov_x_abi.h"
 
 #define LOG(...) __android_log_print(ANDROID_LOG_INFO, "urovdetect", __VA_ARGS__)
 #define REQUIRE(c, ...) do { ++g_checks; if (!(c)) { ++g_fail; LOG("FAIL " __VA_ARGS__); } } while (0)
@@ -36,6 +43,26 @@ __asm__(".pushsection .text.ud_payload,\"ax\",%progbits\n"
         ".size ud_payload, .-ud_payload\n.popsection\n");
 extern uint64_t ud_payload(uint64_t x);
 typedef uint64_t (*payload_fn)(uint64_t);
+
+/* Reader sites for urov-x.  ux_site_ldr/ux_site_ldrb are registered as the
+ * only instruction PCs allowed to observe the fake bytes; ux_watch_ldrb is a
+ * byte-identical instruction at a different PC and must keep returning the
+ * installed file bytes. */
+__asm__(".pushsection .text.ux_sites,\"ax\",%progbits\n"
+        ".p2align 2\n"
+        ".global ux_site_ldr\n.type ux_site_ldr,%function\n"
+        "ux_site_ldr:\n ldr x0, [x0]\n ret\n"
+        ".size ux_site_ldr, .-ux_site_ldr\n"
+        ".global ux_site_ldrb\n.type ux_site_ldrb,%function\n"
+        "ux_site_ldrb:\n ldrb w0, [x0]\n ret\n"
+        ".size ux_site_ldrb, .-ux_site_ldrb\n"
+        ".global ux_watch_ldrb\n.type ux_watch_ldrb,%function\n"
+        "ux_watch_ldrb:\n ldrb w0, [x0]\n ret\n"
+        ".size ux_watch_ldrb, .-ux_watch_ldrb\n"
+        ".popsection\n");
+extern uint64_t ux_site_ldr(const void *p);
+extern uint32_t ux_site_ldrb(const void *p);
+extern uint32_t ux_watch_ldrb(const void *p);
 
 struct page { uint8_t *address; int fd; off_t file_offset; unsigned entry; };
 struct business { atomic_int stop, errors; atomic_ullong ops; payload_fn fn; };
@@ -366,6 +393,484 @@ static void negative_cases(const struct page *p, int expected_control, int expec
     LOG("NEGATIVE_CASES done no faults or process signal handlers required");
 }
 
+/* ---------------------------------------------------------- urov-x fixtures */
+
+struct ux_ctx {
+    int have;
+    struct urov_x_keys keys;
+};
+
+static int ux_init_key(struct ux_ctx *ctx, const char *hex)
+{
+    uint8_t key[16];
+    unsigned len = hex ? (unsigned)strlen(hex) : 0U;
+    memset(ctx, 0, sizeof(*ctx));
+    if (urov_x_parse_key(hex, len, key)) return -1;
+    urov_x_derive(key, &ctx->keys);
+    memset(key, 0, sizeof(key));
+    ctx->have = 1;
+    return 0;
+}
+
+static struct urov_x_request ux_req(unsigned op)
+{
+    struct urov_x_request q;
+    memset(&q, 0, sizeof(q));
+    q.size = (uint32_t)sizeof(q);
+    q.version = UROV_X_ABI_VERSION;
+    q.op = (uint16_t)op;
+    q.request_id = UINT64_C(0x55524f56584c4142);
+    return q;
+}
+
+static long ux_control(const struct ux_ctx *ctx, unsigned op, struct urov_x_request *q)
+{
+    q->size = (uint32_t)sizeof(*q);
+    q->version = UROV_X_ABI_VERSION;
+    q->op = (uint16_t)op;
+    q->mac = urov_x_request_mac(ctx->keys.mac, q);
+    return syscall(__NR_prctl, (long)ctx->keys.option, (long)ctx->keys.magic,
+                   (long)op, q, (long)sizeof(*q));
+}
+
+static int app_pread(int fd, off_t offset, uint8_t *out, size_t n)
+{
+    size_t at = 0;
+    while (at < n) {
+        ssize_t got = pread(fd, out + at, n - at, offset + (off_t)at);
+        if (got > 0) at += (size_t)got;
+        else if (got == 0) return EIO;
+        else if (errno != EINTR) return errno;
+    }
+    return 0;
+}
+
+static uint64_t load64_at(const uint8_t *p)
+{
+    uint64_t v = 0;
+    for (unsigned i = 0; i < 8; ++i) v |= (uint64_t)p[i] << (i * 8U);
+    return v;
+}
+
+static uint32_t load32_at(const uint8_t *p)
+{
+    uint32_t v = 0;
+    for (unsigned i = 0; i < 4; ++i) v |= (uint32_t)p[i] << (i * 8U);
+    return v;
+}
+
+/* An unauthorized reader whose instruction is outside the audited decoder
+ * subset (here a 128-bit vector load). urov-x must restore the page and retry
+ * the instruction instead of raising SIGSEGV. */
+static uint32_t vector_probe(const void *p)
+{
+    uint32_t first;
+    __asm__ volatile("ldr q0, [%1]\n\tumov %w0, v0.s[0]"
+                     : "=r"(first) : "r"(p) : "v0", "memory");
+    return first;
+}
+
+static int ux_register_page(const struct ux_ctx *ctx, const struct page *p,
+                            unsigned length, uint64_t *generation)
+{
+    struct urov_x_request q = ux_req(UROV_X_REGISTER);
+    int rc;
+
+    q.address = (uintptr_t)p->address;
+    q.offset = p->entry + 4U;
+    q.length = length;
+    q.value = UINT64_C(0x8877665544332211);
+    if (length > 8) q.value_hi[0] = UINT64_C(0xa1b2c3d4e5f60718);
+    if (length > 16) q.value_hi[1] = UINT64_C(0x0123456789abcdef);
+    if (length > 24) q.value_hi[2] = UINT64_C(0xfedcba9876543210);
+    q.site_count = 2;
+    q.sites[0] = (uint64_t)(uintptr_t)&ux_site_ldr;
+    q.sites[1] = (uint64_t)(uintptr_t)&ux_site_ldrb;
+    rc = (int)ux_control(ctx, UROV_X_REGISTER, &q);
+    REQUIRE(!rc && q.state == UROV_X_ACTIVE && q.generation == 1,
+            "UX REGISTER rc=%d errno=%d", rc, errno);
+    if (rc) return rc;
+    *generation = q.generation;
+    return 0;
+}
+
+/* No key: every selector derived here is wrong, so the channel must be
+ * indistinguishable from an absent module (native EINVAL). */
+static void stealth_clean(void)
+{
+    struct ux_ctx ctx;
+    struct page p;
+    struct ud_control ctl;
+    struct ud_views views;
+    struct urov_x_request q;
+    uint8_t key[16];
+    long rc;
+
+    memset(&ctx, 0, sizeof(ctx));
+    memset(key, 0x5a, sizeof(key));
+    urov_x_derive(key, &ctx.keys);
+    memset(key, 0, sizeof(key));
+    ++g_cases;
+
+    ud_probe_control(&ctl);
+    REQUIRE(ctl.verdict == UD_NO_MATCH && ctl.scope == UD_SCOPE_UNKNOWN,
+            "UX clean control verdict=%d scope=%d", ctl.verdict, ctl.scope);
+    q = ux_req(UROV_X_STATUS);
+    q.session = 1;
+    errno = 0;
+    rc = ux_control(&ctx, UROV_X_STATUS, &q);
+    REQUIRE(rc == -1 && errno == EINVAL, "UX clean selector rc=%ld errno=%d", rc, errno);
+    {
+        struct urov_request old = {0};
+        old.size = sizeof(old); old.version = 2; old.op = 1;
+        errno = 0;
+        rc = syscall(__NR_prctl, 0x55524f56L, 0x55524f5653595343ULL, 1L, &old, 128L);
+        REQUIRE(rc == -1 && errno == EINVAL, "UX clean legacy rc=%ld errno=%d", rc, errno);
+    }
+    if (sysconf(_SC_PAGESIZE) != 4096 || page_open(&p, MAP_SHARED)) {
+        REQUIRE(0, "UX clean page errno=%d", errno);
+        return;
+    }
+    errno = EDOM;
+    ud_check_views(p.address + p.entry, 64, p.fd, p.file_offset + p.entry, &views);
+    REQUIRE(errno == EDOM && views.file_diff == UD_NO_MATCH && views.completed == UD_REPEATS,
+            "UX clean views file=%d done=%u error=%d", views.file_diff, views.completed,
+            views.error_file);
+    page_close(&p);
+}
+
+static void stealth_active(const char *key_hex, int repeats)
+{
+    struct ux_ctx ctx;
+    struct page p;
+    struct business business;
+    pthread_t thread;
+    int have_thread = 0;
+    uint64_t generation = 0;
+    uint8_t disk[64], direct[64];
+    struct ud_control ctl;
+    struct ud_views views;
+    struct ud_mapping sm;
+    const uint8_t *at;
+    uint64_t site_value = 0, hits_delta = 0;
+    uint64_t read_ns_base = 0, read_ns_active = 0;
+    unsigned watch_value = 0;
+    long rc;
+
+    (void)repeats;
+    if (ux_init_key(&ctx, key_hex)) { REQUIRE(0, "UX missing key"); return; }
+    if (sysconf(_SC_PAGESIZE) != 4096 || page_open(&p, MAP_SHARED)) {
+        REQUIRE(0, "UX page open errno=%d", errno);
+        return;
+    }
+    at = p.address + p.entry + 4U;
+    ++g_cases;
+
+    /* The unmodified detector must stay blind. */
+    errno = EDOM;
+    ud_probe_control(&ctl);
+    REQUIRE(errno == EDOM, "UX control changed errno");
+    REQUIRE(ctl.verdict == UD_NO_MATCH && ctl.scope == UD_SCOPE_UNKNOWN,
+            "UX detector verdict=%d scope=%d error=%d", ctl.verdict, ctl.scope, ctl.error);
+
+    /* The legacy urov-lab channel must be native EINVAL. */
+    {
+        struct urov_request old = {0};
+        old.size = sizeof(old); old.version = 2; old.op = 1;
+        errno = 0;
+        rc = syscall(__NR_prctl, 0x55524f56L, 0x55524f5653595343ULL, 1L, &old, 128L);
+        REQUIRE(rc == -1 && errno == EINVAL, "UX legacy channel rc=%ld errno=%d", rc, errno);
+    }
+    /* A forged MAC must behave like an unknown prctl option and create nothing. */
+    {
+        struct urov_x_request bad = ux_req(UROV_X_REGISTER);
+        bad.address = (uintptr_t)p.address;
+        bad.offset = p.entry + 4U;
+        bad.length = 8;
+        bad.value = 1;
+        bad.site_count = 2;
+        bad.sites[0] = (uint64_t)(uintptr_t)&ux_site_ldr;
+        bad.sites[1] = (uint64_t)(uintptr_t)&ux_site_ldrb;
+        bad.mac = urov_x_request_mac(ctx.keys.mac, &bad) ^ 1ULL;
+        errno = 0;
+        rc = syscall(__NR_prctl, (long)ctx.keys.option, (long)ctx.keys.magic,
+                     (long)UROV_X_REGISTER, &bad, (long)sizeof(bad));
+        REQUIRE(rc == -1 && errno == EINVAL, "UX forged MAC rc=%ld errno=%d", rc, errno);
+    }
+    {
+        struct urov_x_request st = ux_req(UROV_X_STATUS);
+        st.session = 1;
+        REQUIRE(!ux_control(&ctx, UROV_X_STATUS, &st) && st.state == UROV_X_INACTIVE,
+                "UX forged MAC created a session state=%u", st.state);
+    }
+
+    /* Baseline: the page matches the installed file. */
+    REQUIRE(app_pread(p.fd, p.file_offset + p.entry + 4, disk, sizeof(disk)) == 0, "UX pread");
+    {
+        uint64_t t = now_ns();
+        copy_scalar(direct, at, sizeof(direct));
+        read_ns_base = now_ns() - t;
+    }
+    REQUIRE(!memcmp(direct, disk, sizeof(direct)), "UX baseline page differs from file");
+
+    /* Activate the overlay bound to the two reader sites. */
+    if (ux_register_page(&ctx, &p, 8, &generation)) { page_close(&p); return; }
+
+    {
+        uint64_t want = UINT64_C(0x8877665544332211);
+        uint64_t got = ux_site_ldr(at);
+        REQUIRE(got == want, "UX authorized LDR got=%llx want=%llx",
+                (unsigned long long)got, (unsigned long long)want);
+        REQUIRE((uint8_t)ux_site_ldrb(at) == 0x11U, "UX authorized LDRB got=%02x",
+                (unsigned)ux_site_ldrb(at));
+        site_value = got;
+    }
+    /* Every other reader, same bytes, sees the installed file. */
+    copy_scalar(direct, at, sizeof(direct));
+    REQUIRE(!memcmp(direct, disk, sizeof(direct)), "UX unauthorized reader diverged");
+    watch_value = (uint8_t)ux_watch_ldrb(at);
+    REQUIRE(watch_value == disk[0], "UX watch site saw fake");
+
+    /* The delivered detector's integrity comparison is blind. */
+    {
+        uint64_t t = now_ns();
+        copy_scalar(direct, at, sizeof(direct));
+        read_ns_active = now_ns() - t;
+    }
+    errno = EDOM;
+    ud_check_views(at, 64, p.fd, p.file_offset + p.entry + 4, &views);
+    REQUIRE(errno == EDOM, "UX views changed errno");
+    REQUIRE(views.file_diff == UD_NO_MATCH && views.completed == UD_REPEATS,
+            "UX file/read diff file=%d done=%u error=%d", views.file_diff, views.completed,
+            views.error_file);
+    errno = EDOM;
+    ud_probe_control(&ctl);
+    REQUIRE(errno == EDOM && ctl.verdict == UD_NO_MATCH,
+            "UX control visible verdict=%d error=%d", ctl.verdict, ctl.error);
+    REQUIRE(!ud_mapping_at("/proc/self/smaps", at, &sm) && sm.dontcopy == 0 && sm.randomread == 0,
+            "UX smaps dc=%d rr=%d", sm.dontcopy, sm.randomread);
+
+    /* Counters only move for emulated loads; SET is visible at the site only. */
+    {
+        struct urov_x_request before = ux_req(UROV_X_STATUS);
+        struct urov_x_request after = ux_req(UROV_X_STATUS);
+        before.session = 1;
+        after.session = 1;
+        REQUIRE(!ux_control(&ctx, UROV_X_STATUS, &before) && before.state == UROV_X_ACTIVE &&
+                before.site_count == 2 && before.failures == 0, "UX status before");
+        (void)ux_site_ldr(at);
+        (void)ux_site_ldr(at);
+        REQUIRE(!ux_control(&ctx, UROV_X_STATUS, &after) &&
+                after.hits == before.hits + 2 && after.failures == 0 &&
+                after.generation == before.generation,
+                "UX hits delta=%llu failures=%llu",
+                (unsigned long long)(after.hits - before.hits),
+                (unsigned long long)after.failures);
+        hits_delta = after.hits - before.hits;
+        {
+            struct urov_x_request s = ux_req(UROV_X_SET);
+            s.session = 1;
+            s.expected_generation = generation;
+            s.length = 8;
+            s.value = UINT64_C(0x0123456789abcdef);
+            REQUIRE(!ux_control(&ctx, UROV_X_SET, &s) && s.generation == generation + 1,
+                    "UX SET rc generation");
+            generation = s.generation;
+            REQUIRE(ux_site_ldr(at) == UINT64_C(0x0123456789abcdef), "UX SET not at site");
+            ud_check_views(at, 64, p.fd, p.file_offset + p.entry + 4, &views);
+            REQUIRE(views.file_diff == UD_NO_MATCH && views.completed == UD_REPEATS,
+                    "UX SET leaked to the file diff");
+        }
+    }
+
+    /* Execution still uses the original instruction bytes. */
+    {
+        uint64_t x = UINT64_C(0x0123456789abcdef);
+        payload_fn fn = (payload_fn)(void *)(p.address + p.entry);
+        REQUIRE(fn(x) == (x ^ UINT64_C(0x1122334455667788)), "UX execution changed");
+    }
+
+    /* Self-documenting evidence for the device run report. */
+    LOG("UX_PROOF control=%d scope=%d file_diff=%d rounds=%u smaps_dc=%d smaps_rr=%d "
+        "site=0x%llx file_word=0x%llx watch=0x%02x hits_delta=%llu "
+        "read_us_base=%llu read_us_active=%llu",
+        ctl.verdict, ctl.scope, views.file_diff, views.completed, sm.dontcopy,
+        sm.randomread, (unsigned long long)site_value,
+        (unsigned long long)load64_at(disk), watch_value,
+        (unsigned long long)hits_delta,
+        (unsigned long long)(read_ns_base / 1000),
+        (unsigned long long)(read_ns_active / 1000));
+
+    /* A concurrent business thread keeps executing and doing normal IO. */
+    memset(&business, 0, sizeof(business));
+    atomic_init(&business.stop, 0);
+    atomic_init(&business.errors, 0);
+    atomic_init(&business.ops, 0);
+    business.fn = (payload_fn)(void *)(p.address + p.entry);
+    have_thread = pthread_create(&thread, NULL, business_main, &business) == 0;
+    REQUIRE(have_thread, "UX business worker");
+    usleep(20000);
+    if (have_thread) {
+        atomic_store_explicit(&business.stop, 1, memory_order_release);
+        pthread_join(thread, NULL);
+        REQUIRE(atomic_load(&business.errors) == 0 && atomic_load(&business.ops) > 0,
+                "UX business errors=%d ops=%llu", atomic_load(&business.errors),
+                (unsigned long long)atomic_load(&business.ops));
+    }
+
+    /* An overlapping mprotect runs natively and silently ends the session. */
+    errno = 0;
+    rc = mprotect(p.address, 4096, PROT_READ | PROT_EXEC);
+    REQUIRE(rc == 0 && errno == 0, "UX mprotect rc=%ld errno=%d", rc, errno);
+    {
+        struct urov_x_request st = ux_req(UROV_X_STATUS);
+        st.session = 1;
+        REQUIRE(!ux_control(&ctx, UROV_X_STATUS, &st) && st.state == UROV_X_INACTIVE,
+                "UX mprotect did not end the session state=%u", st.state);
+    }
+    copy_scalar(direct, at, sizeof(direct));
+    REQUIRE(!memcmp(direct, disk, sizeof(direct)), "UX page not native after mprotect");
+    {
+        struct urov_x_request d = ux_req(UROV_X_DEACTIVATE);
+        d.session = 0;
+        REQUIRE(!ux_control(&ctx, UROV_X_DEACTIVATE, &d) && d.state == UROV_X_INACTIVE,
+                "UX deactivate idempotent");
+    }
+    page_close(&p);
+}
+
+static void stealth_hold(const char *key_hex)
+{
+    struct ux_ctx ctx;
+    struct page p;
+    uint64_t generation = 0;
+    uint8_t disk[8];
+    const uint8_t *at;
+    int restored = 0;
+
+    if (ux_init_key(&ctx, key_hex)) { REQUIRE(0, "UX hold key"); return; }
+    if (page_open(&p, MAP_SHARED)) { REQUIRE(0, "UX hold page errno=%d", errno); return; }
+    at = p.address + p.entry + 4U;
+    if (app_pread(p.fd, p.file_offset + p.entry + 4, disk, sizeof(disk))) {
+        REQUIRE(0, "UX hold pread");
+        page_close(&p);
+        return;
+    }
+    if (ux_register_page(&ctx, &p, 8, &generation)) { page_close(&p); return; }
+    REQUIRE(ux_site_ldr(at) == UINT64_C(0x8877665544332211), "UX hold not overlaid");
+    ++g_cases;
+    LOG("HOLD_READY pid=%d uid=%d", getpid(), getuid());
+    for (unsigned i = 0; i < 300; ++i) {
+        struct urov_x_request st = ux_req(UROV_X_STATUS);
+        /* Keep the fault path busy while the module may be unloaded. */
+        uint64_t seen = ux_site_ldr(at);
+        st.session = 1;
+        errno = 0;
+        if (ux_control(&ctx, UROV_X_STATUS, &st) == -1 && errno == EINVAL) {
+            REQUIRE(ux_site_ldr(at) == load64_at(disk), "UX hold unload not restored");
+            LOG("HOLD_UNLOADED restored=1");
+            restored = 1;
+            break;
+        }
+        REQUIRE(seen == UINT64_C(0x8877665544332211), "UX hold site lost");
+        usleep(100000);
+    }
+    REQUIRE(restored, "UX hold timed out waiting for unload");
+    page_close(&p);
+}
+
+static void stealth_simd(const char *key_hex)
+{
+    struct ux_ctx ctx;
+    struct page p;
+    uint64_t generation = 0;
+    uint8_t disk[16], direct[16];
+    uint32_t got, want;
+    const uint8_t *at;
+
+    if (ux_init_key(&ctx, key_hex)) { REQUIRE(0, "UX simd key"); return; }
+    if (page_open(&p, MAP_SHARED)) { REQUIRE(0, "UX simd page errno=%d", errno); return; }
+    at = p.address + p.entry + 4U;
+    if (app_pread(p.fd, p.file_offset + p.entry + 4, disk, sizeof(disk))) {
+        REQUIRE(0, "UX simd pread");
+        page_close(&p);
+        return;
+    }
+    if (ux_register_page(&ctx, &p, 8, &generation)) { page_close(&p); return; }
+    ++g_cases;
+    got = vector_probe(at);
+    want = load32_at(disk);
+    REQUIRE(got == want, "UX SIMD probe got=%x want=%x", got, want);
+    {
+        struct urov_x_request st = ux_req(UROV_X_STATUS);
+        st.session = 1;
+        REQUIRE(!ux_control(&ctx, UROV_X_STATUS, &st) && st.state == UROV_X_INACTIVE,
+                "UX SIMD fallback state=%u", st.state);
+    }
+    copy_scalar(direct, at, sizeof(direct));
+    REQUIRE(!memcmp(direct, disk, sizeof(direct)), "UX SIMD page not restored");
+    page_close(&p);
+}
+
+/* A forked child must not inherit a page that faults for data reads: urov-x
+ * restores the parent page around clone()/fork(), so the child sees a normal
+ * mapping while the parent keeps its session. */
+static void stealth_fork(const char *key_hex)
+{
+    struct ux_ctx ctx;
+    struct page p;
+    uint64_t generation = 0;
+    uint8_t disk[8], direct[8];
+    const uint8_t *at;
+    pid_t pid;
+    int status = 0;
+
+    if (ux_init_key(&ctx, key_hex)) { REQUIRE(0, "UX fork key"); return; }
+    if (page_open(&p, MAP_SHARED)) { REQUIRE(0, "UX fork page errno=%d", errno); return; }
+    at = p.address + p.entry + 4U;
+    if (app_pread(p.fd, p.file_offset + p.entry + 4, disk, sizeof(disk))) {
+        REQUIRE(0, "UX fork pread");
+        page_close(&p);
+        return;
+    }
+    if (ux_register_page(&ctx, &p, 8, &generation)) { page_close(&p); return; }
+    REQUIRE(ux_site_ldr(at) == UINT64_C(0x8877665544332211), "UX fork not overlaid");
+    ++g_cases;
+
+    pid = fork();
+    if (pid == 0) {
+        /* Child: only normal scalar loads, bounded by an alarm. */
+        alarm(3);
+        copy_scalar(direct, at, sizeof(direct));
+        _exit(memcmp(direct, disk, sizeof(direct)) == 0 ? 0 : 7);
+    }
+    REQUIRE(pid > 0, "UX fork pid=%d errno=%d", (int)pid, errno);
+    if (pid > 0) {
+        REQUIRE(waitpid(pid, &status, 0) == pid, "UX fork waitpid errno=%d", errno);
+        REQUIRE(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                "UX child status=0x%x signal=%d code=%d", status,
+                WIFSIGNALED(status) ? WTERMSIG(status) : 0,
+                WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+    }
+    /* The parent keeps the overlay at its registered site. */
+    REQUIRE(ux_site_ldr(at) == UINT64_C(0x8877665544332211), "UX parent site lost after fork");
+    copy_scalar(direct, at, sizeof(direct));
+    REQUIRE(!memcmp(direct, disk, sizeof(direct)), "UX parent unauthorized read diverged");
+    {
+        struct urov_x_request st = ux_req(UROV_X_STATUS);
+        st.session = 1;
+        REQUIRE(!ux_control(&ctx, UROV_X_STATUS, &st) && st.state == UROV_X_ACTIVE,
+                "UX parent session lost after fork state=%u", st.state);
+    }
+    {
+        struct urov_x_request d = ux_req(UROV_X_DEACTIVATE);
+        d.session = 1;
+        REQUIRE(!ux_control(&ctx, UROV_X_DEACTIVATE, &d) && d.state == UROV_X_INACTIVE,
+                "UX fork deactivate");
+    }
+    page_close(&p);
+}
+
 static void hold_until_unload(const struct page *p)
 {
     uint64_t generation;
@@ -402,10 +907,11 @@ static void log_context(void)
 }
 
 JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
-    JNIEnv *env, jclass cls, jstring mode_value, jint repeats)
+    JNIEnv *env, jclass cls, jstring mode_value, jint repeats, jstring key_value)
 {
     (void)cls;
     const char *mode = (*env)->GetStringUTFChars(env, mode_value, NULL);
+    const char *key = key_value ? (*env)->GetStringUTFChars(env, key_value, NULL) : "";
     char result[192];
     struct page p;
     struct business business;
@@ -419,6 +925,17 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
     g_checks = g_fail = g_cases = 0;
     log_context();
     LOG("BEGIN mode=%s repeats=%d", mode, (int)repeats);
+    if (!strncmp(mode, "x-", 2)) {
+        /* urov-x fixtures: the detector calls stay unmodified and unkeyed. */
+        if (!strcmp(mode, "x-active")) stealth_active(key, (int)repeats);
+        else if (!strcmp(mode, "x-hold")) stealth_hold(key);
+        else if (!strcmp(mode, "x-simd")) stealth_simd(key);
+        else if (!strcmp(mode, "x-fork")) stealth_fork(key);
+        else stealth_clean();
+        snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
+                 g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
+        goto done;
+    }
     if (sysconf(_SC_PAGESIZE) != 4096 || page_open(&p, MAP_SHARED)) {
         snprintf(result, sizeof(result), "FAIL no supported 4KiB owned library mapping errno=%d", errno);
         goto done;
@@ -455,5 +972,6 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
 done:
     LOG("NATIVE_RESULT %s mode=%s", result, mode);
     (*env)->ReleaseStringUTFChars(env, mode_value, mode);
+    if (key_value) (*env)->ReleaseStringUTFChars(env, key_value, key);
     return (*env)->NewStringUTF(env, result);
 }

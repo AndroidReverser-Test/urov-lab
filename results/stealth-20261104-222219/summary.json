@@ -1,0 +1,386 @@
+{
+  "host_time_utc8": "20261104-222219",
+  "serial": "25091FDF60063J",
+  "repeats": 30,
+  "cycles": 3,
+  "steps": [
+    {
+      "label": "root",
+      "output": "uid=0(root) gid=0(root) groups=0(root) context=u:r:shell:s0"
+    },
+    {
+      "label": "01-clean-no-module",
+      "output": "PASS uid=10284"
+    },
+    {
+      "label": "urov-lab-status",
+      "output": "mode=standalone-resident caps=0xeb7 state=inactive hooks=0xf core_checks=4139 gen=0 hits=0 failures=0 notify_nr=272 notify_magic=0x55524f5653595343 prctl_option=0x55524f56"
+    },
+    {
+      "label": "02-original-detected",
+      "output": "PASS uid=10284"
+    },
+    {
+      "label": "urov-x-status",
+      "output": "mode=site-bound state=inactive sites=0 hits=0 failures=0 hooks=0x1f core_checks=4139"
+    },
+    {
+      "label": "03-stealth-loaded-unkeyed",
+      "output": "PASS uid=10284"
+    },
+    {
+      "label": "04-stealth-active-1",
+      "output": "PASS uid=10284"
+    },
+    {
+      "label": "04-stealth-active-2",
+      "output": "PASS uid=10284"
+    },
+    {
+      "label": "04-stealth-active-3",
+      "output": "PASS uid=10284"
+    },
+    {
+      "label": "05-stealth-simd-fallback",
+      "output": "PASS uid=10284"
+    },
+    {
+      "label": "06-stealth-fork-child",
+      "output": "PASS uid=10284"
+    },
+    {
+      "label": "owner-hold-status",
+      "output": "mode=site-bound state=active sites=2 hits=3 failures=0 hooks=0x1f core_checks=4139"
+    },
+    {
+      "label": "07-observer-other-uid",
+      "output": "PASS uid=10287"
+    },
+    {
+      "label": "07-owner-unload-restored",
+      "output": "PASS uid=10284"
+    },
+    {
+      "label": "08-post-unload-clean",
+      "output": "PASS uid=10284"
+    }
+  ],
+  "runs": [
+    {
+      "mode": "x-clean",
+      "label": "01-clean-no-module",
+      "pid": "19386",
+      "package": "com.example.urovdetect",
+      "activity": "com.example.urovdetect.MainActivity",
+      "result": "PASS",
+      "log": "19386-x-clean.log",
+      "uid": 10284,
+      "phase": "no module"
+    },
+    {
+      "mode": "active",
+      "label": "02-original-detected",
+      "pid": "19490",
+      "package": "com.example.urovdetect",
+      "activity": "com.example.urovdetect.MainActivity",
+      "result": "PASS",
+      "log": "19490-active.log",
+      "uid": 10284
+    },
+    {
+      "mode": "x-clean",
+      "label": "03-stealth-loaded-unkeyed",
+      "pid": "19676",
+      "package": "com.example.urovdetect",
+      "activity": "com.example.urovdetect.MainActivity",
+      "result": "PASS",
+      "log": "19676-x-clean.log",
+      "uid": 10284
+    },
+    {
+      "mode": "x-active",
+      "label": "04-stealth-active-1",
+      "pid": "19744",
+      "package": "com.example.urovdetect",
+      "activity": "com.example.urovdetect.MainActivity",
+      "result": "PASS",
+      "log": "19744-x-active.log",
+      "uid": 10284,
+      "proof": {
+        "control": 0,
+        "scope": -1,
+        "file_diff": 0,
+        "rounds": 3,
+        "smaps_dc": 0,
+        "smaps_rr": 0,
+        "site": 9833440827789222417,
+        "file_word": 17485978451680620801,
+        "watch": 1,
+        "hits_delta": 2,
+        "read_us_base": 0,
+        "read_us_active": 87
+      }
+    },
+    {
+      "mode": "x-active",
+      "label": "04-stealth-active-2",
+      "pid": "19816",
+      "package": "com.example.urovdetect",
+      "activity": "com.example.urovdetect.MainActivity",
+      "result": "PASS",
+      "log": "19816-x-active.log",
+      "uid": 10284,
+      "proof": {
+        "control": 0,
+        "scope": -1,
+        "file_diff": 0,
+        "rounds": 3,
+        "smaps_dc": 0,
+        "smaps_rr": 0,
+        "site": 9833440827789222417,
+        "file_word": 17485978451680620801,
+        "watch": 1,
+        "hits_delta": 2,
+        "read_us_base": 0,
+        "read_us_active": 59
+      }
+    },
+    {
+      "mode": "x-active",
+      "label": "04-stealth-active-3",
+      "pid": "19891",
+      "package": "com.example.urovdetect",
+      "activity": "com.example.urovdetect.MainActivity",
+      "result": "PASS",
+      "log": "19891-x-active.log",
+      "uid": 10284,
+      "proof": {
+        "control": 0,
+        "scope": -1,
+        "file_diff": 0,
+        "rounds": 3,
+        "smaps_dc": 0,
+        "smaps_rr": 0,
+        "site": 9833440827789222417,
+        "file_word": 17485978451680620801,
+        "watch": 1,
+        "hits_delta": 2,
+        "read_us_base": 0,
+        "read_us_active": 118
+      }
+    },
+    {
+      "mode": "x-simd",
+      "label": "05-stealth-simd-fallback",
+      "pid": "19961",
+      "package": "com.example.urovdetect",
+      "activity": "com.example.urovdetect.MainActivity",
+      "result": "PASS",
+      "log": "19961-x-simd.log",
+      "uid": 10284
+    },
+    {
+      "mode": "x-fork",
+      "label": "06-stealth-fork-child",
+      "pid": "20031",
+      "package": "com.example.urovdetect",
+      "activity": "com.example.urovdetect.MainActivity",
+      "result": "PASS",
+      "log": "20031-x-fork.log",
+      "uid": 10284
+    },
+    {
+      "mode": "x-observer",
+      "label": "07-observer-other-uid",
+      "pid": "20166",
+      "package": "com.example.urovobserver",
+      "activity": "com.example.urovdetect.ObserverActivity",
+      "result": "PASS",
+      "log": "20166-x-observer.log",
+      "uid": 10287
+    },
+    {
+      "mode": "x-hold",
+      "label": "07-owner-unload-restored",
+      "pid": "20101",
+      "package": "com.example.urovdetect",
+      "activity": "com.example.urovdetect.MainActivity",
+      "result": "PASS",
+      "log": "20101-x-hold.log",
+      "uid": 10284
+    },
+    {
+      "mode": "x-clean",
+      "label": "08-post-unload-clean",
+      "pid": "20250",
+      "package": "com.example.urovdetect",
+      "activity": "com.example.urovdetect.MainActivity",
+      "result": "PASS",
+      "log": "20250-x-clean.log",
+      "uid": 10284
+    }
+  ],
+  "passed": true,
+  "initial_modules": "",
+  "device": "google/oriole_beta/oriole:16/BP31.250610.009/13905196:user/release-keys",
+  "kernel": "Linux localhost 6.1.134-android14-11-g66e758f7d0c0-ab13748739 #1 SMP PREEMPT Tue Jul  8 09:17:32 UTC 2025 aarch64 Toybox",
+  "device_time": "2025-10-01T12:56:36+0800",
+  "kpver": "c00",
+  "artifacts": {
+    "stealth_kpm": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\out\\urov-x.kpm",
+      "sha256": "c2a5c3d3bb272f4bd2db6205f69cd277739f6e32e5c6cd67cecf2b3e7f393575"
+    },
+    "baseline_kpm": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\out\\urov-lab.kpm",
+      "sha256": "16b86f80c8799c1d00aab650e553955fe8955459c6d6f6f23037c16005e1c1cf"
+    },
+    "detector_apk": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\apps\\urov-detect\\out\\urovdetect.apk",
+      "sha256": "9d3a5cc64f57a37e5ed0f324b502cc0688e8b8571aa612faf3052bcd42160f9b"
+    },
+    "observer_apk": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\apps\\urov-detect\\out\\urovobserver.apk",
+      "sha256": "e884915ed92f88f2b02381101ffff68c5aaa58aed9592880011705a3a3ce856e"
+    }
+  },
+  "checks": [
+    {
+      "name": "clean-no-module",
+      "ok": true,
+      "detail": "no module, no channel, no overlay"
+    },
+    {
+      "name": "original-fingerprint",
+      "ok": true,
+      "detail": "control verdict=1"
+    },
+    {
+      "name": "original-scope",
+      "ok": true,
+      "detail": "23 cases saw SELF scope"
+    },
+    {
+      "name": "original-file-diff",
+      "ok": true,
+      "detail": "8 cases saw read/file divergence"
+    },
+    {
+      "name": "stealth-hooks",
+      "ok": true,
+      "detail": "mode=site-bound state=inactive sites=0 hits=0 failures=0 hooks=0x1f core_checks=4139"
+    },
+    {
+      "name": "stealth-control-blind-1",
+      "ok": true,
+      "detail": "control=0 scope=-1"
+    },
+    {
+      "name": "stealth-file-blind-1",
+      "ok": true,
+      "detail": "file_diff=0 rounds=3"
+    },
+    {
+      "name": "stealth-smaps-clean-1",
+      "ok": true,
+      "detail": "dc=0 rr=0"
+    },
+    {
+      "name": "stealth-site-works-1",
+      "ok": true,
+      "detail": "site=0x8877665544332211 file=0xf2aaacc1d28ef101 hits_delta=2"
+    },
+    {
+      "name": "stealth-watch-native-1",
+      "ok": true,
+      "detail": "watch=0x01"
+    },
+    {
+      "name": "stealth-control-blind-2",
+      "ok": true,
+      "detail": "control=0 scope=-1"
+    },
+    {
+      "name": "stealth-file-blind-2",
+      "ok": true,
+      "detail": "file_diff=0 rounds=3"
+    },
+    {
+      "name": "stealth-smaps-clean-2",
+      "ok": true,
+      "detail": "dc=0 rr=0"
+    },
+    {
+      "name": "stealth-site-works-2",
+      "ok": true,
+      "detail": "site=0x8877665544332211 file=0xf2aaacc1d28ef101 hits_delta=2"
+    },
+    {
+      "name": "stealth-watch-native-2",
+      "ok": true,
+      "detail": "watch=0x01"
+    },
+    {
+      "name": "stealth-control-blind-3",
+      "ok": true,
+      "detail": "control=0 scope=-1"
+    },
+    {
+      "name": "stealth-file-blind-3",
+      "ok": true,
+      "detail": "file_diff=0 rounds=3"
+    },
+    {
+      "name": "stealth-smaps-clean-3",
+      "ok": true,
+      "detail": "dc=0 rr=0"
+    },
+    {
+      "name": "stealth-site-works-3",
+      "ok": true,
+      "detail": "site=0x8877665544332211 file=0xf2aaacc1d28ef101 hits_delta=2"
+    },
+    {
+      "name": "stealth-watch-native-3",
+      "ok": true,
+      "detail": "watch=0x01"
+    },
+    {
+      "name": "owner-active",
+      "ok": true,
+      "detail": "mode=site-bound state=active sites=2 hits=3 failures=0 hooks=0x1f core_checks=4139"
+    },
+    {
+      "name": "observer-invisible",
+      "ok": true,
+      "detail": "mode=site-bound state=active sites=2 hits=3 failures=0 hooks=0x1f core_checks=4139 -> mode=site-bound state=active sites=2 hits=21 failures=0 hooks=0x1f core_checks=4139"
+    }
+  ],
+  "baseline": {
+    "cases": 23,
+    "positive_control": 23,
+    "positive_file_diff": 8,
+    "module_verdict": 1,
+    "sample": {
+      "n": 30,
+      "ctl": 1,
+      "scope": 1,
+      "caps": 3767,
+      "file": 1,
+      "dc": 0,
+      "rr": 1,
+      "diff_at": 4,
+      "views_us_p50": 2855,
+      "views_us_p95": 2978,
+      "views_us_max": 3193,
+      "ctl_us_p50": 4,
+      "ctl_us_p95": 5,
+      "smaps_us_p50": 8164,
+      "smaps_us_p95": 8516,
+      "fd_delta": 0,
+      "probe_fd_delta": 0
+    }
+  },
+  "final_modules": "",
+  "kernel_issues": []
+}

@@ -12,10 +12,11 @@ import android.widget.TextView;
 
 public class MainActivity extends Activity {
     static { System.loadLibrary("urovdetect"); }
-    private static native String runNative(String mode, int repeats);
+    private static native String runNative(String mode, int repeats, String key);
     private final Handler handler = new Handler(Looper.getMainLooper());
     private long ticks, lastTick, maxGap;
     private boolean destroyed, running;
+    private String keyHex = "";
     private TextView status, heartbeat;
     private Button button;
 
@@ -45,6 +46,8 @@ public class MainActivity extends Activity {
             }
         });
         String mode = getIntent().getStringExtra("mode");
+        String key = getIntent().getStringExtra("key");
+        if (key != null) keyHex = key;
         int repeats = Math.max(3, Math.min(200, getIntent().getIntExtra("repeats", 30)));
         start(mode == null ? "passive" : mode, repeats);
     }
@@ -59,7 +62,7 @@ public class MainActivity extends Activity {
             // Test-harness warmup: let ART and the first UI frame settle.
             SystemClock.sleep(1000);
             long begin = SystemClock.elapsedRealtime();
-            String result = runNative(mode, repeats);
+            String result = runNative(mode, repeats, keyHex);
             // Keep an observation window even when the checks finish very quickly.
             long remaining = 350 - (SystemClock.elapsedRealtime() - begin);
             if (remaining > 0) SystemClock.sleep(remaining);

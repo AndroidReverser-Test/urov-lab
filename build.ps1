@@ -42,6 +42,14 @@ $imports = & $nm -u (Join-Path $out 'urov-lab.kpm')
 if ($LASTEXITCODE -ne 0 -or ($imports -match 'kpm_lifecycle_v2|kp_urov_backend_v1|urov_backend_v1')) {
     throw 'Unexpected strong dependency on the external backend'
 }
+foreach ($name in @('urov_x','urov_x_backend')) {
+    & $clang @flags @includes -c (Join-Path $PSScriptRoot ($name + '.c')) -o (Join-Path $out ($name + '.o'))
+    if ($LASTEXITCODE -ne 0) { throw "UROV-X KPM compile failed: $name" }
+}
+& $linker -r -o (Join-Path $out 'urov-x.kpm') (Join-Path $out 'urov_x.o') `
+    (Join-Path $out 'urov_x_backend.o') (Join-Path $out 'decode.o') `
+    (Join-Path $out 'emulate.o') (Join-Path $out 'core_selftest.o')
+if ($LASTEXITCODE -ne 0) { throw 'UROV-X KPM link failed' }
 $userFlags = @('--target=aarch64-linux-android31','-std=gnu11','-O2','-Wall','-Wextra',
     '-Werror','-Wformat=2','-Wshadow','-fPIE','-pie','-pthread')
 $core = @('decode.c','emulate.c','core_selftest.c') | ForEach-Object { Join-Path $PSScriptRoot $_ }
@@ -58,7 +66,8 @@ foreach ($test in @('emulate_test','native_test','kpm_check_test','copy_probe','
 }
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-lab-check.kpm')
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-lab.kpm')
-$built = @('urov-lab.kpm', 'urov-lab-check.kpm', 'urov_overlay_test', 'urov_hold_test',
+Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-x.kpm')
+$built = @('urov-lab.kpm', 'urov-lab-check.kpm', 'urov-x.kpm', 'urov_overlay_test', 'urov_hold_test',
     'urov_hold2_test', 'urov_foreign_test', 'urov_copy_probe', 'urov_vector_fault_probe',
     'urov_emulate_test', 'urov_native_test', 'urov_kpm_check_test')
 $sums = foreach ($name in $built) {

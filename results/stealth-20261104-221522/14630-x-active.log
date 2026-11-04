@@ -1,0 +1,8 @@
+--------- beginning of main
+10-01 12:50:20.195 14630 14654 I urovdetect: CONTEXT pid=14630 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768
+10-01 12:50:20.196 14630 14654 I urovdetect: CONTEXT CapEff:	0000000000000000
+10-01 12:50:20.196 14630 14654 I urovdetect: CONTEXT Seccomp:	2
+10-01 12:50:20.196 14630 14654 I urovdetect: BEGIN mode=x-active repeats=30
+10-01 12:50:20.264 14630 14654 I urovdetect: UX_PROOF control=0 scope=-1 file_diff=0 rounds=3 smaps_dc=0 smaps_rr=0 site=0x8877665544332211 file_word=0xf2aaacc1d28ef101 watch=0x01 hits_delta=2 read_us_base=0 read_us_active=86
+10-01 12:50:20.285 14630 14654 I urovdetect: NATIVE_RESULT PASS cases=1 assertions=28 failures=0 mode=x-active
+10-01 12:50:20.551 14630 14630 I urovdetect: DETECT_RESULT PASS mode=x-active worker_ms=351 ui_ticks=128 ui_max_gap_ms=18 native=PASS cases=1 assertions=28 failures=0
