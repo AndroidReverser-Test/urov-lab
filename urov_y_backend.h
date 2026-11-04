@@ -14,11 +14,13 @@ struct uy_status {
     uint32_t hooks;
     uint32_t core_checks;
     uint32_t imm;
+    uint32_t mode;
+    uint32_t degraded;
 };
 
-/* Installs the BRK site trap, the authenticated prctl channel and the mapping
- * lifecycle gates. The argument string must contain key=<32 hex digits>;
- * "verbose" enables printk. */
+/* Installs the reader-site trap (BRK mode and/or PAGE_UXN mode), the
+ * authenticated prctl channel and the mapping lifecycle gates. The argument
+ * string must contain key=<32 hex digits>; "verbose" enables printk. */
 long urov_y_backend_init(const char *args);
 long urov_y_backend_exit(void);
 void urov_y_status_get(struct uy_status *out);

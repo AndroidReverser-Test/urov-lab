@@ -22,6 +22,12 @@ __asm__(".pushsection .text.uy_sites,\"ax\",%progbits\n"
         ".global uy_site_ldrb\n.type uy_site_ldrb,%function\n"
         "uy_site_ldrb:\n ldrb w0, [x0]\n ret\n"
         ".size uy_site_ldrb, .-uy_site_ldrb\n"
+        /* The page-trap mode makes exactly this page EL0 execute-never, so it
+         * must contain nothing but the two reader stubs: pad it to the end and
+         * keep the business wrappers in a different page. */
+        ".p2align 12\n"
+        ".popsection\n"
+        ".pushsection .text,\"ax\",%progbits\n"
         ".global uy_business_ldr\n.type uy_business_ldr,%function\n"
         "uy_business_ldr:\n stp x29, x30, [sp, #-16]!\n mov x29, sp\n"
         " bl uy_site_ldr\n ldp x29, x30, [sp], #16\n ret\n"
@@ -80,7 +86,8 @@ static long uy_control(const struct uy_ctx *ctx, unsigned op, struct urov_y_requ
 }
 
 static int uy_register_page(const struct uy_ctx *ctx, const struct page *p,
-                            unsigned length, uint64_t value, uint64_t *generation)
+                            unsigned length, uint64_t value, unsigned mode,
+                            uint64_t *generation)
 {
     struct urov_y_request q = uy_req(UROV_Y_REGISTER);
     int rc;
@@ -89,6 +96,7 @@ static int uy_register_page(const struct uy_ctx *ctx, const struct page *p,
     q.offset = p->entry + 8U;
     q.length = length;
     q.value = value;
+    q.mode = mode;
     q.site_count = 2;
     q.sites[0] = (uint64_t)(uintptr_t)&uy_site_ldr;
     q.sites[1] = (uint64_t)(uintptr_t)&uy_site_ldrb;
@@ -122,6 +130,38 @@ static int uy_status(const struct uy_ctx *ctx, struct urov_y_request *out)
     if (uy_control(ctx, UROV_Y_STATUS, &q)) return -1;
     *out = q;
     return 0;
+}
+
+static const char *uy_mode_name(unsigned mode)
+{
+    return mode == UROV_Y_MODE_PAGE_UXN ? "page" : "brk";
+}
+
+/* Private_Dirty / Anonymous kB of the VMA holding addr. */
+static int uy_mapping_private_kb(const void *addr, unsigned *dirty, unsigned *anon)
+{
+    FILE *f = fopen("/proc/self/smaps", "r");
+    char line[256];
+    unsigned long start, end;
+    int inside = 0, found = 0;
+
+    if (!f) return -1;
+    *dirty = 0;
+    *anon = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "%lx-%lx", &start, &end) == 2) {
+            inside = (uintptr_t)addr >= start && (uintptr_t)addr < end;
+            found |= inside;
+            continue;
+        }
+        if (!inside) continue;
+        if (!strncmp(line, "Private_Dirty:", 14))
+            *dirty = (unsigned)strtoul(line + 14, NULL, 10);
+        else if (!strncmp(line, "Anonymous:", 10))
+            *anon = (unsigned)strtoul(line + 10, NULL, 10);
+    }
+    fclose(f);
+    return found ? 0 : -1;
 }
 
 /* One full observation case: both delivered detector APIs must stay negative on
@@ -253,7 +293,7 @@ static void elimination_clean(void)
     page_close(&p);
 }
 
-static void elimination_active(const char *key_hex, int repeats)
+static void elimination_active(const char *key_hex, int repeats, unsigned mode)
 {
     struct uy_ctx ctx;
     struct page p;
@@ -266,6 +306,7 @@ static void elimination_active(const char *key_hex, int repeats)
     const uint8_t *at;
     struct ud_reader_observation rd;
     struct urov_y_request st;
+    unsigned base_dirty = 0, base_anon = 0;
     const uint64_t fake = UINT64_C(0x8877665544332211);
 
     if (uy_init_key(&ctx, key_hex)) { REQUIRE(0, "UY key missing"); return; }
@@ -274,6 +315,8 @@ static void elimination_active(const char *key_hex, int repeats)
         return;
     }
     at = p.address + p.entry + 8U;
+    (void)uy_mapping_private_kb((const void *)(uintptr_t)&uy_site_ldr, &base_dirty,
+                                &base_anon);
     memset(&business, 0, sizeof(business));
     atomic_init(&business.stop, 0); atomic_init(&business.errors, 0); atomic_init(&business.ops, 0);
     business.fn = (payload_fn)(void *)(p.address + p.entry);
@@ -286,7 +329,7 @@ static void elimination_active(const char *key_hex, int repeats)
     REQUIRE(!app_pread(p.fd, p.file_offset + p.entry, disk64, sizeof(disk64)), "UY pread64");
     elimination_case("baseline", &p, 8, repeats);
 
-    if (uy_register_page(&ctx, &p, 8, fake, &generation)) { page_close(&p); return; }
+    if (uy_register_page(&ctx, &p, 8, fake, mode, &generation)) { page_close(&p); return; }
 
     /* The business call window still observes the fake value. */
     REQUIRE(uy_business_ldr(at) == fake, "UY business call got=%llx",
@@ -297,19 +340,39 @@ static void elimination_active(const char *key_hex, int repeats)
     copy_scalar(direct, at, sizeof(direct));
     REQUIRE(!memcmp(direct, disk64 + 8, 8), "UY plain read diverged");
 
-    /* New observable, measured instead of hidden: while the session is live the
-     * site instruction differs from the installed library file. The delivered
-     * detector does not look at code integrity, but the report must say so. */
+    /* The observable that the previous generation could not remove: does the
+     * live trap change the code page at all?  The page-trap mode must leave
+     * the instruction and the page accounting untouched; the BRK mode is the
+     * positive control for this probe. */
     {
         struct ud_mapping sm;
         uint32_t file_word = 0, live_word = 0;
+        unsigned dirty = 0, anon = 0;
+        int have_pd = !uy_mapping_private_kb((const void *)(uintptr_t)&uy_site_ldr,
+                                             &dirty, &anon);
         if (!ud_mapping_at("/proc/self/maps", (const void *)(uintptr_t)&uy_site_ldr, &sm)) {
             off_t site_off = (off_t)(sm.offset + ((uintptr_t)&uy_site_ldr - sm.start));
             if (!app_pread(p.fd, site_off, (uint8_t *)&file_word, 4)) {
                 live_word = load32_at((const uint8_t *)(uintptr_t)&uy_site_ldr);
-                LOG("ELIM_RESIDUAL site_file_word=%08x site_live_word=%08x differs=%d "
-                    "site_cow_private=%d", file_word, live_word, file_word != live_word, 1);
-                REQUIRE(file_word != live_word, "UY site code word was not patched");
+                LOG("ELIM_RESIDUAL mode=%s site_file_word=%08x site_live_word=%08x "
+                    "differs=%d site_cow_private=%d private_dirty_kb=%u anonymous_kb=%u "
+                    "base_dirty_kb=%u base_anonymous_kb=%u",
+                    uy_mode_name(mode), file_word, live_word, file_word != live_word,
+                    (have_pd && dirty > base_dirty) ? 1 : 0, dirty, anon,
+                    base_dirty, base_anon);
+                if (mode == UROV_Y_MODE_PAGE_UXN) {
+                    REQUIRE(file_word == live_word,
+                            "UY page mode changed the site word %08x -> %08x",
+                            file_word, live_word);
+                    REQUIRE(have_pd && dirty == base_dirty && anon == base_anon,
+                            "UY page mode made the site page private dirty=%u/%u "
+                            "anon=%u/%u", dirty, base_dirty, anon, base_anon);
+                } else {
+                    REQUIRE(file_word != live_word, "UY site code word was not patched");
+                    REQUIRE(have_pd && anon >= base_anon + 4U,
+                            "UY brk mode did not COW the site page anon=%u/%u",
+                            anon, base_anon);
+                }
             }
         }
     }
@@ -328,6 +391,15 @@ static void elimination_active(const char *key_hex, int repeats)
         (unsigned long long)rd.reader_value, (unsigned long long)rd.file_value);
     REQUIRE(rd.reader_diff == UD_MATCH, "UY business reader did not observe fake");
 
+    /* Timing side channel, measured rather than hidden: one trap per call. */
+    {
+        uint64_t t0 = now_ns(), t1;
+        for (int i = 0; i < 2000; ++i) (void)uy_business_ldr(at);
+        t1 = now_ns();
+        LOG("ELIM_TIMING mode=%s site_call_ns=%llu", uy_mode_name(mode),
+            (unsigned long long)((t1 - t0) / 2000));
+    }
+
     /* Update path: the business window follows SET, the detector stays blind. */
     REQUIRE(!uy_set_page(&ctx, generation, UINT64_C(0x0f0e0d0c0b0a0908)),
             "UY SET errno=%d", errno);
@@ -339,10 +411,11 @@ static void elimination_active(const char *key_hex, int repeats)
 
     REQUIRE(!uy_status(&ctx, &st) && st.state == UROV_Y_ACTIVE &&
             st.generation == generation + 2 && st.failures == 0 &&
-            st.hits > 0 && st.replays > 0,
-            "UY STATUS gen=%llu state=%u hits=%llu replays=%llu failures=%llu",
-            (unsigned long long)st.generation, st.state, (unsigned long long)st.hits,
-            (unsigned long long)st.replays, (unsigned long long)st.failures);
+            st.mode == mode && st.hits > 0 && st.replays > 0,
+            "UY STATUS gen=%llu state=%u mode=%u hits=%llu replays=%llu failures=%llu",
+            (unsigned long long)st.generation, st.state, st.mode,
+            (unsigned long long)st.hits, (unsigned long long)st.replays,
+            (unsigned long long)st.failures);
 
     {
         struct urov_y_request d = uy_req(UROV_Y_DEACTIVATE);
@@ -355,12 +428,20 @@ static void elimination_active(const char *key_hex, int repeats)
     {
         struct ud_mapping sm;
         uint32_t file_word = 0, live_word = load32_at((const uint8_t *)(uintptr_t)&uy_site_ldr);
+        unsigned dirty = 0, anon = 0;
+        (void)uy_mapping_private_kb((const void *)(uintptr_t)&uy_site_ldr, &dirty, &anon);
         if (!ud_mapping_at("/proc/self/maps", (const void *)(uintptr_t)&uy_site_ldr, &sm)) {
             off_t site_off = (off_t)(sm.offset + ((uintptr_t)&uy_site_ldr - sm.start));
             if (!app_pread(p.fd, site_off, (uint8_t *)&file_word, 4))
-                LOG("ELIM_RESIDUAL restored_site_file_word=%08x live_word=%08x equal=%d",
-                    file_word, live_word, file_word == live_word);
+                LOG("ELIM_RESIDUAL restored_site_file_word=%08x live_word=%08x equal=%d "
+                    "private_dirty_kb=%u anonymous_kb=%u base_dirty_kb=%u "
+                    "base_anonymous_kb=%u",
+                    file_word, live_word, file_word == live_word, dirty, anon,
+                    base_dirty, base_anon);
         }
+        if (mode == UROV_Y_MODE_PAGE_UXN)
+            REQUIRE(dirty == base_dirty && anon == base_anon,
+                    "UY page mode left the page private after deactivate");
     }
     elimination_case("deactivated", &p, 8, repeats);
 
@@ -378,32 +459,43 @@ static void elimination_active(const char *key_hex, int repeats)
 
 /* Hold an active session while the harness unloads the module; the site must
  * come back to the original bytes without a signal in this process. */
-static void elimination_hold(const char *key_hex)
+static void elimination_hold(const char *key_hex, unsigned mode)
 {
     struct uy_ctx ctx;
     struct page p;
     uint64_t generation = 0;
     uint64_t disk = 0;
     const uint8_t *at;
+    unsigned base_dirty = 0, base_anon = 0;
     int restored = 0;
 
     if (uy_init_key(&ctx, key_hex)) { REQUIRE(0, "UY hold key missing"); return; }
     if (page_open(&p, MAP_SHARED)) { REQUIRE(0, "UY hold page errno=%d", errno); return; }
     at = p.address + p.entry + 8U;
+    (void)uy_mapping_private_kb((const void *)(uintptr_t)&uy_site_ldr, &base_dirty,
+                                &base_anon);
     REQUIRE(!app_pread(p.fd, p.file_offset + p.entry + 8, (uint8_t *)&disk, 8), "UY hold pread");
-    if (uy_register_page(&ctx, &p, 8, UINT64_C(0x8877665544332211), &generation)) {
+    if (uy_register_page(&ctx, &p, 8, UINT64_C(0x8877665544332211), mode, &generation)) {
         page_close(&p);
         return;
     }
     REQUIRE(uy_business_ldr(at) == UINT64_C(0x8877665544332211), "UY hold not armed");
-    LOG("ELIM_HOLD_READY pid=%d uid=%d", getpid(), getuid());
+    LOG("ELIM_HOLD_READY pid=%d uid=%d mode=%s", getpid(), getuid(), uy_mode_name(mode));
     for (unsigned i = 0; i < 900; ++i) {
+        unsigned dirty = 0, anon = 0;
         usleep(100000);
         if (uy_business_ldr(at) == disk) {
             uint32_t insn = load32_at((const uint8_t *)(uintptr_t)&uy_site_ldr);
-            LOG("ELIM_HOLD_RESTORED pid=%d opcode=%08x direct=%llx", getpid(), insn,
-                (unsigned long long)uy_site_ldr(at));
-            restored = insn == 0xf9400000U && uy_site_ldr(at) == disk;
+            (void)uy_mapping_private_kb((const void *)(uintptr_t)&uy_site_ldr, &dirty, &anon);
+            LOG("ELIM_HOLD_RESTORED pid=%d opcode=%08x direct=%llx private_dirty_kb=%u "
+                "anonymous_kb=%u base_dirty_kb=%u base_anonymous_kb=%u",
+                getpid(), insn, (unsigned long long)uy_site_ldr(at), dirty, anon,
+                base_dirty, base_anon);
+            /* A BRK session legitimately keeps its COW page after the unload;
+             * the page-trap session must leave the page exactly as it was. */
+            restored = insn == 0xf9400000U && uy_site_ldr(at) == disk &&
+                       (mode != UROV_Y_MODE_PAGE_UXN ||
+                        (dirty == base_dirty && anon == base_anon));
             break;
         }
     }

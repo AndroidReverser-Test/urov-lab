@@ -76,9 +76,9 @@ foreach ($test in @('emulate_test','native_test','kpm_check_test','copy_probe','
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-lab-check.kpm')
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-lab.kpm')
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-x.kpm')
-$built = @('urov-lab.kpm', 'urov-lab-check.kpm', 'urov-x.kpm', 'urov_overlay_test', 'urov_hold_test',
-    'urov_hold2_test', 'urov_foreign_test', 'urov_copy_probe', 'urov_vector_fault_probe',
-    'urov_emulate_test', 'urov_native_test', 'urov_kpm_check_test')
+$built = @('urov-lab.kpm', 'urov-lab-check.kpm', 'urov-x.kpm', 'urov-y.kpm', 'urov_overlay_test',
+    'urov_hold_test', 'urov_hold2_test', 'urov_foreign_test', 'urov_y_test', 'urov_copy_probe',
+    'urov_vector_fault_probe', 'urov_emulate_test', 'urov_native_test', 'urov_kpm_check_test')
 $sums = foreach ($name in $built) {
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out $name)).Hash.ToLowerInvariant()
     "$hash  $name"

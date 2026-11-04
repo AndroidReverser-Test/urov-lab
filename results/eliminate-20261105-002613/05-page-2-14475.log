@@ -1,0 +1,18 @@
+--------- beginning of main
+10-01 15:00:56.903 14475 14498 I urovdetect: CONTEXT pid=14475 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768
+10-01 15:00:56.903 14475 14498 I urovdetect: CONTEXT CapEff:	0000000000000000
+10-01 15:00:56.903 14475 14498 I urovdetect: CONTEXT Seccomp:	2
+10-01 15:00:56.903 14475 14498 I urovdetect: BEGIN mode=z-active repeats=6
+10-01 15:00:57.068 14475 14498 I urovdetect: ELIM_CASE name=baseline result=PASS n=6 exclusive_match=0 exclusive_clean=6 exclusive_unknown=0 accepted=576 failed=0 control_failed=0 reader_match=0 reader_clean=6 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-01 15:00:57.080 14475 14498 I urovdetect: ELIM_RESIDUAL mode=page site_file_word=f9400000 site_live_word=f9400000 differs=0 site_cow_private=0 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0
+10-01 15:00:57.138 14475 14498 I urovdetect: ELIM_CASE name=active_page result=PASS n=6 exclusive_match=0 exclusive_clean=6 exclusive_unknown=0 accepted=576 failed=0 control_failed=0 reader_match=0 reader_clean=6 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-01 15:00:57.196 14475 14498 I urovdetect: ELIM_CASE name=active_outside_window result=PASS n=6 exclusive_match=0 exclusive_clean=6 exclusive_unknown=0 accepted=576 failed=0 control_failed=0 reader_match=0 reader_clean=6 reader_unknown=0 direct=0x0 file=0x0
+10-01 15:00:57.198 14475 14498 I urovdetect: ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1
+10-01 15:00:57.199 14475 14498 I urovdetect: ELIM_TIMING mode=page site_call_ns=241
+10-01 15:00:57.257 14475 14498 I urovdetect: ELIM_CASE name=active_after_set result=PASS n=6 exclusive_match=0 exclusive_clean=6 exclusive_unknown=0 accepted=576 failed=0 control_failed=0 reader_match=0 reader_clean=6 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-01 15:00:57.315 14475 14498 I urovdetect: ELIM_CASE name=active_equal_value result=PASS n=6 exclusive_match=0 exclusive_clean=6 exclusive_unknown=0 accepted=576 failed=0 control_failed=0 reader_match=0 reader_clean=6 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-01 15:00:57.325 14475 14498 I urovdetect: ELIM_RESIDUAL restored_site_file_word=f9400000 live_word=f9400000 equal=1 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0
+10-01 15:00:57.383 14475 14498 I urovdetect: ELIM_CASE name=deactivated result=PASS n=6 exclusive_match=0 exclusive_clean=6 exclusive_unknown=0 accepted=576 failed=0 control_failed=0 reader_match=0 reader_clean=6 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-01 15:00:57.384 14475 14498 I urovdetect: ELIM_BUSINESS ops=88832 errors=0 execution=original
+10-01 15:00:57.384 14475 14498 I urovdetect: NATIVE_RESULT PASS cases=7 assertions=267 failures=0 mode=z-active
+10-01 15:00:57.386 14475 14475 I urovdetect: DETECT_RESULT PASS mode=z-active worker_ms=482 ui_ticks=142 ui_max_gap_ms=19 native=PASS cases=7 assertions=267 failures=0

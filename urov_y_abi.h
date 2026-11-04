@@ -11,7 +11,10 @@
  *   - the fake value is delivered by trapping the *reader instruction*: the
  *     registered site's machine instruction is replaced by BRK for the
  *     session and emulated in EL1, so the page itself keeps a single
- *     consistent data view;
+ *     consistent data view;  the second, default mode instead makes the
+ *     site page EL0 execute-never in the leaf PTE (UXN) and emulates the
+ *     instruction from an instruction abort, so the code bytes themselves
+ *     are never modified and no page is ever private-dirty;
  *   - the trap honours an optional business-caller window (return address
  *     PC range).  A plain call of the same site routine from unrelated code
  *     is emulated with the original bytes, i.e. it returns exactly what the
@@ -26,11 +29,23 @@
 #include "urov_x_abi.h"
 
 #define UROV_Y_NAME "urov-y"
-#define UROV_Y_ABI_VERSION 4U
+#define UROV_Y_ABI_VERSION 5U
 #define UROV_Y_PAGE 4096U
 #define UROV_Y_FAKE_MAX 32U
 #define UROV_Y_MAX_SITES 4U
 #define UROV_Y_MAX_CALLERS 4U
+
+/* How the registered reader instruction is trapped.
+ *
+ * SITE_BRK replaces the 4-byte instruction with BRK on a private COW page.
+ * PAGE_UXN leaves every byte of the code page untouched and instead clears
+ * EL0 execute permission in the leaf PTE: a fetch faults, the fault handler
+ * emulates the instruction, and the page keeps one pristine data view (clean,
+ * file-backed, no COW).  PAGE_UXN requires the site instruction to sit in a
+ * page whose executed instruction stream is limited to the site load plus
+ * RET/BR/BL/NOP/BTI. */
+#define UROV_Y_MODE_SITE_BRK 1U
+#define UROV_Y_MODE_PAGE_UXN 2U
 
 enum urov_y_op {
     UROV_Y_QUERY = 1,
@@ -69,7 +84,8 @@ struct urov_y_request {
     uint64_t hits;                /* fake-serving traps */
     uint64_t replays;             /* transparent traps (foreign caller) */
     uint64_t failures;
-    uint64_t reserved;
+    uint32_t mode;                /* UROV_Y_MODE_*; 0 means SITE_BRK */
+    uint32_t flags;               /* must be zero */
     uint64_t mac;
 };
 

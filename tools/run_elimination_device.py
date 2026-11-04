@@ -6,11 +6,18 @@ Runs on one device; root only loads/unloads modules and collects kernel truth:
   1. app without the module                   -> y-clean
   2. urov-x control, same app/detector core   -> observe-active must MATCH
   3. urov-y loaded, no session                -> y-clean (idle module)
-  4..5. urov-y active cycles                  -> y-active: A and B must be
+  4. urov-y active cycles, BRK site mode      -> y-active: A and B must be
                                                  NO_MATCH, the registered
-                                                 business call must see the fake
-  6. unload while a session is live           -> site restored in the running app
-  7. after the unload                         -> y-clean
+                                                 business call must see the fake,
+                                                 and the code-page probe must
+                                                 fire (differs=1, COW page)
+  5. urov-y active cycles, page-trap mode     -> z-active: same detector
+                                                 results, but the code-page
+                                                 probe must be clean
+                                                 (differs=0, private_dirty=0)
+  6. unload while a BRK session is live       -> site restored in the running app
+  7. unload while a page-trap session is live -> same, page stays clean
+  8. final clean run                          -> y-clean
 
 The detector core (native/urov_observe.c, native/urov_detect.c) is unmodified.
 """
@@ -124,13 +131,15 @@ def main():
                "app_pass": found[1] == "PASS", "cases": cases,
                "features": re.findall(r"ELIM_FEATURE [^\n]+", logs),
                "business": re.findall(r"ELIM_BUSINESS [^\n]+", logs),
+               "residuals": re.findall(r"ELIM_RESIDUAL [^\n]+", logs),
+               "timing": re.findall(r"ELIM_TIMING [^\n]+", logs),
                "log": f"{label}-{pid}.log",
                "uid": int(re.search(r"CONTEXT pid=\d+ uid=(\d+)", logs)[1])}
         report["runs"].append(run)
         print(f"{label}: {found[0]}", flush=True)
         for line in re.findall(r"ELIM_CASE [^\n]+", logs):
             print("  " + line, flush=True)
-        for line in run["features"]:
+        for line in run["features"] + run["residuals"] + run["timing"]:
             print("  " + line, flush=True)
         if found[1] != "PASS":
             raise RuntimeError(f"{label}: app assertions failed")
@@ -190,7 +199,7 @@ def main():
         kp("kpm", "load", "/data/local/tmp/urov-y.kpm", f"key={module_key}")
         loaded = "urov-y"
         report["loaded_status"] = kp("kpm", "ctl0", "urov-y", "status")
-        if "hooks=0x1f" not in report["loaded_status"]:
+        if "hooks=0x7f" not in report["loaded_status"]:
             raise RuntimeError("urov-y hooks incomplete")
 
         run_app("03-loaded-idle", "y-clean")
@@ -204,38 +213,78 @@ def main():
                     raise RuntimeError(f"detector positive on {case['name']}")
             if "state=inactive" not in kp("kpm", "ctl0", "urov-y", "status"):
                 raise RuntimeError("fixture leaked a session")
+            # Positive control for the code-page probe: the BRK mode must show
+            # the modified instruction and the private COW page.
+            brk = [r for r in run["residuals"] if "mode=brk" in r and "site_live_word" in r]
+            if not brk or any("differs=1" not in r for r in brk):
+                raise RuntimeError("BRK-mode residual probe did not fire")
+            if any("site_cow_private=1" not in r for r in brk):
+                raise RuntimeError("BRK-mode page was not private-dirty")
+        for cycle in range(args.cycles):
+            run, _ = run_app(f"05-page-{cycle + 1}", "z-active", key=module_key)
+            if not run["cases"]:
+                raise RuntimeError("z-active produced no observation cases")
+            for case in run["cases"]:
+                if case["name"].startswith("active") and (
+                        int(case["exclusive_match"]) != 0 or int(case["reader_match"]) != 0):
+                    raise RuntimeError(f"detector positive on {case['name']}")
+            if "state=inactive" not in kp("kpm", "ctl0", "urov-y", "status"):
+                raise RuntimeError("page fixture leaked a session")
+            # The feature this iteration removes: no code-word difference and no
+            # private page in the page-trap mode.
+            active = [r for r in run["residuals"] if "mode=page" in r and "site_live_word" in r]
+            if not active or any("differs=0" not in r for r in active):
+                raise RuntimeError("page-mode site word differs from the file")
+            if any("site_cow_private=0" not in r for r in active):
+                raise RuntimeError("page-mode site page is private")
+            for r in active:
+                fields = kv(r)
+                if (fields.get("private_dirty_kb") != fields.get("base_dirty_kb") or
+                        fields.get("anonymous_kb") != fields.get("base_anonymous_kb")):
+                    raise RuntimeError("page-mode page accounting changed")
 
-        # Unload while a session is live: the module must restore the site in the
-        # running app, which keeps executing the same reader routine.
-        pid = start_app("y-hold", module_key)
-        hold_logs = collect(pid, "05-hold", "y-hold", wait_for="ELIM_HOLD_READY")
-        if "ELIM_HOLD_READY" not in hold_logs:
-            raise RuntimeError("hold fixture did not arm")
-        status = kp("kpm", "ctl0", "urov-y", "status")
-        report["hold_status"] = status
-        if "state=active" not in status:
-            raise RuntimeError("hold session is not active")
-        report["unload_while_active"] = kp("kpm", "unload", "urov-y", check=False)
-        if kp("kpm", "list").strip():
-            raise RuntimeError("unload with a live session did not remove the module")
+        # Unload while a session is live: the module must restore the site in
+        # the running app, which keeps executing the same reader routine.
+        for hold_mode, label in (("y-hold", "06-hold"), ("z-hold", "07-hold-page")):
+            pid = start_app(hold_mode, module_key)
+            hold_logs = collect(pid, label, hold_mode, wait_for="ELIM_HOLD_READY")
+            if "ELIM_HOLD_READY" not in hold_logs:
+                raise RuntimeError(f"{hold_mode} fixture did not arm")
+            status = kp("kpm", "ctl0", "urov-y", "status")
+            report[f"{label}_status"] = status
+            if "state=active" not in status:
+                raise RuntimeError(f"{label} session is not active")
+            report[f"{label}_unload"] = kp("kpm", "unload", "urov-y", check=False)
+            if kp("kpm", "list").strip():
+                raise RuntimeError("unload with a live session did not remove the module")
+            loaded = None
+            hold_logs = collect(pid, f"{label}-after-unload", hold_mode)
+            restored = re.findall(r"ELIM_HOLD_RESTORED [^\n]+", hold_logs)
+            if not restored:
+                raise RuntimeError("running app did not observe the restored site")
+            result = re.search(rf"DETECT_RESULT (PASS|FAIL) mode={re.escape(hold_mode)}\b[^\n]*",
+                               hold_logs)
+            if not result or result[1] != "PASS":
+                raise RuntimeError(f"{label} fixture failed after the unload")
+            if not shell("pidof", PACKAGE, check=False):
+                raise RuntimeError("app died during the unload")
+            report["runs"].append({"label": f"{label}-after-unload", "mode": hold_mode,
+                                   "pid": pid, "result": result[0], "restored": restored,
+                                   "log": f"{label}-after-unload-{pid}.log"})
+            print(f"{label}-after-unload: {result[0]}", flush=True)
+            for line in restored:
+                print("  " + line, flush=True)
+            if hold_mode == "z-hold":
+                fields = kv(restored[0])
+                if fields.get("private_dirty_kb") != fields.get("base_dirty_kb") or \
+                        fields.get("anonymous_kb") != fields.get("base_anonymous_kb"):
+                    raise RuntimeError("page-mode site page changed after unload")
+            kp("kpm", "load", "/data/local/tmp/urov-y.kpm", f"key={module_key}")
+            loaded = "urov-y"
+
+        run_app("08-final-clean", "y-clean")
+        kp("kpm", "unload", "urov-y")
         loaded = None
-        hold_logs = collect(pid, "05-hold-after-unload", "y-hold")
-        restored = re.findall(r"ELIM_HOLD_RESTORED [^\n]+", hold_logs)
-        if not restored:
-            raise RuntimeError("running app did not observe the restored site")
-        result = re.search(r"DETECT_RESULT (PASS|FAIL) mode=y-hold\b[^\n]*", hold_logs)
-        if not result or result[1] != "PASS":
-            raise RuntimeError("hold fixture failed after the unload")
-        if not shell("pidof", PACKAGE, check=False):
-            raise RuntimeError("app died during the unload")
-        report["runs"].append({"label": "05-hold-after-unload", "mode": "y-hold",
-                               "pid": pid, "result": result[0], "restored": restored,
-                               "log": f"05-hold-after-unload-{pid}.log"})
-        print(f"05-hold-after-unload: {result[0]}", flush=True)
-        for line in restored:
-            print("  " + line, flush=True)
-
-        run_app("06-post-unload", "y-clean")
         report["passed"] = True
     except Exception as exc:
         report["error"] = redact(str(exc))

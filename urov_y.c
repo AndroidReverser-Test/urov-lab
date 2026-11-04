@@ -19,10 +19,10 @@
 #include "urov_y_backend.h"
 
 KPM_NAME("urov-y");
-KPM_VERSION("1.0.0");
+KPM_VERSION("2.0.0");
 KPM_LICENSE("GPL v2");
 KPM_AUTHOR("UROV-Y");
-KPM_DESCRIPTION("Reader-instruction trap ARM64 user read overlay with no data-page permission change");
+KPM_DESCRIPTION("Reader-site trap ARM64 user read overlay: BRK or EL0 execute-never page trap");
 KPM_INFO(context, "sleepable-v2", 32);
 
 typedef long (*copy_fn)(void *, const void *, unsigned long);
@@ -59,11 +59,13 @@ static long urov_y_control(const char *args, char __user *out, int len)
     if (!str_eq(args, "status") && !str_eq(args, "selftest")) return -EINVAL;
     urov_y_status_get(&st);
     n = snprintf(message, sizeof(message),
-                 "mode=site-trap state=%s sites=%u armed=%u hits=%llu replays=%llu "
-                 "failures=%llu imm=%x hooks=0x%x core_checks=%u\n",
+                 "mode=%s state=%s sites=%u armed=%u hits=%llu replays=%llu "
+                 "failures=%llu degraded=%u imm=%x hooks=0x%x core_checks=%u\n",
+                 st.mode == UROV_Y_MODE_PAGE_UXN ? "page-trap" : "site-trap",
                  st.active ? "active" : "inactive", st.sites, st.armed,
                  (unsigned long long)st.hits, (unsigned long long)st.replays,
-                 (unsigned long long)st.failures, st.imm, st.hooks, st.core_checks);
+                 (unsigned long long)st.failures, st.degraded, st.imm, st.hooks,
+                 st.core_checks);
     if (n < 0 || n >= (int)sizeof(message)) return -EOVERFLOW;
     if (len <= n) return -ENOSPC;
     return copy_out(out, message, (size_t)n + 1) ? -EFAULT : 0;

@@ -1193,10 +1193,14 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
                  g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
         goto done;
     }
-    if (!strncmp(mode, "y-", 2)) {
-        /* urov-y fixtures: the detector calls stay unmodified and unkeyed. */
-        if (!strcmp(mode, "y-active")) elimination_active(key, (int)repeats);
-        else if (!strcmp(mode, "y-hold")) elimination_hold(key);
+    if (!strncmp(mode, "y-", 2) || !strncmp(mode, "z-", 2)) {
+        /* urov-y fixtures: the detector calls stay unmodified and unkeyed.
+         * y-* is the BRK site mode, z-* the page-trap (UXN) mode. */
+        unsigned trap = mode[0] == 'z' ? UROV_Y_MODE_PAGE_UXN : UROV_Y_MODE_SITE_BRK;
+        if (!strcmp(mode, "y-active") || !strcmp(mode, "z-active"))
+            elimination_active(key, (int)repeats, trap);
+        else if (!strcmp(mode, "y-hold") || !strcmp(mode, "z-hold"))
+            elimination_hold(key, trap);
         else elimination_clean();
         snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
                  g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);

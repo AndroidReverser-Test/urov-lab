@@ -1,6 +1,16 @@
 # UROV-LAB
 
-2026-11-04 后续消除轮：新增 `urov-y` 变体（`urov_y.c` / `urov_y_backend.c`），
+2026-11-05 第二轮消除：`urov-y` 新增 `PAGE_UXN` 读取点陷阱模式（ABI v5，`mode=2`）。
+目标页仍不改任何权限；读取点页也不改一个字节、不改 VMA、不产生 COW，只清叶子 PTE
+的 EL0 执行许可（UXN），由 `do_mem_abort` 接管 EL0 instruction abort 并模拟读取点。
+第一轮"活动期间代码页被改写为 BRK / 私有 COW 页"的特征因此消失：活动期间
+`site_live_word == site_file_word`，代码页 `Private_Dirty=0`、`Anonymous=0`，
+注销/卸载后无残留。153 次观测中独占监视器与跨 PC 内容差异仍为 0 命中，业务窗口
+仍返回伪值；同夹具的 BRK 模式（`y-active`）继续作为该特征的阳性对照。设计见
+[ELIMINATION_DESIGN.md](ELIMINATION_DESIGN.md) §9，设备矩阵见
+[ELIMINATION_RESULTS.md](ELIMINATION_RESULTS.md)。
+
+2026-11-04 第一轮消除：新增 `urov-y` 变体（`urov_y.c` / `urov_y_backend.c`），
 把覆盖从"数据页权限异常"移到"读取点指令陷阱"：目标页保持普通可读 RX，读取点
 在会话期间改写为 BRK，只有注册的业务调用窗口（`x30` 落在注册区间）才拿伪值，
 其余调用按原字节透明模拟。真机上 KEYLESS 的两项检测（独占监视器失效、跨 PC
@@ -170,11 +180,11 @@ fake 字节按小端排列：`value` 是字节 0..7，`value_hi[0]` 是 8..15，
 | `tools/run_app_device.ps1` | 普通 app 设备自动化脚本 |
 | `APP_OVERLAY.md` / `RESULTS_APP.md` | 普通 app 方案、检测面、限制与真机证据 |
 | `urov_x_backend.c` / `.h` / `urov_x.c` / `urov_x_abi.h` | covert 变体 `urov-x`：密钥化控制通道、读取点绑定、透明生命周期 |
-| `urov_y_backend.c` / `.h` / `urov_y.c` / `urov_y_abi.h` | 读取点陷阱变体 `urov-y`：目标页不改权限、BRK 读取点、业务调用窗口 |
-| `tests/urov_y_test.c` | `urov-y` root 验收程序（功能/fork/门控/活动期卸载） |
-| `apps/urov-detect/uy_fixture.inc` | `urov-y` App 夹具（`y-clean`/`y-active`/`y-hold`） |
-| `tools/run_elimination_device.py` | `urov-y` 设备矩阵（含 `urov-x` 阳性对照） |
-| `ELIMINATION_DESIGN.md` / `ELIMINATION_RESULTS.md` | 读取点陷阱方案与真机对照结果 |
+| `urov_y_backend.c` / `.h` / `urov_y.c` / `urov_y_abi.h` | 读取点陷阱变体 `urov-y`：目标页不改权限；`mode=1` BRK 读取点，`mode=2` EL0 execute-never 页陷阱；业务调用窗口 |
+| `tests/urov_y_test.c` | `urov-y` root 验收程序（两种模式；功能/fork/门控/活动期卸载/代码页探针） |
+| `apps/urov-detect/uy_fixture.inc` | `urov-y` App 夹具（`y-*` BRK 模式、`z-*` 页陷阱模式） |
+| `tools/run_elimination_device.py` | `urov-y` 设备矩阵（含 `urov-x` 阳性对照与两种模式对照） |
+| `ELIMINATION_DESIGN.md` / `ELIMINATION_RESULTS.md` | 读取点陷阱方案（含 §9 页陷阱）、代码页特征消除与真机对照结果 |
 | `tools/run_stealth_device.py` | `urov-x` 设备矩阵（无密钥/活动/观察者/卸载/SIMD/fork） |
 | `STEALTH_DESIGN.md` / `STEALTH_RESULTS.md` | 检测特征点消除设计与真机对照结果 |
 | `results/` | 构建、设备与覆盖运行记录 |

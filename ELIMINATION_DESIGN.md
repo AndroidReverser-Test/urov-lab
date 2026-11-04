@@ -1,16 +1,24 @@
 # UROV-Y：读取点陷阱方案——消除 KEYLESS 检测特征点的设计与实现
 
-日期：2026-11-04（Asia/Shanghai）。对象是 [KEYLESS_DETECTION_RESULTS.md](KEYLESS_DETECTION_RESULTS.md)
-复核的同一个 `urov-x.kpm`（SHA256 `c2a5c3d3…3575`）以及本轮新增的 `urov-y.kpm`。
-真机结果见 [ELIMINATION_RESULTS.md](ELIMINATION_RESULTS.md)。
+日期：2026-11-04/05（Asia/Shanghai）。对象是 [KEYLESS_DETECTION_RESULTS.md](KEYLESS_DETECTION_RESULTS.md)
+复核的同一个 `urov-x.kpm`（SHA256 `c2a5c3d3…3575`）以及 `urov-y.kpm`。真机结果见
+[ELIMINATION_RESULTS.md](ELIMINATION_RESULTS.md)。
 
-**结论：`urov-y` 把覆盖从"数据页权限异常"移到"读取点指令陷阱"，因此
-KEYLESS 报告中的两项无密钥检测在其活动页上都不再命中：129 次观测中独占监视器
-MATCH 为 0（12,384 个被接受三元组、目标 STXR 失败 0 次），跨 PC 内容差异
-MATCH 为 0；同时注册的业务调用窗口仍然读到伪值。代价是引入了一个新的、
-可被自检发现的特征：活动期间读取点所在的代码页是私有 COW 页，且该 4 字节
-指令与安装文件不同（实测 `f9400000 → d4235b40`）。本方案不声称"无任何特征"，
-只消除这两项无密钥检测并如实列出新特征。**
+**结论（第一轮，BRK 读取点指令陷阱）。`urov-y` 把覆盖从"数据页权限异常"移到
+"读取点指令陷阱"，因此 KEYLESS 报告中的两项无密钥检测在其活动页上都不再命中：
+129 次观测中独占监视器 MATCH 为 0（12,384 个被接受三元组、目标 STXR 失败 0 次），
+跨 PC 内容差异 MATCH 为 0；同时注册的业务调用窗口仍然读到伪值。代价是引入了一个
+新的、可被自检发现的特征：活动期间读取点所在的代码页是私有 COW 页，且该 4 字节
+指令与安装文件不同（实测 `f9400000 → d4235b40`）。**
+
+**结论（第二轮，EL0 execute-never 页陷阱，本文 §9）。同一模块新增
+`UROV_Y_MODE_PAGE_UXN`：完全不写代码页的任何字节，只清叶子 PTE 的 EL0 执行许可
+（UXN），用 EL0 instruction abort 在 EL1 模拟读取点。于是第一轮的那个新特征也消失
+了：活动期间 `site_live_word == site_file_word == f9400000`，代码页仍是干净的
+文件页（`Private_Dirty=0`、`Anonymous=0`），注销/卸载后没有任何残留 COW 页。
+153 次观测中独占 MATCH 0、reader MATCH 0，业务窗口仍返回伪值。新代价是：每次读取
+点调用一次 instruction abort（~230 ns）、读取点必须位于只含可模拟指令的独立页，
+以及 PTE 被回收后重新装回时的微秒级窗口（§9.6）。**
 
 ## 1. 现行实现（urov-x）与两项特征点的根因
 
@@ -178,11 +186,12 @@ MATCH=0、目标 STXR 失败 0/12,384。
 
 ## 5. 残余特征与限制（诚实清单）
 
-1. **读取点代码页被改写（新特征，已实测）**。会话期间该页是私有 COW 页
-   （`Private_Dirty` +4 KiB），4 字节指令由 `ldr` 变为 `BRK`：实测
-   `site_file_word=f9400000 → site_live_word=d4235b40`。任何"读自己代码页并与
-   安装文件比较"的自检都能发现它。本轮交付的检测 App 不做代码完整性检查，所以
-   矩阵没有覆盖这一项；这是下一步最该补的检测，也是本方案的主要代价。
+1. **读取点代码页被改写（第一轮 BRK 模式的特征，已实测；第二轮 PAGE_UXN 模式已
+   消除，见 §9）**。BRK 会话期间该页是私有 COW 页（`Private_Dirty` +4 KiB），
+   4 字节指令由 `ldr` 变为 `BRK`：实测 `site_file_word=f9400000 →
+   site_live_word=d4235b40`；注销后字节恢复一致，但**该页仍是私有 COW 页**
+   （实测注销后 `Private_Dirty=4`、`Anonymous=4` 持续到进程结束）。任何"读自己
+   代码页并与安装文件比较"或看 smaps 的自检都能发现它。
 2. **业务路径复现即功能本身**。把 `ELIM_FEATURE` 的调用者——即已注册的业务
    包装函数——当作 reader 传给检测 API，会得到 MATCH；任何能执行真实业务读取
    路径的同进程代码都能看到伪值。这是"合作式同进程覆盖"的固有边界，不是本文
@@ -231,3 +240,163 @@ python .\kpms\urov-lab\tools\run_elimination_device.py `
 
 复用 `decode.c`、`core_selftest.c` 与 `emulate.c`（只用于装载门槛）；未改动
 `urov_x_backend.c`、`native/urov_observe.c`、`native/urov_detect.c`。
+
+## 9. 第二轮：EL0 execute-never 页陷阱（消除代码页特征）
+
+第一轮的结论是"无密钥检测归零，但代码页被改写"。这一节处理那个新特征本身。
+
+### 9.1 为什么"隐藏"改写不成立
+
+任何"改字节"的做法都会留下同一个可比较的差异，且不依赖内核实现细节：
+
+- App 可以在会话开始前保存自己代码页的哈希（或文件偏移对应的字节），会话期间
+  再读一次；只要它自己的数据视图变了就能发现；
+- 也可以把 `.so`/APK 再 `mmap` 一份（`MAP_SHARED` 或 `pread`）与可执行映射比对，
+  文件页从未被改写，差异立刻出现；
+- 短暂改写（只在业务调用期间打 BRK、调用结束就写回）只是把窗口缩小；另一个线程
+  在业务函数被循环调用的同时循环读代码页，几乎必然抓到 BRK；
+- 改 page cache 或磁盘则会让 APK 自校验、`fs-verity`、升级和"保存过的旧副本"
+  全部暴露，而且 clean 页被回收后改写会静默丢失。
+
+而硬件只有一套 EL0 翻译：I 取指和 D 读取共用同一个叶子 PTE，所以"取指执行改过的
+指令、数据读取仍看到原字节"不可能靠单页表实现。I/D TLB 不一致（§6）不稳定，硬件
+断点被项目约束禁止，影子页会破坏取指。**唯一不变量是：不改字节，改"能不能在
+EL0 取指"。**
+
+### 9.2 机制
+
+`UROV_Y_MODE_PAGE_UXN`（ABI v5 的 `mode = 2`）：
+
+1. **目标页不动**。仍然只校验、快照，不写 `vm_page_prot`、不改 VMA、不 pin。
+   第一轮的所有 A/B 结论继续成立。
+2. **只置叶子 PTE 的 `PTE_UXN`**。`vm_page_prot` 与 `/proc/self/maps`/`smaps`
+   都不变（仍是普通 `r-xp`），但 EL0 取指该页会得到 instruction abort
+   （EC `0x20`，permission fault `FSC=0x0c..0x0f`）。PTE 的 D 读取许可不变，
+   因此**代码页的数据读取全部是原生 EL0 读取**：不产生异常、不进模拟、内容与文件
+   逐位一致。
+3. **`do_mem_abort` hook 接管取指异常**。按 `FAR == regs->pc` 匹配注册读取点：
+   用页内原指令（注册时快照的 4 字节）在 EL1 模拟一次 load，伪值/透明规则与第一轮
+   完全相同；`args->skip_origin = 1` 跳过内核的 SIGSEGV 路径。若相邻指令是
+   `ret`，直接把 `pc` 设为 `x30`，于是**一次业务调用只有一次异常**。
+4. **同一页里的后续控制指令**。陷阱页必须只包含读取点与 `RET/BR/BL/NOP/BTI`
+   （见 9.4），这些指令在遇到时自行模拟；遇到无法模拟的指令时**fail-closed**
+   但不杀进程：清掉该页的 UXN、计数 `failures`、让重试的取指原生执行，并等下一次
+   控制请求回收半个会话。
+5. **重新装回**。PTE 被回收（内存压力、`/proc/self/mem` 触发 GUP）后，内核会按
+   VMA 保护重新安装一个**可执行** PTE。为此 `handle_mm_fault` 的 after-hook 在
+   故障装页成功后重新置 `PTE_UXN` 并广播 TLB，避免"页被回收一次，陷阱就静默消失"。
+6. **可逆且跨上下文**。arm/disarm 只改 PTE（`mmap_write_lock` 下），TLB 用
+   `TLBI VMALLE1IS` 广播；注销、fork 前、卸载时都清 UXN。卸载不需要写回任何代码
+   字节，因此比第一轮更安全。
+
+```text
+            注册（prctl，密钥 + MAC，mode=2）
+  App ────────────────────────────────► urov-y
+   │  目标页：只校验 + 快照
+   │  读取点页：仅叶子 PTE |= UXN；字节、VMA、文件都不动
+   │
+   │  uy_business_ldr() ──bl──► 读取点 (取指 permission fault)
+   │                                   │ EL1: 按页内原指令模拟
+   │                                   │ 调用窗口命中 → 伪值
+   │                                   │ 否则 → 透明读
+   │                                   └─ ret 快进 → 返回业务
+   ▼
+  任意普通 LDR/LDRB 读读取点页或目标页 ──► 原生 EL0 读取
+```
+
+### 9.3 ABI v5 与状态
+
+`struct urov_y_request` 仍是 240 字节；原来的 `uint64_t reserved` 拆成
+`uint32_t mode; uint32_t flags;`，`UROV_Y_ABI_VERSION = 5`：
+
+- `mode = 0/1`：`UROV_Y_MODE_SITE_BRK`（第一轮行为，兼容旧测试）；
+- `mode = 2`：`UROV_Y_MODE_PAGE_UXN`（本轮默认由夹具显式指定）；
+- `flags` 必须为 0；`ctl0 status` 增加 `mode=site-trap|page-trap` 与
+  `degraded=0|1`，`hooks` 增加 bit 32（`do_mem_abort`）与 bit 64
+  （`handle_mm_fault`），实测 `hooks=0x7f`。
+
+`urov-y` 的注册可选性：如果内核没有 `do_mem_abort`/`handle_mm_fault`，模块仍以
+BRK 模式装载，只是 `mode=2` 返回 `EOPNOTSUPP`。
+
+### 9.4 部署前提：读取点页自包含
+
+`mode=2` 要求"读取点所在的 4 KiB 页里被执行的指令"只有读取点 load 和
+`RET/BR/BL/NOP/BTI`。夹具用汇编段 + 页对齐 + 页尾填充实现：
+
+```asm
+.pushsection .text.uy_sites,"ax",%progbits
+.p2align 12
+uy_site_ldr:  ldr x0, [x0]; ret
+uy_site_ldrb: ldrb w0, [x0]; ret
+.p2align 12          /* 把输入段补到 4 KiB，下一页留给普通代码 */
+.popsection
+```
+
+实测 `liburovdetect.so` 的读取点页 `0x13000-0x14000` 内只有两个 stub 和 NOP 填充，
+业务包装函数在 `0x9060`（不同页）。不满足该前提时模块不会崩：遇到无法模拟的指令
+就 detach 该页并计 `failures`，代价是那个会话不再返回伪值。
+
+### 9.5 为什么两个特征一起消失
+
+| 可观察量 | 第一轮 BRK | 第二轮 PAGE_UXN |
+|---|---|---|
+| 读取点 4 字节 vs 安装文件 | 不同（`d4235b40`） | **相同**（`f9400000`） |
+| 代码页 `Private_Dirty`/`Anonymous` | +4 KiB / +4 KiB，注销后仍在 | **0 / 0，注销后仍 0** |
+| 再 `mmap` 文件比对 | 不一致 | **一致** |
+| 会话前保存的代码哈希 | 变化 | **不变** |
+| 目标页数据读取 | 原生 | 原生（不变） |
+| 独占监视器（目标页/代码页） | 原生 | 原生（代码页读取也不进异常） |
+| `maps`/`smaps`/`pagemap` 存在位 | 不变 | 不变 |
+| 每次业务调用 | 1 次 debug 异常 | 1 次 instruction abort（~230 ns） |
+| 读取点页能否在 EL0 原生取指 | 是 | **否**（唯一的实现事实） |
+
+### 9.6 残余特征与限制（诚实清单）
+
+1. **时间**。每次业务调用一次同步 instruction abort：App 实测
+   `ELIM_TIMING mode=page site_call_ns=227..241`，同一函数未注册时约 2–6 ns；
+   BRK 模式是 219–232 ns，同一量级，不是本模式新增。
+2. **读取点页不在 EL0 原生执行**。普通 App 无法直接观察 PTE 权限，但可以用
+   `perf_event_open`（Android 上普通 App 被 SELinux 限制）统计 EL0 指令数，或用
+   统计式计时发现"该页首次执行比同 VMA 其他页多一次异常"。本矩阵不包含这两项。
+3. **PTE 重新装回时的窗口**。页被回收后，内核先按 VMA 保护装一个可执行 PTE，
+   after-hook 再改回 UXN；在这几微秒里，另一 CPU 上正好执行读取点的线程可能原生
+   执行一次并读到原值。普通 App 触发该路径需要先让页被回收（`madvise` 已被门控，
+   只剩内存压力或 `/proc/self/mem` 类 GUP 安装），再与业务线程抢这个窗口。本矩阵
+   没有观测到，但它是本模式存在的一个非确定性缺口。
+4. **业务路径复现即功能本身**（与第一轮相同）：把已注册的业务包装函数当 reader
+   传给 `ud_observe_reader` 仍得到 MATCH。
+5. **合作模型约束**：单会话、单页、≤4 读取点、≤4 调用窗口、≤32 字节窗口；读取点
+   必须是可执行的私有或共享文件映射；读取点页必须自包含（9.4）；调用窗口基于
+   `x30`。
+6. **映射门控与第一轮相同**：与目标页/读取点页相交的 `mprotect/munmap/mremap/
+   mmap(MAP_FIXED)/madvise` 结束会话，`execve` 结束会话。这本身是"检测者可以让
+   伪值消失"的向量，两轮都存在。
+7. **root 可观察性**：`do_mem_abort` 与 `handle_mm_fault` 的 inline hook、6 个
+   syscall 表项、模块清单和 `ctl0 status` 仍对 root 可见。
+8. **第一轮遗留缺陷的修复**：`s->page = pc & ~(UROV_Y_PAGE - 1)` 里
+   `UROV_Y_PAGE` 是 32 位常数，会把高 32 位地址掩掉；第一轮因此实际上没有恢复
+   读取点页的 PTE 写保护，映射门控也没有匹配到读取点页。本轮改为
+   `page_base()` 并复测。
+
+### 9.7 被否决的替代方案（第二轮新增）
+
+| 方案 | 否决原因 |
+|---|---|
+| 只在业务调用期间打 BRK、结束即写回 | 窗口等于整个业务调用；另一线程循环读代码页几乎必然抓到 |
+| 改 page cache / APK 文件 | APK 自校验、`fs-verity`、升级和"保存过的旧副本"都暴露；clean 页回收后改写丢失 |
+| 把读取点页拆成独立 VMA 再改 `vm_page_prot` | `/proc/self/maps` 多出相邻同权限 VMA 行，是新的确定性特征 |
+| 只 clean `vm_page_prot`、靠 after-hook 修 PTE | 需要 VMA 级保护，会波及同 VMA 其他代码页（首次执行多一次异常），且 `mprotect` 会重算保护 |
+| I/D TLB 不一致（D-TLB 保留旧翻译） | 任何 TLB 维护/迁移/回收都会让数据视图变成 BRK，不可控（§6 已否决） |
+| 用 `/proc/self/smaps`/`pagemap` hook 隐藏 COW 页 | 需要额外 proc hook，且 `mincore`/`madvise`/`fork` 语义仍可交叉验证；不如直接不改字节 |
+
+### 9.8 构建与验证入口
+
+```powershell
+.\kpms\urov-lab\build.ps1              # urov-y.kpm + urov_y_test（含两种模式）
+.\kpms\urov-lab\apps\urov-detect\build.ps1
+python .\kpms\urov-lab\tools\run_elimination_device.py `
+  --serial <SERIAL> --key <KP-SUPERKEY> --repeats 6 --cycles 2
+```
+
+App 模式：`y-active`/`y-hold` 走 BRK 模式（代码页特征阳性对照），
+`z-active`/`z-hold` 走 PAGE_UXN 模式。root 程序：`--mode page|brk`。

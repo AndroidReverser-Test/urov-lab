@@ -1,9 +1,11 @@
 # UROV-X 无密钥检测复核与 App 实测
 
-后续（2026-11-04）：针对本文第 3、4 节两项检测的读取点陷阱变体
-`urov-y` 已完成真机验证，活动页上两项均 0 命中，业务调用窗口仍返回伪值；
-新引入的读取点代码页差异已实测记录。见
-[ELIMINATION_DESIGN.md](ELIMINATION_DESIGN.md) 与
+后续（2026-11-04/05）：针对本文第 3、4 节两项检测的读取点陷阱变体
+`urov-y` 已完成真机验证，活动页上两项均 0 命中，业务调用窗口仍返回伪值。
+第一轮（BRK）引入的"读取点代码页被改写为 BRK、成为私有 COW 页"的新特征，已被
+第二轮的 `PAGE_UXN` 模式消除：活动期间读取点 4 字节与库文件相同、代码页
+`Private_Dirty`/`Anonymous` 均为 0，注销/卸载后无残留；BRK 模式保留为该特征的
+阳性对照。见 [ELIMINATION_DESIGN.md](ELIMINATION_DESIGN.md)（§9）与
 [ELIMINATION_RESULTS.md](ELIMINATION_RESULTS.md)。本文保留为 `urov-x` 的检测记录。
 
 日期：2026-11-04（Asia/Shanghai）。复核对象是 STEALTH_RESULTS.md 的同一个

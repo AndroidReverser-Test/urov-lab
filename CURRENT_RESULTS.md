@@ -10,6 +10,14 @@
 > 变体 `urov-x`（密钥化隐蔽控制通道、读取点绑定、透明映射生命周期、fork 窗口、
 > 未支持指令 fail-safe）。设计与设备矩阵见 [STEALTH_DESIGN.md](STEALTH_DESIGN.md)、
 > [STEALTH_RESULTS.md](STEALTH_RESULTS.md)。原 `urov-lab.kpm` 未改动。
+>
+> 2026-11-05 补充：读取点陷阱变体 `urov-y` 已两轮验收。第一轮把覆盖移到读取点
+> 指令（BRK），KEYLESS 的两项检测归零，但代码页被改写；第二轮新增 `PAGE_UXN`
+> 模式（ABI v5，`mode=2`）：不改一个代码字节，只清 EL0 执行许可，用 instruction
+> abort 在 EL1 模拟读取点，代码页特征也消失（`differs=0`、`Private_Dirty=0`）。
+> 见 [ELIMINATION_DESIGN.md](ELIMINATION_DESIGN.md)（§9）与
+> [ELIMINATION_RESULTS.md](ELIMINATION_RESULTS.md)。原 `urov-x`、`urov-lab.kpm`
+> 未改动。
 
 ## 本次交付
 
