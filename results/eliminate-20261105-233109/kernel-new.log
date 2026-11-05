@@ -1,0 +1,612 @@
+[145940.957829] [mi_disp:_sde_kms_drm_check_dpms [msm_drm]][2026-11-05 23:31:10.202813] [I]conn66 early_trigger:1 (power mode 2->4, fps 120->60) - 0.9(ms)
+[145940.960747] [drm:dsi_display_set_mode [msm_drm]] [msm-dsi-info]: mdp_transfer_time=7300, hactive=1080, vactive=2400, fps=60, clk_rate=832000000
+[145940.961830] [mi_disp:dsi_panel_switch_locked [msm_drm]][2026-11-05 23:31:10.206815] [I]primary panel: DSI_CMD_SET_TIMING_SWITCH
+[145940.967822] [mi_disp:_sde_kms_drm_check_dpms [msm_drm]][2026-11-05 23:31:10.212808] [I]conn66 early_trigger:0 (power mode 2->4, fps 120->60) - 0.3(ms)
+[145941.085300] [mi_disp:_sde_kms_drm_check_dpms [msm_drm]][2026-11-05 23:31:10.330286] [I]conn66 early_trigger:1 (power mode 2->4, fps 60->120) - 0.3(ms)
+[145941.086330] [drm:dsi_display_set_mode [msm_drm]] [msm-dsi-info]: mdp_transfer_time=7300, hactive=1080, vactive=2400, fps=120, clk_rate=832000000
+[145941.086714] [mi_disp:dsi_panel_switch_locked [msm_drm]][2026-11-05 23:31:10.331700] [I]primary panel: DSI_CMD_SET_TIMING_SWITCH
+[145941.091847] [mi_disp:_sde_kms_drm_check_dpms [msm_drm]][2026-11-05 23:31:10.336833] [I]conn66 early_trigger:0 (power mode 2->4, fps 60->120) - 0.3(ms)
+[145941.184133] audit: audit_lost=122051 audit_rate_limit=5 audit_backlog_limit=64
+[145941.184138] audit: rate limit exceeded
+[145942.499052] audit: audit_lost=122078 audit_rate_limit=5 audit_backlog_limit=64
+[145942.499059] audit: rate limit exceeded
+[145942.506416] cnss: Runtime suspend start
+[145942.506467] cnss: Runtime suspend status: -16
+[145942.745549] [+] KP D load_module_path: /data/local/tmp/urov-eliminate-20261105-233109/urov-y.kpm
+[145942.745566] [+] KP D load_module_path: module size: 14de8
+[145942.745619] [+] KP D loading module: 
+[145942.745620] [+] KP D     name: urov-y
+[145942.745621] [+] KP D     version: 2.1.1
+[145942.745622] [+] KP D     license: GPL v2
+[145942.745623] [+] KP D     author: UROV-Y
+[145942.745624] [+] KP D     description: Reader-site trap ARM64 user read overlay: BRK, UXN page trap or AP[1] data trap
+[145942.745640] [+] KP I alloc module size: fef0
+[145942.745645] [+] KP D final section addresses:
+[145942.745646] [+] KP D     .text ffffffde5e200008 90f8
+[145942.745649] [+] KP D     .kpm.info ffffffde5e20a008 a8
+[145942.745650] [+] KP D     .kpm.init ffffffde5e20b008 8
+[145942.745651] [+] KP D     .kpm.ctl0 ffffffde5e20b010 8
+[145942.745652] [+] KP D     .kpm.exit ffffffde5e20b018 8
+[145942.745652] [+] KP D     .rodata.str1.1 ffffffde5e20a0b0 699
+[145942.745653] [+] KP D     .rodata ffffffde5e20a74c 106
+[145942.745654] [+] KP D     .bss ffffffde5e20b048 2350
+[145942.745655] [+] KP D     .symtab ffffffde5e20e008 f00
+[145942.745656] [+] KP D     .strtab ffffffde5e20f75e 79a
+[145942.834073] [+] KP V Wrap func: ffffffd40c27d544, origin: ffffffd40c27d544, replace: ffffffde5df045f0, relocate: ffffffde5df043b8, chain: ffffffde5df04370
+[145942.834078] [+] KP V Wrap chain add: ffffffd40c27d544, ffffffde5e201704, 0 successed
+[145942.834088] [+] KP V Wrap func: ffffffd40c27d544 succsseed
+[145942.834092] [+] KP V Wrap func pointer add: ffffffd40e0b6be0, ffffffde5e2019d8, 0 successed
+[145942.834095] [+] KP V Wrap func pointer add: ffffffd40e0b6db8, ffffffde5e201b4c, 0 successed
+[145942.834097] [+] KP V Wrap func pointer add: ffffffd40e0b6d60, ffffffde5e201b4c, 0 successed
+[145942.834100] [+] KP V Wrap func pointer add: ffffffd40e0b6d68, ffffffde5e201b4c, 0 successed
+[145942.834103] [+] KP V Wrap func pointer add: ffffffd40e0b6d98, ffffffde5e201b4c, 0 successed
+[145942.834106] [+] KP V Wrap func pointer add: ffffffd40e0b6df0, ffffffde5e201b4c, 0 successed
+[145942.834106] [+] KP V Wrap func pointer add: ffffffd40e0b6d90, ffffffde5e201b4c, 0 successed
+[145942.834109] [+] KP V Wrap func pointer add: ffffffd40e0b6d88, ffffffde5e201de0, ffffffde5e20206c successed
+[145942.834112] [+] KP V Wrap func pointer add: ffffffd40e0b7440, ffffffde5e201de0, ffffffde5e20206c successed
+[145942.834114] [+] KP V Wrap func: ffffffd40c2af884, origin: ffffffd40c2af884, replace: ffffffde5df07ae0, relocate: ffffffde5df078a8, chain: ffffffde5df07860
+[145942.834115] [+] KP V Wrap chain add: ffffffd40c2af884, ffffffde5e2022d0, 0 successed
+[145942.834122] [+] KP V Wrap func: ffffffd40c2af884 succsseed
+[145942.834124] [+] KP V Wrap func: ffffffd40c68a898, origin: ffffffd40c68a898, replace: ffffffde5df07fb0, relocate: ffffffde5df07d78, chain: ffffffde5df07d30
+[145942.834125] [+] KP V Wrap chain add: ffffffd40c68a898, 0, ffffffde5e2027a4 successed
+[145942.834127] [+] KP V Wrap func: ffffffd40c68a898 succsseed
+[145942.834127] [+] KP I load_module: [urov-y] succeed with [key=<MODULE-KEY>] 
+[145942.875816] [+] KP I module_control0: name urov-y, args: status
+[145942.875837] [+] KP I module_control0: name: urov-y, rc: 0
+[145942.938653] binder_alloc: 19553: binder_alloc_buf, no vma
+[145942.938663] binder: 2629:6760 transaction failed 29189/-3, size 64-0 line 3101
+[145943.203042] type=1400 audit(1793892672.444:197288): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145943.210832] type=1400 audit(1793892672.452:197289): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145943.219180] type=1400 audit(1793892672.460:197290): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145943.227511] type=1400 audit(1793892672.468:197291): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145943.235409] type=1400 audit(1793892672.476:197292): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145943.269664] logd: logdr: UID=2000 GID=2000 PID=19743 n tail=0 logMask=99 pid=19682 start=0ns deadline=0ns
+[145943.547047] audit: audit_lost=122123 audit_rate_limit=5 audit_backlog_limit=64
+[145943.547064] audit: rate limit exceeded
+[145943.705038] logd: logdr: UID=2000 GID=2000 PID=19754 n tail=0 logMask=99 pid=19682 start=0ns deadline=0ns
+[145943.734731] BATTERY_CHG: handle_message: [ADSP] fg_update_status:: ssoc: 47, rsoc: 45, raw_soc: 4514, vbat: 3849, ibat: 466, temp: 348, ffc: 0, rm: 1749, bf: 3874, bc: 129, client: PdAuthClien, fcc: 5000
+[145944.144959] logd: logdr: UID=2000 GID=2000 PID=19774 n tail=0 logMask=99 pid=19682 start=0ns deadline=0ns
+[145944.286131] type=1400 audit(1793892673.528:197312): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145944.385400] type=1400 audit(1793892673.628:197313): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145944.416789] cnss: Runtime suspend start
+[145944.417114] [kworke][0x6bb5fdce22a][23:31:13.662098] kiwi_v2: [18087:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145944.447432] [kworke][0x6bb5fe5c3f9][23:31:13.692415] kiwi_v2: [18087:I:HIF] hif_try_complete_tasks: waiting for tasklets 1 grp tasklets 0 work 0
+[145944.460161] cnss: Setting MHI state: SUSPEND(6)
+[145944.460181] cnss: Suspending PCI link
+[145944.460186] cnss: Use PCIe DRV suspend
+[145944.464192] cnss: Runtime suspend status: 0
+[145944.550189] audit: audit_lost=122138 audit_rate_limit=5 audit_backlog_limit=64
+[145944.550196] audit: rate limit exceeded
+[145944.776424] binder_alloc: 19682: binder_alloc_buf, no vma
+[145944.776434] binder: 2629:6814 transaction failed 29189/-3, size 64-0 line 3101
+[145944.908723] cnss: Resuming PCI link
+[145944.914068] cnss: Set PCI link status to: 2
+[145944.914085] cnss: Setting MHI state: RESUME(7)
+[145944.932796] cnss: Setting MHI state: SUSPEND(6)
+[145944.932812] cnss: Retry MHI suspend #1
+[145944.939517] cnss: Suspending PCI link
+[145944.939533] cnss: Use PCIe DRV suspend
+[145945.825158] cnss: Runtime resume start
+[145945.825201] cnss: Resuming PCI link
+[145945.830220] cnss: Set PCI link status to: 2
+[145945.830238] cnss: Setting MHI state: RESUME(7)
+[145945.831372] [kworke][0x6bb617b377f][23:31:15.076356] kiwi_v2: [17978:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145945.832981] audit: audit_lost=122164 audit_rate_limit=5 audit_backlog_limit=64
+[145945.832985] audit: rate limit exceeded
+[145945.845514] cnss: Runtime resume status: 0
+[145946.488173] cnss: Runtime suspend start
+[145946.488489] [kworke][0x6bb623bbb4a][23:31:15.733473] kiwi_v2: [17978:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145946.519050] cnss: Setting MHI state: SUSPEND(6)
+[145946.519068] cnss: Suspending PCI link
+[145946.519073] cnss: Use PCIe DRV suspend
+[145946.522937] cnss: Runtime suspend status: 0
+[145946.697238] cnss: Resuming PCI link
+[145946.701965] cnss: Set PCI link status to: 2
+[145946.701984] cnss: Setting MHI state: RESUME(7)
+[145946.721206] cnss: Setting MHI state: SUSPEND(6)
+[145946.721216] cnss: Retry MHI suspend #1
+[145946.728919] cnss: Suspending PCI link
+[145946.728926] cnss: Use PCIe DRV suspend
+[145946.841405] audit: audit_lost=122180 audit_rate_limit=5 audit_backlog_limit=64
+[145946.841412] audit: rate limit exceeded
+[145946.955192] cnss: Resuming PCI link
+[145946.960627] cnss: Set PCI link status to: 2
+[145946.960653] cnss: Setting MHI state: RESUME(7)
+[145946.978275] cnss: Setting MHI state: SUSPEND(6)
+[145946.978294] cnss: Retry MHI suspend #1
+[145946.985960] cnss: Suspending PCI link
+[145946.985976] cnss: Use PCIe DRV suspend
+[145947.070705] [+] KP I module_control0: name urov-y, args: status
+[145947.070750] [+] KP I module_control0: name: urov-y, rc: 0
+[145947.161590] binder_alloc: 19817: binder_alloc_buf, no vma
+[145947.161614] binder: 2629:4517 transaction failed 29189/-3, size 64-0 line 3101
+[145947.848683] cnss: Runtime resume start
+[145947.848724] cnss: Resuming PCI link
+[145947.853796] cnss: Set PCI link status to: 2
+[145947.853816] cnss: Setting MHI state: RESUME(7)
+[145947.857972] [kworke][0x6bb63ccf283][23:31:17.102956] kiwi_v2: [17978:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145947.871368] cnss: Runtime resume status: 0
+[145947.884073] BATTERY_CHG: xm_batt_update_work: batt_update_work: batt_temp:34800 blank_state:0,interval:10,soc:47
+[145947.908325] audit: audit_lost=122207 audit_rate_limit=5 audit_backlog_limit=64
+[145947.908330] audit: rate limit exceeded
+[145948.136305] (virq:irq_count)- 1:435976280 11:230067969 6:85568739 32:29131889 2:24257294 20:16410768 243:11823124 358:10619425 34:9922242 241:8903839 
+[145948.136346] (cpu:irq_count)- 0:181596821 1:159165735 2:160482312 3:119417697 4:86945222 5:54581499 6:57168283 7:68681027 
+[145948.136363] (ipi:irq_count)- 0:435976281 1:24257294 2:0 3:0 4:0 5:85568739 6:0 
+[145948.366591] logd: logdr: UID=2000 GID=2000 PID=20016 n tail=0 logMask=99 pid=19946 start=0ns deadline=0ns
+[145948.413342] type=1400 audit(1793892677.656:197412): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145948.520553] type=1400 audit(1793892677.764:197413): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145948.619743] type=1400 audit(1793892677.860:197414): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145948.718976] type=1400 audit(1793892677.960:197415): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145948.724519] BATTERY_CHG: power_supply_read_temp: batt_thermal temp:348 ,delta:1005 rc=0
+[145948.783479] logd: logdr: UID=2000 GID=2000 PID=20026 n tail=0 logMask=99 pid=19946 start=0ns deadline=0ns
+[145948.818268] type=1400 audit(1793892678.060:197416): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145948.919098] audit: audit_lost=122212 audit_rate_limit=5 audit_backlog_limit=64
+[145948.919105] audit: rate limit exceeded
+[145948.944861] cnss: Runtime suspend start
+[145948.945155] [kworke][0x6bb650b753a][23:31:18.190139] kiwi_v2: [17978:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145948.972592] cnss: Setting MHI state: SUSPEND(6)
+[145948.972609] cnss: Suspending PCI link
+[145948.972613] cnss: Use PCIe DRV suspend
+[145948.976518] cnss: Runtime suspend status: 0
+[145949.004778] cnss: Resuming PCI link
+[145949.008733] cnss: Set PCI link status to: 2
+[145949.008747] cnss: Setting MHI state: RESUME(7)
+[145949.020524] cnss: Setting MHI state: SUSPEND(6)
+[145949.020532] cnss: Retry MHI suspend #1
+[145949.026943] cnss: Suspending PCI link
+[145949.026950] cnss: Use PCIe DRV suspend
+[145949.209569] logd: logdr: UID=2000 GID=2000 PID=20038 n tail=0 logMask=99 pid=19946 start=0ns deadline=0ns
+[145949.404737] [+] KP I module_control0: name urov-y, args: status
+[145949.404774] [+] KP I module_control0: name: urov-y, rc: 0
+[145949.452620] type=1400 audit(1793892678.696:197439): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145949.498536] binder_alloc: 19946: binder_alloc_buf, no vma
+[145949.498561] binder: 2629:5174 transaction failed 29189/-3, size 64-0 line 3101
+[145949.646332] type=1400 audit(1793892678.888:197440): avc: denied { read } for comm="perf-hal-servic" name="cmdline" dev="proc" ino=34499958 scontext=u:r:vendor_hal_perf_default:s0 tcontext=u:r:hal_graphics_composer_default:s0 tclass=file permissive=0
+[145949.734647] cnss: Resuming PCI link
+[145949.739188] cnss: Set PCI link status to: 2
+[145949.739211] cnss: Setting MHI state: RESUME(7)
+[145949.758983] cnss: Setting MHI state: SUSPEND(6)
+[145949.758998] cnss: Retry MHI suspend #1
+[145949.766567] cnss: Suspending PCI link
+[145949.766579] cnss: Use PCIe DRV suspend
+[145949.875198] cnss: Runtime resume start
+[145949.875243] cnss: Resuming PCI link
+[145949.879940] cnss: Set PCI link status to: 2
+[145949.879962] cnss: Setting MHI state: RESUME(7)
+[145949.884292] [kworke][0x6bb661e988a][23:31:19.129276] kiwi_v2: [17978:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145949.898396] cnss: Runtime resume status: 0
+[145949.934811] audit: audit_lost=122248 audit_rate_limit=5 audit_backlog_limit=64
+[145949.934818] audit: rate limit exceeded
+[145950.640377] cnss: Runtime suspend start
+[145950.640709] [kworke][0x6bb66fc33c5][23:31:19.885692] kiwi_v2: [17978:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145950.680328] [kworke][0x6bb6707cf3e][23:31:19.925312] kiwi_v2: [17978:I:HIF] hif_try_complete_tasks: waiting for tasklets 1 grp tasklets 0 work 0
+[145950.696204] cnss: Setting MHI state: SUSPEND(6)
+[145950.696227] cnss: Suspending PCI link
+[145950.696232] cnss: Use PCIe DRV suspend
+[145950.700322] cnss: Runtime suspend status: 0
+[145951.043608] cnss: Resuming PCI link
+[145951.048476] cnss: Set PCI link status to: 2
+[145951.048494] cnss: Setting MHI state: RESUME(7)
+[145951.051304] audit: audit_lost=122256 audit_rate_limit=5 audit_backlog_limit=64
+[145951.051307] audit: rate limit exceeded
+[145951.067423] cnss: Setting MHI state: SUSPEND(6)
+[145951.067432] cnss: Retry MHI suspend #1
+[145951.074090] cnss: Suspending PCI link
+[145951.074099] cnss: Use PCIe DRV suspend
+[145951.904001] cnss: Runtime resume start
+[145951.904091] cnss: Resuming PCI link
+[145951.910225] cnss: Set PCI link status to: 2
+[145951.910274] cnss: Setting MHI state: RESUME(7)
+[145951.915146] [kworke][0x6bb6871922b][23:31:21.160125] kiwi_v2: [17472:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145951.934401] cnss: Runtime resume status: 0
+[145952.081422] audit: audit_lost=122272 audit_rate_limit=5 audit_backlog_limit=64
+[145952.081446] audit: rate limit exceeded
+[145952.236972] [+] KP I module_control0: name urov-y, args: status
+[145952.237012] [+] KP I module_control0: name: urov-y, rc: 0
+[145952.323349] binder: undelivered transaction 164500205, process died.
+[145952.716193] cnss: Runtime suspend start
+[145952.716282] cnss: Runtime suspend status: -16
+[145953.143782] audit: audit_lost=122304 audit_rate_limit=5 audit_backlog_limit=64
+[145953.143789] audit: rate limit exceeded
+[145953.527809] logd: logdr: UID=2000 GID=2000 PID=20321 n tail=0 logMask=99 pid=20209 start=0ns deadline=0ns
+[145953.656793] type=1400 audit(1793892682.900:197534): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145953.720164] cnss: Runtime suspend start
+[145953.720462] [kworke][0x6bb6a827949][23:31:22.965446] kiwi_v2: [18087:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145953.750916] cnss: Setting MHI state: SUSPEND(6)
+[145953.750933] cnss: Suspending PCI link
+[145953.750937] cnss: Use PCIe DRV suspend
+[145953.754830] cnss: Runtime suspend status: 0
+[145953.755882] type=1400 audit(1793892682.996:197535): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145953.788420] BATTERY_CHG: handle_message: [ADSP] fg_update_status:: ssoc: 47, rsoc: 45, raw_soc: 4512, vbat: 3878, ibat: 556, temp: 350, ffc: 0, rm: 1748, bf: 3874, bc: 129, client: PdAuthClien, fcc: 5000
+[145953.863615] type=1400 audit(1793892683.104:197536): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145953.884522] healthd: battery l=47 v=3878 t=35.0 h=2 st=2 c=556000 chg=u
+[145953.884562] healthd: battery l=47 v=3878 t=35.0 h=2 st=2 c=556000 chg=u
+[145953.909328] healthd: battery l=47 v=3878 t=35.0 h=2 st=2 c=556000 chg=u
+[145953.939562] cnss: Runtime resume start
+[145953.939596] cnss: Resuming PCI link
+[145953.944446] cnss: Set PCI link status to: 2
+[145953.944465] cnss: Setting MHI state: RESUME(7)
+[145953.948563] [kworke][0x6bb6ac54cc9][23:31:23.193546] kiwi_v2: [18087:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145953.961698] cnss: Runtime resume status: 0
+[145953.962985] type=1400 audit(1793892683.204:197537): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145953.968709] logd: logdr: UID=2000 GID=2000 PID=20334 n tail=0 logMask=99 pid=20209 start=0ns deadline=0ns
+[145954.062417] type=1400 audit(1793892683.304:197538): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[145954.162379] audit: audit_lost=122309 audit_rate_limit=5 audit_backlog_limit=64
+[145954.162385] audit: rate limit exceeded
+[145954.408508] logd: logdr: UID=2000 GID=2000 PID=20349 n tail=0 logMask=99 pid=20209 start=0ns deadline=0ns
+[145954.622107] [+] KP I module_control0: name urov-y, args: status
+[145954.622156] [+] KP I module_control0: name: urov-y, rc: 0
+[145954.700072] cnss: Runtime suspend start
+[145954.700493] [kworke][0x6bb6ba19790][23:31:23.945476] kiwi_v2: [18087:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145954.707148] binder_alloc: 20209: binder_alloc_buf, no vma
+[145954.707161] binder: 2629:6726 transaction failed 29189/-3, size 64-0 line 3101
+[145954.732766] cnss: Setting MHI state: SUSPEND(6)
+[145954.732796] cnss: Suspending PCI link
+[145954.732802] cnss: Use PCIe DRV suspend
+[145954.736275] cnss: Runtime suspend status: 0
+[145954.746059] [irq][0x6bb6baef0bc][23:31:23.991039] kiwi_v2: [0:I:HIF] hif_wake_interrupt_handler: wake interrupt received on irq 336
+[145954.746129] cnss: Runtime resume start
+[145954.746159] cnss: Resuming PCI link
+[145954.747607] cnss: Set PCI link status to: 2
+[145954.747624] cnss: Setting MHI state: RESUME(7)
+[145954.748297] [kworke][0x6bb6baf98de][23:31:23.993280] kiwi_v2: [17472:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145954.755271] [soft_i][0x6bb6bb1a3b3][23:31:24.000252] kiwi_v2: [0:I:WMA] WLAN triggered wakeup: PATTERN_MATCH_FOUND (9), vdev: 0 (STA)
+[145954.755429] [soft_i][0x6bb6bb1afd0][23:31:24.000413] kiwi_v2: [0:I:WMA] wma_wake_event_packet: Wake event packet:
+[145954.755438] [soft_i][0x6bb6bb1b082][23:31:24.000422] kiwi_v2: [0:I:WMA] 00000000: 2a 8e 81 e6 75 01 4c b7 e0 6b b9 9f 08 00 45 9c
+[145954.755444] [soft_i][0x6bb6bb1b0f8][23:31:24.000428] kiwi_v2: [0:I:WMA] 00000010: 02 50 a4 90 40 00 35 06 e0 a3 78 f1 82 d8 c0 a8
+[145954.755497] [soft_i][0x6bb6bb1b16e][23:31:24.000435] kiwi_v2: [0:I:WMA] 00000020: 01 66 01 bb 93 0e cb d4 41 58 64 4a 76 c0 50 18
+[145954.755505] [soft_i][0x6bb6bb1b58a][23:31:24.000489] kiwi_v2: [0:I:WMA] 00000030: 00 fb f2 11 00 00 00 00 02 28 00 00 00 0c 01 00
+[145954.755511] [soft_i][0x6bb6bb1b605][23:31:24.000496] kiwi_v2: [0:I:WMA] 00000040: 00 00 00 0e 33 31 38 39 36 34 39 37 36 39 36 7f
+[145954.755517] [soft_i][0x6bb6bb1b67d][23:31:24.000502] kiwi_v2: [0:I:WMA] 00000050: dd 42 f8 0a 39 da c0 e3 d8 73 fc 16 0e 6a 7c 1c
+[145954.755524] [soft_i][0x6bb6bb1b6ef][23:31:24.000508] kiwi_v2: [0:I:WMA] 00000060: 40 b7 8c 12 9d 9d 78 d6 2a cf 83 76 38 d0 2b 74
+[145954.755529] [soft_i][0x6bb6bb1b760][23:31:24.000514] kiwi_v2: [0:I:WMA] 00000070: 5c 63 59 c5 33 94 09 0e 46 db 2b a1 96 aa 01 4b
+[145954.755535] [soft_i][0x6bb6bb1b7cf][23:31:24.000520] kiwi_v2: [0:I:WMA] 00000080: b4 1e d6 d8 24 9c a1 86 ef 9f 80 e7 86 4e c1 6d
+[145954.755541] [soft_i][0x6bb6bb1b83f][23:31:24.000525] kiwi_v2: [0:I:WMA] 00000090: f6 4b c1 6f
+[145954.755577] [soft_i][0x6bb6bb1baf4][23:31:24.000562] kiwi_v2: [0:I:WMA] wma_log_pkt_ipv4: Pkt_len: 592, src_port: 443, dst_port: 37646
+[145954.756733] cnss: Runtime resume status: 0
+[145954.858616] type=1400 audit(1793892684.100:197561): avc: denied { read } for comm="perf-hal-servic" name="cmdline" dev="proc" ino=34499958 scontext=u:r:vendor_hal_perf_default:s0 tcontext=u:r:hal_graphics_composer_default:s0 tclass=file permissive=0
+[145954.858742] type=1400 audit(1793892684.100:197562): avc: denied { read } for comm="perf-hal-servic" name="comm" dev="proc" ino=34499959 scontext=u:r:vendor_hal_perf_default:s0 tcontext=u:r:hal_graphics_composer_default:s0 tclass=file permissive=0
+[145955.217551] audit: audit_lost=122345 audit_rate_limit=5 audit_backlog_limit=64
+[145955.217567] audit: rate limit exceeded
+[145955.752536] cnss: Runtime suspend start
+[145955.752607] cnss: Runtime suspend status: -16
+[145956.369364] audit: audit_lost=122353 audit_rate_limit=5 audit_backlog_limit=64
+[145956.369371] audit: rate limit exceeded
+[145957.379406] audit: audit_lost=122367 audit_rate_limit=5 audit_backlog_limit=64
+[145957.379418] audit: rate limit exceeded
+[145958.118569] [+] KP I module_control0: name urov-y, args: status
+[145958.118627] [+] KP I module_control0: name: urov-y, rc: 0
+[145958.124937] BATTERY_CHG: xm_batt_update_work: batt_update_work: batt_temp:35000 blank_state:0,interval:10,soc:47
+[145958.185043] binder_alloc: 20402: binder_alloc_buf, no vma
+[145958.185054] binder: 2629:6758 transaction failed 29189/-3, size 64-0 line 3101
+[145958.221765] BATTERY_CHG: power_supply_read_temp: batt_thermal temp:350 ,delta:435 rc=0
+[145958.476329] audit: audit_lost=122382 audit_rate_limit=5 audit_backlog_limit=64
+[145958.476342] audit: rate limit exceeded
+[145958.600149] logd: logdr: UID=2000 GID=2000 PID=20853 n tail=0 logMask=99 pid=20802 start=0ns deadline=0ns
+[145958.908578] type=1400 audit(1793892688.152:197653): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=tv.danmaku.bili
+[145959.007547] type=1400 audit(1793892688.248:197654): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=tv.danmaku.bili
+[145959.040544] logd: logdr: UID=2000 GID=2000 PID=20861 n tail=0 logMask=99 pid=20802 start=0ns deadline=0ns
+[145959.107267] type=1400 audit(1793892688.348:197655): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=tv.danmaku.bili
+[145959.206335] type=1400 audit(1793892688.448:197656): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=tv.danmaku.bili
+[145959.305897] type=1400 audit(1793892688.548:197657): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=tv.danmaku.bili
+[145959.465315] logd: logdr: UID=2000 GID=2000 PID=20874 n tail=0 logMask=99 pid=20802 start=0ns deadline=0ns
+[145959.512055] audit: audit_lost=122404 audit_rate_limit=5 audit_backlog_limit=64
+[145959.512061] audit: rate limit exceeded
+[145959.890291] logd: logdr: UID=2000 GID=2000 PID=20893 n tail=0 logMask=99 pid=20802 start=0ns deadline=0ns
+[145960.009811] type=1400 audit(1793892689.252:197664): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=tv.danmaku.bili
+[145960.522469] audit: audit_lost=122409 audit_rate_limit=5 audit_backlog_limit=64
+[145960.522480] audit: rate limit exceeded
+[145960.965655] [+] KP I module_control0: name urov-y, args: status
+[145960.965714] [+] KP I module_control0: name: urov-y, rc: 0
+[145961.037899] binder_alloc: 20802: binder_alloc_buf, no vma
+[145961.037915] binder: 2629:2647 transaction failed 29189/-3, size 64-0 line 3101
+[145961.571623] audit: audit_lost=122445 audit_rate_limit=5 audit_backlog_limit=64
+[145961.571629] audit: rate limit exceeded
+[145961.710501] cnss: Runtime suspend start
+[145961.710666] [kworke][0x6bb73a75abd][23:31:30.955652] kiwi_v2: [16905:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145961.739893] cnss: Setting MHI state: SUSPEND(6)
+[145961.739910] cnss: Suspending PCI link
+[145961.739912] cnss: Use PCIe DRV suspend
+[145961.743801] cnss: Runtime suspend status: 0
+[145961.803883] cnss: Resuming PCI link
+[145961.808016] cnss: Set PCI link status to: 2
+[145961.808037] cnss: Setting MHI state: RESUME(7)
+[145961.820244] cnss: Setting MHI state: SUSPEND(6)
+[145961.826384] cnss: Suspending PCI link
+[145961.826392] cnss: Use PCIe DRV suspend
+[145961.857461] cnss: Runtime resume start
+[145961.857506] cnss: Resuming PCI link
+[145961.862031] cnss: Set PCI link status to: 2
+[145961.862052] cnss: Setting MHI state: RESUME(7)
+[145961.866184] [kworke][0x6bb73d4ea71][23:31:31.111168] kiwi_v2: [14460:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145961.881267] cnss: Runtime resume status: 0
+[145962.400992] [+] KP I module_control0: name urov-y, args: status
+[145962.401022] [+] KP I module_control0: name: urov-y, rc: 0
+[145962.434799] [-] KP E unload_module: name: urov-y
+[145962.434826] [+] KP V Wrap func pointer remove: ffffffd40e0b6db8, ffffffde5e201b4c, 0
+[145962.434831] [+] KP V Unwrap func pointer: ffffffd40e0b6db8, ffffffde5e201b4c, 0
+[145962.434833] [+] KP V Wrap func pointer remove: ffffffd40e0b6d60, ffffffde5e201b4c, 0
+[145962.434835] [+] KP V Unwrap func pointer: ffffffd40e0b6d60, ffffffde5e201b4c, 0
+[145962.434836] [+] KP V Wrap func pointer remove: ffffffd40e0b6d68, ffffffde5e201b4c, 0
+[145962.434839] [+] KP V Unwrap func pointer: ffffffd40e0b6d68, ffffffde5e201b4c, 0
+[145962.434840] [+] KP V Wrap func pointer remove: ffffffd40e0b6d98, ffffffde5e201b4c, 0
+[145962.434843] [+] KP V Unwrap func pointer: ffffffd40e0b6d98, ffffffde5e201b4c, 0
+[145962.434844] [+] KP V Wrap func pointer remove: ffffffd40e0b6df0, ffffffde5e201b4c, 0
+[145962.434846] [+] KP V Unwrap func pointer: ffffffd40e0b6df0, ffffffde5e201b4c, 0
+[145962.434847] [+] KP V Wrap func pointer remove: ffffffd40e0b6d90, ffffffde5e201b4c, 0
+[145962.434848] [+] KP V Wrap func pointer remove: ffffffd40e0b6be0, ffffffde5e2019d8, 0
+[145962.434850] [+] KP V Unwrap func pointer: ffffffd40e0b6be0, ffffffde5e2019d8, 0
+[145962.434852] [+] KP V Wrap func pointer remove: ffffffd40e0b7440, ffffffde5e201de0, ffffffde5e20206c
+[145962.434854] [+] KP V Unwrap func pointer: ffffffd40e0b7440, ffffffde5e201de0, ffffffde5e20206c
+[145962.434855] [+] KP V Wrap func pointer remove: ffffffd40e0b6d88, ffffffde5e201de0, ffffffde5e20206c
+[145962.434858] [+] KP V Unwrap func pointer: ffffffd40e0b6d88, ffffffde5e201de0, ffffffde5e20206c
+[145962.434860] [+] KP V Wrap chain remove: ffffffd40c27d544, ffffffde5e201704, 0
+[145962.434867] [+] KP V Unwrap func: ffffffd40c27d544
+[145962.434868] [+] KP V Wrap chain remove: ffffffd40c2af884, ffffffde5e2022d0, 0
+[145962.434876] [+] KP V Unwrap func: ffffffd40c2af884
+[145962.434877] [+] KP V Wrap chain remove: ffffffd40c68a898, 0, ffffffde5e2027a4
+[145962.434880] [+] KP V Unwrap func: ffffffd40c68a898
+[145962.434901] [+] KP I unload_module: name: urov-y, rc: 0
+[145962.572561] audit: audit_lost=122471 audit_rate_limit=5 audit_backlog_limit=64
+[145962.572568] audit: rate limit exceeded
+[145962.717041] [+] KP D load_module_path: /data/local/tmp/urov-eliminate-20261105-233109/urov-y.kpm
+[145962.717077] [+] KP D load_module_path: module size: 14de8
+[145962.717165] [+] KP D loading module: 
+[145962.717167] [+] KP D     name: urov-y
+[145962.717169] [+] KP D     version: 2.1.1
+[145962.717172] [+] KP D     license: GPL v2
+[145962.717174] [+] KP D     author: UROV-Y
+[145962.717176] [+] KP D     description: Reader-site trap ARM64 user read overlay: BRK, UXN page trap or AP[1] data trap
+[145962.717200] [+] KP I alloc module size: fef0
+[145962.717206] [+] KP D final section addresses:
+[145962.717208] [+] KP D     .text ffffffde5e200008 90f8
+[145962.717216] [+] KP D     .kpm.info ffffffde5e20a008 a8
+[145962.717219] [+] KP D     .kpm.init ffffffde5e20b008 8
+[145962.717222] [+] KP D     .kpm.ctl0 ffffffde5e20b010 8
+[145962.717225] [+] KP D     .kpm.exit ffffffde5e20b018 8
+[145962.717228] [+] KP D     .rodata.str1.1 ffffffde5e20a0b0 699
+[145962.717231] [+] KP D     .rodata ffffffde5e20a74c 106
+[145962.717234] [+] KP D     .bss ffffffde5e20b048 2350
+[145962.717236] [+] KP D     .symtab ffffffde5e20e008 f00
+[145962.717243] [+] KP D     .strtab ffffffde5e20f75e 79a
+[145962.808390] [+] KP V Wrap func: ffffffd40c27d544, origin: ffffffd40c27d544, replace: ffffffde5df045f0, relocate: ffffffde5df043b8, chain: ffffffde5df04370
+[145962.808396] [+] KP V Wrap chain add: ffffffd40c27d544, ffffffde5e201704, 0 successed
+[145962.808403] [+] KP V Wrap func: ffffffd40c27d544 succsseed
+[145962.808407] [+] KP V Wrap func pointer add: ffffffd40e0b6be0, ffffffde5e2019d8, 0 successed
+[145962.808410] [+] KP V Wrap func pointer add: ffffffd40e0b6db8, ffffffde5e201b4c, 0 successed
+[145962.808412] [+] KP V Wrap func pointer add: ffffffd40e0b6d60, ffffffde5e201b4c, 0 successed
+[145962.808415] [+] KP V Wrap func pointer add: ffffffd40e0b6d68, ffffffde5e201b4c, 0 successed
+[145962.808418] [+] KP V Wrap func pointer add: ffffffd40e0b6d98, ffffffde5e201b4c, 0 successed
+[145962.808420] [+] KP V Wrap func pointer add: ffffffd40e0b6df0, ffffffde5e201b4c, 0 successed
+[145962.808421] [+] KP V Wrap func pointer add: ffffffd40e0b6d90, ffffffde5e201b4c, 0 successed
+[145962.808424] [+] KP V Wrap func pointer add: ffffffd40e0b6d88, ffffffde5e201de0, ffffffde5e20206c successed
+[145962.808427] [+] KP V Wrap func pointer add: ffffffd40e0b7440, ffffffde5e201de0, ffffffde5e20206c successed
+[145962.808428] [+] KP V Wrap func: ffffffd40c2af884, origin: ffffffd40c2af884, replace: ffffffde5df07ae0, relocate: ffffffde5df078a8, chain: ffffffde5df07860
+[145962.808429] [+] KP V Wrap chain add: ffffffd40c2af884, ffffffde5e2022d0, 0 successed
+[145962.808435] [+] KP V Wrap func: ffffffd40c2af884 succsseed
+[145962.808436] [+] KP V Wrap func: ffffffd40c68a898, origin: ffffffd40c68a898, replace: ffffffde5df07fb0, relocate: ffffffde5df07d78, chain: ffffffde5df07d30
+[145962.808437] [+] KP V Wrap chain add: ffffffd40c68a898, 0, ffffffde5e2027a4 successed
+[145962.808439] [+] KP V Wrap func: ffffffd40c68a898 succsseed
+[145962.808440] [+] KP I load_module: [urov-y] succeed with [key=<MODULE-KEY>] 
+[145962.874238] binder_alloc: 20955: binder_alloc_buf, no vma
+[145962.874249] binder: 2629:2647 transaction failed 29189/-3, size 64-0 line 3101
+[145963.240554] (virq:irq_count)- 1:436041437 11:230101752 6:85585380 32:29139106 2:24262174 20:16413682 243:11825513 358:10620087 34:9922770 241:8905492 
+[145963.240591] (cpu:irq_count)- 0:181618295 1:159180451 2:160502707 3:119435557 4:86960441 5:54595938 6:57186047 7:68698005 
+[145963.240608] (ipi:irq_count)- 0:436041438 1:24262175 2:0 3:0 4:0 5:85585380 6:0 
+[145963.630698] audit: audit_lost=122508 audit_rate_limit=5 audit_backlog_limit=64
+[145963.630705] audit: rate limit exceeded
+[145963.655553] logd: logdr: UID=2000 GID=2000 PID=21146 n tail=0 logMask=99 pid=21090 start=0ns deadline=0ns
+[145963.764806] cnss: Runtime suspend start
+[145963.765146] [kworke][0x6bb76014094][23:31:33.010130] kiwi_v2: [14460:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145963.794345] cnss: Setting MHI state: SUSPEND(6)
+[145963.794429] cnss: Suspending PCI link
+[145963.794435] cnss: Use PCIe DRV suspend
+[145963.798254] cnss: Runtime suspend status: 0
+[145963.842704] BATTERY_CHG: handle_message: [ADSP] fg_update_status:: ssoc: 46, rsoc: 45, raw_soc: 4506, vbat: 3873, ibat: 546, temp: 351, ffc: 0, rm: 1746, bf: 3874, bc: 129, client: PdAuthClien, fcc: 5000
+[145963.937897] healthd: battery l=46 v=3873 t=35.1 h=2 st=2 c=546000 chg=u
+[145963.937941] healthd: battery l=46 v=3873 t=35.1 h=2 st=2 c=546000 chg=u
+[145963.961085] healthd: battery l=46 v=3873 t=35.1 h=2 st=2 c=546000 chg=u
+[145963.987533] cnss: Runtime resume start
+[145963.987699] cnss: Resuming PCI link
+[145963.992589] cnss: Set PCI link status to: 2
+[145963.992610] cnss: Setting MHI state: RESUME(7)
+[145963.996955] [kworke][0x6bb76452a44][23:31:33.241939] kiwi_v2: [17472:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145964.010132] cnss: Runtime resume status: 0
+[145964.090797] logd: logdr: UID=2000 GID=2000 PID=21157 n tail=0 logMask=99 pid=21090 start=0ns deadline=0ns
+[145964.234903] type=1400 audit(1793892693.476:197789): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c60,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0
+[145964.263291] type=1400 audit(1793892693.504:197790): avc: denied { search } for comm="kpatch" name="nativetest" dev="dm-44" ino=9 scontext=u:r:shell:s0 tcontext=u:object_r:nativetest_data_file:s0 tclass=dir permissive=0
+[145964.263448] type=1400 audit(1793892693.504:197791): avc: denied { search } for comm="kpatch" name="nativetest64" dev="dm-44" ino=10 scontext=u:r:shell:s0 tcontext=u:object_r:nativetest_data_file:s0 tclass=dir permissive=0
+[145964.263510] type=1400 audit(1793892693.504:197792): avc: denied { search } for comm="kpatch" name="nativetest" dev="dm-44" ino=9 scontext=u:r:shell:s0 tcontext=u:object_r:nativetest_data_file:s0 tclass=dir permissive=0
+[145964.263591] type=1400 audit(1793892693.504:197793): avc: denied { search } for comm="kpatch" name="nativetest64" dev="dm-44" ino=10 scontext=u:r:shell:s0 tcontext=u:object_r:nativetest_data_file:s0 tclass=dir permissive=0
+[145964.266551] [+] KP I module_control0: name urov-y, args: status
+[145964.266567] [+] KP I module_control0: name: urov-y, rc: 0
+[145964.639647] audit: audit_lost=122544 audit_rate_limit=5 audit_backlog_limit=64
+[145964.639654] audit: rate limit exceeded
+[145964.647941] logd: logdr: UID=2000 GID=2000 PID=21236 n tail=0 logMask=99 pid=21183 start=0ns deadline=0ns
+[145965.087678] logd: logdr: UID=2000 GID=2000 PID=21247 n tail=0 logMask=99 pid=21183 start=0ns deadline=0ns
+[145965.260702] type=1400 audit(1793892694.504:197841): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c61,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovobserver
+[145965.764872] audit: audit_lost=122561 audit_rate_limit=5 audit_backlog_limit=64
+[145965.764879] audit: rate limit exceeded
+[145966.121384] [+] KP I module_control0: name urov-y, args: status
+[145966.121414] [+] KP I module_control0: name: urov-y, rc: 0
+[145966.152073] [-] KP E unload_module: name: urov-y
+[145966.152082] [+] KP V Wrap func pointer remove: ffffffd40e0b6db8, ffffffde5e201b4c, 0
+[145966.152086] [+] KP V Unwrap func pointer: ffffffd40e0b6db8, ffffffde5e201b4c, 0
+[145966.152087] [+] KP V Wrap func pointer remove: ffffffd40e0b6d60, ffffffde5e201b4c, 0
+[145966.152090] [+] KP V Unwrap func pointer: ffffffd40e0b6d60, ffffffde5e201b4c, 0
+[145966.152091] [+] KP V Wrap func pointer remove: ffffffd40e0b6d68, ffffffde5e201b4c, 0
+[145966.152117] [+] KP V Unwrap func pointer: ffffffd40e0b6d68, ffffffde5e201b4c, 0
+[145966.152118] [+] KP V Wrap func pointer remove: ffffffd40e0b6d98, ffffffde5e201b4c, 0
+[145966.152120] [+] KP V Unwrap func pointer: ffffffd40e0b6d98, ffffffde5e201b4c, 0
+[145966.152120] [+] KP V Wrap func pointer remove: ffffffd40e0b6df0, ffffffde5e201b4c, 0
+[145966.152122] [+] KP V Unwrap func pointer: ffffffd40e0b6df0, ffffffde5e201b4c, 0
+[145966.152123] [+] KP V Wrap func pointer remove: ffffffd40e0b6d90, ffffffde5e201b4c, 0
+[145966.152123] [+] KP V Wrap func pointer remove: ffffffd40e0b6be0, ffffffde5e2019d8, 0
+[145966.152125] [+] KP V Unwrap func pointer: ffffffd40e0b6be0, ffffffde5e2019d8, 0
+[145966.152126] [+] KP V Wrap func pointer remove: ffffffd40e0b7440, ffffffde5e201de0, ffffffde5e20206c
+[145966.152135] [+] KP V Unwrap func pointer: ffffffd40e0b7440, ffffffde5e201de0, ffffffde5e20206c
+[145966.152136] [+] KP V Wrap func pointer remove: ffffffd40e0b6d88, ffffffde5e201de0, ffffffde5e20206c
+[145966.152138] [+] KP V Unwrap func pointer: ffffffd40e0b6d88, ffffffde5e201de0, ffffffde5e20206c
+[145966.152139] [+] KP V Wrap chain remove: ffffffd40c27d544, ffffffde5e201704, 0
+[145966.152149] [+] KP V Unwrap func: ffffffd40c27d544
+[145966.152149] [+] KP V Wrap chain remove: ffffffd40c2af884, ffffffde5e2022d0, 0
+[145966.152156] [+] KP V Unwrap func: ffffffd40c2af884
+[145966.152157] [+] KP V Wrap chain remove: ffffffd40c68a898, 0, ffffffde5e2027a4
+[145966.152159] [+] KP V Unwrap func: ffffffd40c68a898
+[145966.152171] [+] KP I unload_module: name: urov-y, rc: 0
+[145966.810567] audit: audit_lost=122595 audit_rate_limit=5 audit_backlog_limit=64
+[145966.810592] audit: rate limit exceeded
+[145966.832802] cnss: Runtime suspend start
+[145966.833477] [kworke][0x6bb79842d30][23:31:36.078458] kiwi_v2: [5853:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145966.866440] [kworke][0x6bb798dd55b][23:31:36.111420] kiwi_v2: [5853:I:HIF] hif_try_complete_tasks: waiting for tasklets 1 grp tasklets 0 work 0
+[145966.880301] cnss: Setting MHI state: SUSPEND(6)
+[145966.880366] cnss: Suspending PCI link
+[145966.880382] cnss: Use PCIe DRV suspend
+[145966.895439] cnss: Runtime suspend status: 0
+[145966.909179] [+] KP D load_module_path: /data/local/tmp/urov-eliminate-20261105-233109/urov-y.kpm
+[145966.909197] [+] KP D load_module_path: module size: 14de8
+[145966.909272] [+] KP D loading module: 
+[145966.909273] [+] KP D     name: urov-y
+[145966.909274] [+] KP D     version: 2.1.1
+[145966.909275] [+] KP D     license: GPL v2
+[145966.909276] [+] KP D     author: UROV-Y
+[145966.909277] [+] KP D     description: Reader-site trap ARM64 user read overlay: BRK, UXN page trap or AP[1] data trap
+[145966.909293] [+] KP I alloc module size: fef0
+[145966.909299] [+] KP D final section addresses:
+[145966.909300] [+] KP D     .text ffffffde5e200008 90f8
+[145966.909303] [+] KP D     .kpm.info ffffffde5e20a008 a8
+[145966.909304] [+] KP D     .kpm.init ffffffde5e20b008 8
+[145966.909306] [+] KP D     .kpm.ctl0 ffffffde5e20b010 8
+[145966.909306] [+] KP D     .kpm.exit ffffffde5e20b018 8
+[145966.909307] [+] KP D     .rodata.str1.1 ffffffde5e20a0b0 699
+[145966.909308] [+] KP D     .rodata ffffffde5e20a74c 106
+[145966.909309] [+] KP D     .bss ffffffde5e20b048 2350
+[145966.909310] [+] KP D     .symtab ffffffde5e20e008 f00
+[145966.909311] [+] KP D     .strtab ffffffde5e20f75e 79a
+[145967.021239] [+] KP V Wrap func: ffffffd40c27d544, origin: ffffffd40c27d544, replace: ffffffde5df045f0, relocate: ffffffde5df043b8, chain: ffffffde5df04370
+[145967.021248] [+] KP V Wrap chain add: ffffffd40c27d544, ffffffde5e201704, 0 successed
+[145967.021262] [+] KP V Wrap func: ffffffd40c27d544 succsseed
+[145967.021269] [+] KP V Wrap func pointer add: ffffffd40e0b6be0, ffffffde5e2019d8, 0 successed
+[145967.021274] [+] KP V Wrap func pointer add: ffffffd40e0b6db8, ffffffde5e201b4c, 0 successed
+[145967.021279] [+] KP V Wrap func pointer add: ffffffd40e0b6d60, ffffffde5e201b4c, 0 successed
+[145967.021284] [+] KP V Wrap func pointer add: ffffffd40e0b6d68, ffffffde5e201b4c, 0 successed
+[145967.021289] [+] KP V Wrap func pointer add: ffffffd40e0b6d98, ffffffde5e201b4c, 0 successed
+[145967.021294] [+] KP V Wrap func pointer add: ffffffd40e0b6df0, ffffffde5e201b4c, 0 successed
+[145967.021296] [+] KP V Wrap func pointer add: ffffffd40e0b6d90, ffffffde5e201b4c, 0 successed
+[145967.021300] [+] KP V Wrap func pointer add: ffffffd40e0b6d88, ffffffde5e201de0, ffffffde5e20206c successed
+[145967.021314] [+] KP V Wrap func pointer add: ffffffd40e0b7440, ffffffde5e201de0, ffffffde5e20206c successed
+[145967.021316] [+] KP V Wrap func: ffffffd40c2af884, origin: ffffffd40c2af884, replace: ffffffde5df07ae0, relocate: ffffffde5df078a8, chain: ffffffde5df07860
+[145967.021318] [+] KP V Wrap chain add: ffffffd40c2af884, ffffffde5e2022d0, 0 successed
+[145967.021333] [+] KP V Wrap func: ffffffd40c2af884 succsseed
+[145967.021335] [+] KP V Wrap func: ffffffd40c68a898, origin: ffffffd40c68a898, replace: ffffffde5df07fb0, relocate: ffffffde5df07d78, chain: ffffffde5df07d30
+[145967.021337] [+] KP V Wrap chain add: ffffffd40c68a898, 0, ffffffde5e2027a4 successed
+[145967.021340] [+] KP V Wrap func: ffffffd40c68a898 succsseed
+[145967.021342] [+] KP I load_module: [urov-y] succeed with [key=<MODULE-KEY>] 
+[145967.258594] cnss: Resuming PCI link
+[145967.263353] cnss: Set PCI link status to: 2
+[145967.263380] cnss: Setting MHI state: RESUME(7)
+[145967.282520] cnss: Setting MHI state: SUSPEND(6)
+[145967.282534] cnss: Retry MHI suspend #1
+[145967.289226] cnss: Suspending PCI link
+[145967.289240] cnss: Use PCIe DRV suspend
+[145967.832014] audit: audit_lost=122639 audit_rate_limit=5 audit_backlog_limit=64
+[145967.832021] audit: rate limit exceeded
+[145967.844566] cnss: Resuming PCI link
+[145967.849376] cnss: Set PCI link status to: 2
+[145967.849405] cnss: Setting MHI state: RESUME(7)
+[145967.869303] cnss: Setting MHI state: SUSPEND(6)
+[145967.875535] cnss: Suspending PCI link
+[145967.875549] cnss: Use PCIe DRV suspend
+[145968.020746] cnss: Runtime resume start
+[145968.020787] cnss: Resuming PCI link
+[145968.025315] cnss: Set PCI link status to: 2
+[145968.025334] cnss: Setting MHI state: RESUME(7)
+[145968.029411] [kworke][0x6bb7ae28c65][23:31:37.274394] kiwi_v2: [5853:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145968.042462] cnss: Runtime resume status: 0
+[145968.363857] BATTERY_CHG: xm_batt_update_work: batt_update_work: batt_temp:35100 blank_state:0,interval:10,soc:46
+[145968.450220] [+] KP I module_control0: name urov-y, args: status
+[145968.450241] [+] KP I module_control0: name: urov-y, rc: 0
+[145968.617167] BATTERY_CHG: xm_charger_debug_info_print_work: usb_present: 1
+[145968.617938] BATTERY_CHG: xm_charger_debug_info_print_work: wls_present: 0
+[145968.620656] cnss: Host time = 385536545320 us, device time = 9622377120 us, offset = 375914168200 us
+[145968.620707] cnss: Updated time sync regs [0x98c] = 0x863aff88, [0x990] = 0x57
+[145968.632890] BATTERY_CHG: xm_charger_debug_info_print_work: chg_type= SDP tl:= 5  ffc:= 0, pd_verifed:= 0, FG_VENDOR_ID:= 3
+[145968.636758] BATTERY_CHG: xm_charger_debug_info_print_work: vbus_vol_uv: 4504000, ibus_ua: 453000
+[145968.648641] BATTERY_CHG: power_supply_read_temp: batt_thermal temp:351 ,delta:803 rc=0
+[145968.824193] logd: logdr: UID=2000 GID=2000 PID=21477 n tail=0 logMask=99 pid=21428 start=0ns deadline=0ns
+[145968.833052] audit: audit_lost=122676 audit_rate_limit=5 audit_backlog_limit=64
+[145968.833058] audit: rate limit exceeded
+[145969.248084] logd: logdr: UID=2000 GID=2000 PID=21486 n tail=0 logMask=99 pid=21428 start=0ns deadline=0ns
+[145969.346552] type=1400 audit(1793892698.588:197988): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c61,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovobserver
+[145969.393058] type=1400 audit(1793892698.636:197989): avc: denied { read } for comm="perf-hal-servic" name="cmdline" dev="proc" ino=34499958 scontext=u:r:vendor_hal_perf_default:s0 tcontext=u:r:hal_graphics_composer_default:s0 tclass=file permissive=0
+[145969.393243] type=1400 audit(1793892698.636:197990): avc: denied { read } for comm="perf-hal-servic" name="comm" dev="proc" ino=34499959 scontext=u:r:vendor_hal_perf_default:s0 tcontext=u:r:hal_graphics_composer_default:s0 tclass=file permissive=0
+[145969.445537] type=1400 audit(1793892698.688:197991): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c61,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovobserver
+[145969.544752] type=1400 audit(1793892698.788:197992): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c61,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovobserver
+[145969.681623] logd: logdr: UID=2000 GID=2000 PID=21498 n tail=0 logMask=99 pid=21428 start=0ns deadline=0ns
+[145969.850830] audit: audit_lost=122690 audit_rate_limit=5 audit_backlog_limit=64
+[145969.850837] audit: rate limit exceeded
+[145969.873096] healthd: battery l=46 v=3870 t=35.1 h=2 st=2 c=571000 chg=u
+[145969.873141] healthd: battery l=46 v=3870 t=35.1 h=2 st=2 c=571000 chg=u
+[145969.898631] healthd: battery l=46 v=3870 t=35.1 h=2 st=2 c=571000 chg=u
+[145969.938290] cnss: Runtime suspend start
+[145969.938730] [kworke][0x6bb7d11eb66][23:31:39.183714] kiwi_v2: [5853:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145969.967194] cnss: Setting MHI state: SUSPEND(6)
+[145969.967216] cnss: Suspending PCI link
+[145969.967222] cnss: Use PCIe DRV suspend
+[145969.971214] cnss: Runtime suspend status: 0
+[145970.046325] cnss: Runtime resume start
+[145970.046357] cnss: Resuming PCI link
+[145970.051174] cnss: Set PCI link status to: 2
+[145970.051191] cnss: Setting MHI state: RESUME(7)
+[145970.055628] [kworke][0x6bb7d342ab1][23:31:39.300611] kiwi_v2: [17978:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145970.069560] cnss: Runtime resume status: 0
+[145970.099857] logd: logdr: UID=2000 GID=2000 PID=21510 n tail=0 logMask=99 pid=21428 start=0ns deadline=0ns
+[145970.266284] [+] KP I module_control0: name urov-y, args: status
+[145970.266310] [+] KP I module_control0: name: urov-y, rc: 0
+[145970.298779] [-] KP E unload_module: name: urov-y
+[145970.298791] [+] KP V Wrap func pointer remove: ffffffd40e0b6db8, ffffffde5e201b4c, 0
+[145970.298795] [+] KP V Unwrap func pointer: ffffffd40e0b6db8, ffffffde5e201b4c, 0
+[145970.298796] [+] KP V Wrap func pointer remove: ffffffd40e0b6d60, ffffffde5e201b4c, 0
+[145970.298799] [+] KP V Unwrap func pointer: ffffffd40e0b6d60, ffffffde5e201b4c, 0
+[145970.298800] [+] KP V Wrap func pointer remove: ffffffd40e0b6d68, ffffffde5e201b4c, 0
+[145970.298803] [+] KP V Unwrap func pointer: ffffffd40e0b6d68, ffffffde5e201b4c, 0
+[145970.298804] [+] KP V Wrap func pointer remove: ffffffd40e0b6d98, ffffffde5e201b4c, 0
+[145970.298806] [+] KP V Unwrap func pointer: ffffffd40e0b6d98, ffffffde5e201b4c, 0
+[145970.298807] [+] KP V Wrap func pointer remove: ffffffd40e0b6df0, ffffffde5e201b4c, 0
+[145970.298809] [+] KP V Unwrap func pointer: ffffffd40e0b6df0, ffffffde5e201b4c, 0
+[145970.298810] [+] KP V Wrap func pointer remove: ffffffd40e0b6d90, ffffffde5e201b4c, 0
+[145970.298811] [+] KP V Wrap func pointer remove: ffffffd40e0b6be0, ffffffde5e2019d8, 0
+[145970.298814] [+] KP V Unwrap func pointer: ffffffd40e0b6be0, ffffffde5e2019d8, 0
+[145970.298815] [+] KP V Wrap func pointer remove: ffffffd40e0b7440, ffffffde5e201de0, ffffffde5e20206c
+[145970.298820] [+] KP V Unwrap func pointer: ffffffd40e0b7440, ffffffde5e201de0, ffffffde5e20206c
+[145970.298821] [+] KP V Wrap func pointer remove: ffffffd40e0b6d88, ffffffde5e201de0, ffffffde5e20206c
+[145970.298823] [+] KP V Unwrap func pointer: ffffffd40e0b6d88, ffffffde5e201de0, ffffffde5e20206c
+[145970.298824] [+] KP V Wrap chain remove: ffffffd40c27d544, ffffffde5e201704, 0
+[145970.298835] [+] KP V Unwrap func: ffffffd40c27d544
+[145970.298836] [+] KP V Wrap chain remove: ffffffd40c2af884, ffffffde5e2022d0, 0
+[145970.298846] [+] KP V Unwrap func: ffffffd40c2af884
+[145970.298847] [+] KP V Wrap chain remove: ffffffd40c68a898, 0, ffffffde5e2027a4
+[145970.298853] [+] KP V Unwrap func: ffffffd40c68a898
+[145970.298868] [+] KP I unload_module: name: urov-y, rc: 0
+[145970.355350] type=1400 audit(1793892699.596:198029): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c61,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovobserver
+[145970.859285] audit: audit_lost=122745 audit_rate_limit=5 audit_backlog_limit=64
+[145970.859292] audit: rate limit exceeded
+[145971.934634] audit: audit_lost=122768 audit_rate_limit=5 audit_backlog_limit=64
+[145971.934641] audit: rate limit exceeded
+[145971.957335] cnss: Runtime suspend start
+[145971.957841] [kworke][0x6bb7f6174b6][23:31:41.202825] kiwi_v2: [17978:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145971.989067] cnss: Setting MHI state: SUSPEND(6)
+[145971.989086] cnss: Suspending PCI link
+[145971.989091] cnss: Use PCIe DRV suspend
+[145971.993066] cnss: Runtime suspend status: 0
+[145972.072730] cnss: Runtime resume start
+[145972.072760] cnss: Resuming PCI link
+[145972.077282] cnss: Set PCI link status to: 2
+[145972.077298] cnss: Setting MHI state: RESUME(7)
+[145972.081350] [kworke][0x6bb7f85a3cd][23:31:41.326333] kiwi_v2: [5853:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145972.094701] cnss: Runtime resume status: 0
+[145972.410338] binder_alloc: 21547: binder_alloc_buf, no vma
+[145972.410347] binder: 2629:6725 transaction failed 29189/-3, size 64-0 line 3101
+[145972.488234] binder_alloc: 21428: binder_alloc_buf, no vma
+[145972.488245] binder: 2150:2937 transaction failed 29189/-3, size 364-16 line 3101
+[145972.627417] [+] KP I commit_common_su: pid: 21686, tgid: 21686, to_uid: 0, sctx: , via_hook: 1

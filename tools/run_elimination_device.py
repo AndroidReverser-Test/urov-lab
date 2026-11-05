@@ -44,6 +44,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", required=True)
     parser.add_argument("--key", required=True, help="KernelPatch superkey")
+    parser.add_argument("--skip-install", action="store_true", help="use the already installed test APKs")
+    parser.add_argument("--skip-x-control", action="store_true",
+                        help="omit the UROV-X control on kernels without its MM layout")
     parser.add_argument("--repeats", type=int, default=10)
     parser.add_argument("--cycles", type=int, default=2)
     args = parser.parse_args()
@@ -183,50 +186,53 @@ def main():
         before = kp("su", "-c", "dmesg")
         save("kernel-before.log", before)
         artifacts = {"y_kpm": LAB / "out/urov-y.kpm",
-                     "x_kpm": LAB / "out/urov-x.kpm",
                      "apk": LAB / "apps/urov-detect/out/urovdetect.apk",
                      "observer_apk": LAB / "apps/urov-detect/out/urovobserver.apk"}
+        variants = ("y",) if args.skip_x_control else ("x", "y")
+        if not args.skip_x_control:
+            artifacts["x_kpm"] = LAB / "out/urov-x.kpm"
         report["artifacts"] = {k: {"path": str(v),
                                    "sha256": hashlib.sha256(v.read_bytes()).hexdigest()}
                                for k, v in artifacts.items()}
-        adb(["install", "--no-incremental", "-r", str(artifacts["apk"])], timeout=180)
-        adb(["install", "--no-incremental", "-r", str(artifacts["observer_apk"])], timeout=180)
+        if not args.skip_install:
+            for kind in ("apk", "observer_apk"):
+                adb(["install", "--no-incremental", "-r", str(artifacts[kind])], timeout=180)
         remote = f"/data/local/tmp/urov-eliminate-{stamp}"
         shell("mkdir", remote)
-        staged = [f"{remote}/urov-{variant}.kpm" for variant in ("x", "y")]
-        for kind, path in zip(("x_kpm", "y_kpm"), staged):
-            adb(["push", str(artifacts[kind]), path])
+        staged = [f"{remote}/urov-{variant}.kpm" for variant in variants]
+        for variant, path in zip(variants, staged):
+            adb(["push", str(artifacts[f"{variant}_kpm"]), path])
 
         run_app("01-no-module", "y-clean")
 
-        # Positive control: the same detector core and the same fixture page do
-        # fire on urov-x, so a negative urov-y result cannot be blamed on a
-        # broken detector.
-        kp("kpm", "load", staged[0], f"key={control_key}")
-        loaded = "urov-x"
-        report["control_status"] = kp("kpm", "ctl0", "urov-x", "status")
-        if "hooks=0x1f" not in report["control_status"]:
-            raise RuntimeError("urov-x control hooks incomplete")
-        _, control_logs = run_app("02-urov-x-control", "observe-active", key=control_key)
-        control_cases = [kv(line) for line in re.findall(r"OBS_CASE [^\n]+", control_logs)]
-        by_name = {c["name"]: c for c in control_cases}
-        changed = by_name.get("active_changed")
-        if not changed or int(changed["match"]) <= 0 or int(changed["reader_match"]) <= 0:
-            raise RuntimeError("urov-x control active_changed did not reproduce the detections")
-        cpus = [c for c in control_cases if c["name"].startswith("active_cpu_")]
-        if not cpus or any(int(c["match"]) <= 0 or int(c["reader_match"]) <= 0 for c in cpus):
-            raise RuntimeError("urov-x control per-CPU cases did not reproduce the detections")
-        report["control"] = {
-            "active_changed": {"match": int(changed["match"]),
-                               "clean": int(changed["clean"]),
-                               "reader_match": int(changed["reader_match"])},
-            "cpu_cases": len(cpus),
-            "cpu_exclusive_matches": sum(int(c["match"]) for c in cpus),
-            "cpu_reader_matches": sum(int(c["reader_match"]) for c in cpus)}
-        kp("kpm", "unload", "urov-x")
-        loaded = None
+        report["x_control_skipped"] = args.skip_x_control
+        if not args.skip_x_control:
+            # Positive control using the same detector and fixture page.
+            kp("kpm", "load", staged[0], f"key={control_key}")
+            loaded = "urov-x"
+            report["control_status"] = kp("kpm", "ctl0", "urov-x", "status")
+            if "hooks=0x1f" not in report["control_status"]:
+                raise RuntimeError("urov-x control hooks incomplete")
+            _, control_logs = run_app("02-urov-x-control", "observe-active", key=control_key)
+            control_cases = [kv(line) for line in re.findall(r"OBS_CASE [^\n]+", control_logs)]
+            by_name = {c["name"]: c for c in control_cases}
+            changed = by_name.get("active_changed")
+            if not changed or int(changed["match"]) <= 0 or int(changed["reader_match"]) <= 0:
+                raise RuntimeError("urov-x control active_changed did not reproduce the detections")
+            cpus = [c for c in control_cases if c["name"].startswith("active_cpu_")]
+            if not cpus or any(int(c["match"]) <= 0 or int(c["reader_match"]) <= 0 for c in cpus):
+                raise RuntimeError("urov-x control per-CPU cases did not reproduce the detections")
+            report["control"] = {
+                "active_changed": {"match": int(changed["match"]),
+                                   "clean": int(changed["clean"]),
+                                   "reader_match": int(changed["reader_match"])},
+                "cpu_cases": len(cpus),
+                "cpu_exclusive_matches": sum(int(c["match"]) for c in cpus),
+                "cpu_reader_matches": sum(int(c["reader_match"]) for c in cpus)}
+            kp("kpm", "unload", "urov-x")
+            loaded = None
 
-        kp("kpm", "load", staged[1], f"key={module_key}")
+        kp("kpm", "load", staged[-1], f"key={module_key}")
         loaded = "urov-y"
         report["loaded_status"] = kp("kpm", "ctl0", "urov-y", "status")
         if "hooks=0x7f" not in report["loaded_status"]:
@@ -369,7 +375,7 @@ def main():
                         fields.get("anonymous_kb") != fields.get("base_anonymous_kb"):
                     raise RuntimeError("page-mode site page changed after unload")
             if hold_mode in ("y-hold", "z-hold"):
-                kp("kpm", "load", staged[1], f"key={module_key}")
+                kp("kpm", "load", staged[-1], f"key={module_key}")
                 loaded = "urov-y"
 
         run_app("10-final-clean", "y-clean")

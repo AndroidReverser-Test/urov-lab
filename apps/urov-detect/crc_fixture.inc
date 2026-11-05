@@ -136,7 +136,6 @@ static void crc_stage(const char *name, const struct page *target, const struct 
     uint32_t live_crc = patched ? patched_crc : clean_crc;
     uint32_t direct_expected = all_callers ? clean_crc : live_crc;
     uint32_t window_expected = active_mode ? clean_crc : live_crc;
-    enum ud_verdict bridge_expected = active_mode == UROV_Y_MODE_PAGE_AP ? UD_MATCH : UD_NO_MATCH;
     unsigned match = 0, clean = 0, unknown = 0;
     uint32_t direct = 0, site = 0, window = 0, returned = 0;
 
@@ -154,7 +153,8 @@ static void crc_stage(const char *name, const struct page *target, const struct 
                 direct == direct_expected && site == direct_expected && window == window_expected,
                 "CRC %s execute=%04x direct=%08x site=%08x window=%08x", name,
                 returned, direct, site, window);
-        REQUIRE(obs.verdict == bridge_expected, "CRC %s bridge=%d error=%d", name,
+        /* The probe skips LDXR. Even PAGE_AP must leave that STXR native. */
+        REQUIRE(obs.verdict == UD_NO_MATCH, "CRC %s bridge=%d error=%d", name,
                 obs.verdict, obs.error);
         match += obs.verdict == UD_MATCH;
         clean += obs.verdict == UD_NO_MATCH;
@@ -181,8 +181,8 @@ static void crc_overlay_signals(const struct page *target, const struct page *pa
                           mode == UROV_Y_MODE_PAGE_UXN ? UD_MATCH : UD_NO_MATCH);
 
     struct ud_store_observation obs;
-    enum ud_verdict changed_byte = UD_NO_MATCH;
-    if (mode == UROV_Y_MODE_PAGE_AP) changed_byte = all_callers ? UD_UNKNOWN : UD_MATCH;
+    /* In all-caller AP mode the observed byte can differ from the backing file. */
+    enum ud_verdict changed_byte = mode == UROV_Y_MODE_PAGE_AP && all_callers ? UD_UNKNOWN : UD_NO_MATCH;
     ud_observe_unreserved_store(target->address + CRC_PATCH_OFFSET,
                                 patched->address + CRC_PATCH_OFFSET, patched->fd,
                                 patched->file_offset + CRC_PATCH_OFFSET, &obs);

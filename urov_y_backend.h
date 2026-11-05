@@ -25,6 +25,7 @@ struct uy_status {
 long urov_y_backend_init(const char *args);
 long urov_y_backend_exit(void);
 void urov_y_status_get(struct uy_status *out);
+long urov_y_copy_to_user(void *dst, const void *src, unsigned long len);
 /* Drop a session whose owner process is gone (sleepable control context). */
 void urov_y_reap(void);
 

@@ -25,6 +25,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", required=True)
     parser.add_argument("--key", required=True, help="KernelPatch superkey")
+    parser.add_argument("--skip-install", action="store_true", help="use the already installed test APK")
     parser.add_argument("--repeats", type=int, default=15)
     parser.add_argument("--cycles", type=int, default=3)
     args = parser.parse_args()
@@ -113,7 +114,8 @@ def main():
         apk = LAB / "apps/urov-detect/out/urovdetect.apk"
         kpm = LAB / "out/urov-y.kpm"
         report["artifacts"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (apk, kpm)}
-        adb("install", "--no-incremental", "-r", str(apk), timeout=120)
+        if not args.skip_install:
+            adb("install", "--no-incremental", "-r", str(apk), timeout=120)
         run_app("no-module", "crc-clean")
 
         staged = True

@@ -10,7 +10,6 @@
  * every control request that does not carry a valid MAC.
  */
 #include <compiler.h>
-#include <kallsyms.h>
 #include <kpmodule.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
@@ -19,14 +18,11 @@
 #include "urov_y_backend.h"
 
 KPM_NAME("urov-y");
-KPM_VERSION("2.1.0");
+KPM_VERSION("2.1.1");
 KPM_LICENSE("GPL v2");
 KPM_AUTHOR("UROV-Y");
 KPM_DESCRIPTION("Reader-site trap ARM64 user read overlay: BRK, UXN page trap or AP[1] data trap");
 KPM_INFO(context, "sleepable-v2", 32);
-
-typedef long (*copy_fn)(void *, const void *, unsigned long);
-static copy_fn copy_out;
 
 static int str_eq(const char *a, const char *b)
 {
@@ -39,9 +35,6 @@ static long urov_y_init(const char *args, const char *event, void *reserved)
 {
     (void)event;
     (void)reserved;
-    if (!kallsyms_lookup_name) return -ENOSYS;
-    copy_out = (copy_fn)kallsyms_lookup_name("copy_to_user_nofault");
-    if (!copy_out) return -EOPNOTSUPP;
     return urov_y_backend_init(args);
 }
 
@@ -70,7 +63,7 @@ static long urov_y_control(const char *args, char __user *out, int len)
                  st.degraded, st.imm, st.hooks, st.core_checks);
     if (n < 0 || n >= (int)sizeof(message)) return -EOVERFLOW;
     if (len <= n) return -ENOSPC;
-    return copy_out(out, message, (size_t)n + 1) ? -EFAULT : 0;
+    return urov_y_copy_to_user(out, message, (size_t)n + 1) ? -EFAULT : 0;
 }
 
 static long urov_y_exit(void *reserved)

@@ -1,0 +1,18 @@
+{
+  "serial": "3bb96edd",
+  "repeats": 15,
+  "cycles": 3,
+  "runs": [],
+  "passed": false,
+  "initial_modules": "",
+  "kernel": "Linux localhost 5.15.74-android13-8-00049-g8945ccdb2203-ab9500309 #1 SMP PREEMPT Mon Jan 16 21:01:33 UTC 2023 aarch64 Toybox",
+  "kpver": "c00",
+  "selinux": "Enforcing",
+  "artifacts": {
+    "urovdetect.apk": "07b61391ea0ad3fd236fb44657dbac1d7dbc052ef3f3d635e9a89a0aa0b0bdd1",
+    "urov-y.kpm": "70e5c311c613ac2cd91790de59b757ca0d8588c0c368d7b72c43fb7b247e6978"
+  },
+  "error": "adb exit 1 Performing Streamed Install\nadb.exe: failed to install E:\\KernelPatch\\kpms\\urov-lab\\apps\\urov-detect\\out\\urovdetect.apk: Failure [INSTALL_FAILED_USER_RESTRICTED: Install canceled by user]",
+  "final_modules": "",
+  "kernel_issues": []
+}

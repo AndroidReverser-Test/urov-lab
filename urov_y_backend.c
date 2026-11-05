@@ -29,6 +29,7 @@
  * keeps a data abort, so the monitor bridge only covers the adjacent shape
  * and the read still costs one synchronous exception.
  */
+#include <common.h>
 #include <compiler.h>
 #include <kallsyms.h>
 #include <kpmodule.h>
@@ -46,17 +47,11 @@
 #include "emulate.h"
 #include "urov_y_abi.h"
 #include "urov_y_backend.h"
+#include "urov_y_compat.h"
 
 #ifndef __NR_mmap
 #define __NR_mmap 222
 #endif
-
-/* KernelPatch's cache.h current_el() helper trips -Wasm-operand-widths with
- * this NDK; only these two maintenance primitives are needed here. */
-static inline void uy_dccivac(uint64_t va)
-{
-    __asm__ volatile("dc civac, %0" : : "r"(va) : "memory");
-}
 
 static inline void uy_flush_icache_all(void)
 {
@@ -65,16 +60,6 @@ static inline void uy_flush_icache_all(void)
     __asm__ volatile("dsb ish" : : : "memory");
     __asm__ volatile("isb" : : : "memory");
 }
-
-/* Device BTF offsets, identical to urov_backend.c / urov_x_backend.c. */
-#define UY_TASK_MM_OFF 1440UL
-#define UY_MM_PGD_OFF 56UL
-#define UY_MM_USERS_OFF 68UL
-#define UY_VMA_START_OFF 0UL
-#define UY_VMA_END_OFF 8UL
-#define UY_VMA_PROT_OFF 24UL
-#define UY_VMA_FLAGS_OFF 32UL
-#define UY_VMA_FILE_OFF 136UL
 
 #define UY_USER_LIMIT (1ULL << 52)
 
@@ -118,12 +103,11 @@ static inline void uy_flush_icache_all(void)
 #define UY_BTI_J 0xd503249fU
 #define UY_BTI_JC 0xd50324dfU
 
-/* get_user_pages / __access_remote_vm flags (Linux 6.1 include/linux/mm.h). */
-/* __access_remote_vm get_user_pages flags. This device kernel uses the older
- * FOLL numbering (FOLL_WRITE 0x01, FOLL_DUMP 0x08, FOLL_FORCE 0x10); the
- * values were verified on the device with a probe KPM. */
 #define UY_FOLL_WRITE 0x01U
-#define UY_FOLL_FORCE 0x10U
+
+/* VM_FAULT_ERROR | VM_FAULT_RETRY | VM_FAULT_COMPLETED. A fault that returns
+ * any of these bits may not have installed a PTE or may have dropped its lock. */
+#define UY_FAULT_INCOMPLETE 0x4c73U
 
 #define UY_STATE_OFF 0
 #define UY_STATE_LIVE 1
@@ -141,10 +125,9 @@ _Static_assert(UROV_Y_MAX_SITES <= UY_TRAP_SLOTS, "trap table covers one session
 typedef void *(*get_task_mm_t)(void *task);
 typedef void (*mmput_t)(void *mm);
 typedef void *(*find_vma_t)(void *mm, unsigned long addr);
-typedef void (*mmap_write_lock_t)(void *mm);
-typedef void (*mmap_write_unlock_t)(void *mm);
+typedef void (*mmap_write_fn)(void *);
 typedef void (*flush_tlb_mm_t)(void *mm);
-typedef void (*force_sig_fault_t)(int sig, int code, void *addr);
+typedef int (*force_sig_fault_t)(int sig, int code, void *addr);
 typedef long (*copy_nofault_t)(void *dst, const void *src, unsigned long n);
 typedef int (*access_remote_vm_t)(void *mm, unsigned long addr, void *buf,
                                   int len, unsigned int gup_flags);
@@ -194,6 +177,7 @@ struct uy_trap {
 };
 
 static struct uy_session g_sess;
+static struct uy_layout g_layout;
 static struct uy_trap g_traps[UY_TRAP_SLOTS];
 static uint8_t g_selftest_ws[UROV_Y_PAGE];
 static int g_state;
@@ -207,6 +191,8 @@ static volatile uint32_t g_failure_logged;
 static struct urov_x_keys g_keys;
 static uint16_t g_imm;
 static uint32_t g_trap_insn;
+static unsigned g_write_gup_flags;
+static int g_use_rwsem;
 
 static void *f_brk_handler;
 static void *f_do_mem_abort;
@@ -214,8 +200,8 @@ static void *f_handle_mm_fault;
 static get_task_mm_t f_get_task_mm;
 static mmput_t f_mmput;
 static find_vma_t f_find_vma;
-static mmap_write_lock_t f_mmap_write_lock;
-static mmap_write_unlock_t f_mmap_write_unlock;
+static mmap_write_fn f_mmap_write_lock;
+static mmap_write_fn f_mmap_write_unlock;
 static flush_tlb_mm_t f_flush_tlb_mm;
 static force_sig_fault_t f_force_sig_fault;
 static copy_nofault_t f_copy_in, f_copy_out;
@@ -245,20 +231,30 @@ static int prefix(const char *text, const char *head, unsigned n)
 
 static void *mm_of_task(void *task)
 {
-    return *(void **)((char *)task + UY_TASK_MM_OFF);
+    return __atomic_load_n((void **)((char *)task + g_layout.task_mm), __ATOMIC_RELAXED);
 }
 
 static uint64_t mm_pgd(void *mm)
 {
-    return *(uint64_t *)((char *)mm + UY_MM_PGD_OFF);
+    return __atomic_load_n((uint64_t *)((char *)mm + g_layout.mm_pgd), __ATOMIC_RELAXED);
 }
 
 static int mm_has_live_user(void *mm)
 {
     int users;
     if (!mm) return 0;
-    users = __atomic_load_n((int *)((char *)mm + UY_MM_USERS_OFF), __ATOMIC_ACQUIRE);
+    users = __atomic_load_n((int *)((char *)mm + g_layout.mm_users), __ATOMIC_ACQUIRE);
     return users > 1;
+}
+
+static void uy_mmap_write_lock(void *mm)
+{
+    f_mmap_write_lock(g_use_rwsem ? (char *)mm + g_layout.mmap_lock : mm);
+}
+
+static void uy_mmap_write_unlock(void *mm)
+{
+    f_mmap_write_unlock(g_use_rwsem ? (char *)mm + g_layout.mmap_lock : mm);
 }
 
 static uint64_t *pte_of(void *mm, uint64_t address)
@@ -429,9 +425,9 @@ static int validate_site_vma(void *vma, uint64_t pc, int page_mode, int *writabl
 {
     unsigned long start, end, flags;
     if (!vma) return -EFAULT;
-    start = *(unsigned long *)((char *)vma + UY_VMA_START_OFF);
-    end = *(unsigned long *)((char *)vma + UY_VMA_END_OFF);
-    flags = *(unsigned long *)((char *)vma + UY_VMA_FLAGS_OFF);
+    start = *(unsigned long *)((char *)vma + g_layout.vma_start);
+    end = *(unsigned long *)((char *)vma + g_layout.vma_end);
+    flags = *(unsigned long *)((char *)vma + g_layout.vma_flags);
     if (g_verbose)
         pr_info("urov-y: site vma pc=%llx start=%lx end=%lx flags=%lx\n",
                 (unsigned long long)pc, start, end, flags);
@@ -452,10 +448,10 @@ static int validate_target_vma(void *vma, uint64_t address)
     unsigned long start, end, flags;
     void *file;
     if (!vma) return -EFAULT;
-    start = *(unsigned long *)((char *)vma + UY_VMA_START_OFF);
-    end = *(unsigned long *)((char *)vma + UY_VMA_END_OFF);
-    flags = *(unsigned long *)((char *)vma + UY_VMA_FLAGS_OFF);
-    file = *(void **)((char *)vma + UY_VMA_FILE_OFF);
+    start = *(unsigned long *)((char *)vma + g_layout.vma_start);
+    end = *(unsigned long *)((char *)vma + g_layout.vma_end);
+    flags = *(unsigned long *)((char *)vma + g_layout.vma_flags);
+    file = *(void **)((char *)vma + g_layout.vma_file);
     if (start != address || end != address + UROV_Y_PAGE) return -EINVAL;
     if ((flags & (UY_VM_READ | UY_VM_EXEC)) != (UY_VM_READ | UY_VM_EXEC)) return -EINVAL;
     if (flags & (UY_VM_WRITE | UY_VM_MAYWRITE | UY_VM_PFNMAP | UY_VM_HUGETLB |
@@ -480,7 +476,8 @@ static void site_set_prot(void *mm, uint64_t page, int writable)
     else
         pte = (pte | PTE_RDONLY | PTE_AF) & ~(uint64_t)PTE_DBM;
     __atomic_store_n(ptep, pte, __ATOMIC_RELEASE);
-    f_flush_tlb_mm(mm);
+    if (f_flush_tlb_mm) f_flush_tlb_mm(mm);
+    else flush_tlb_all();
 }
 
 /* ------------------------------------------------------ page (UXN) arming */
@@ -564,10 +561,10 @@ static long ap_arm_target(struct uy_session *s, void *mm)
 {
     int ret;
 
-    f_mmap_write_lock(mm);
+    uy_mmap_write_lock(mm);
     ret = page_set_ap(mm, s->base, 0);
     if (ret > 0) flush_tlb_all();
-    f_mmap_write_unlock(mm);
+    uy_mmap_write_unlock(mm);
     if (ret < 0) return ret;
     s->ap_armed = 1;
     return 0;
@@ -580,10 +577,10 @@ static void ap_disarm_target(struct uy_session *s, void *mm)
     if (!s->ap_armed) return;
     s->ap_armed = 0;
     if (!mm || !mm_has_live_user(mm)) return;
-    f_mmap_write_lock(mm);
+    uy_mmap_write_lock(mm);
     ret = page_set_ap(mm, s->base, 1);
     if (ret > 0) flush_tlb_all();
-    f_mmap_write_unlock(mm);
+    uy_mmap_write_unlock(mm);
 }
 
 /* Fault the page in if needed, then install the trap bit. No byte of the code
@@ -601,7 +598,7 @@ static long site_arm_page(struct uy_site *s, void *mm)
         return -EFAULT;
     }
     if (word != s->original) return -EAGAIN;
-    f_mmap_write_lock(mm);
+    uy_mmap_write_lock(mm);
     for (tries = 0; tries < 4; ++tries) {
         ret = page_set_uxn(mm, s->page, 1);
         if (g_verbose)
@@ -610,9 +607,9 @@ static long site_arm_page(struct uy_site *s, void *mm)
         if (ret >= 0 || ret != -EAGAIN) break;
         /* Evicted between the read and the lock: fault it in again with the
          * write lock dropped, then retry. */
-        f_mmap_write_unlock(mm);
+        uy_mmap_write_unlock(mm);
         if (f_access_vm(mm, s->pc, &word, 4, 0) != 4) return -EFAULT;
-        f_mmap_write_lock(mm);
+        uy_mmap_write_lock(mm);
     }
     if (ret >= 0) {
         flush_tlb_all();
@@ -620,7 +617,7 @@ static long site_arm_page(struct uy_site *s, void *mm)
         __atomic_fetch_add(&g_armed, 1, __ATOMIC_ACQ_REL);
         ret = 0;
     }
-    f_mmap_write_unlock(mm);
+    uy_mmap_write_unlock(mm);
     return ret < 0 ? ret : 0;
 }
 
@@ -631,10 +628,10 @@ static void site_disarm_page(struct uy_site *s, void *mm)
     /* A dead owner's page tables are being torn down; there is nothing left to
      * restore and touching them from here is unsafe. */
     if (mm_has_live_user(mm)) {
-        f_mmap_write_lock(mm);
+        uy_mmap_write_lock(mm);
         ret = page_set_uxn(mm, s->page, 0);
         if (ret > 0) flush_tlb_all();
-        f_mmap_write_unlock(mm);
+        uy_mmap_write_unlock(mm);
     }
     s->armed = 0;
     if (__atomic_load_n(&g_armed, __ATOMIC_ACQUIRE) > 0)
@@ -642,19 +639,6 @@ static void site_disarm_page(struct uy_site *s, void *mm)
 }
 
 /* ------------------------------------------------------ BRK site patching */
-
-/* Cache maintenance for a freshly written site instruction.
- *
- * The write itself is performed through the kernel's temporary mapping of the
- * private COW page (__access_remote_vm). The D-cache line is cleaned to the
- * point of coherency with the *user* virtual address, which is only valid while
- * this thread is running in the session mm (all callers guarantee that), and
- * uy_flush_icache_all() broadcasts IC IALLUIS to the inner-shareable domain. */
-static void site_sync(uint64_t pc, int have_user_va)
-{
-    if (have_user_va) uy_dccivac(pc);
-    uy_flush_icache_all();
-}
 
 static long site_arm(struct uy_site *s, void *mm, uint64_t pc, int writable)
 {
@@ -691,12 +675,14 @@ static long site_arm(struct uy_site *s, void *mm, uint64_t pc, int writable)
     /* FOLL_FORCE turns a write fault on the read-only private mapping into the
      * normal COW path (the same mechanism ptrace uses to plant breakpoints), so
      * neither the file page nor the shared page cache is ever modified. */
-    wrote = (int)f_access_vm(mm, pc, &s->trap, 4, UY_FOLL_FORCE | UY_FOLL_WRITE);
+    wrote = f_access_vm(mm, pc, &s->trap, 4, g_write_gup_flags);
     if (g_verbose)
         pr_info("urov-y: arm pc=%llx wrote=%d writable=%u\n",
                 (unsigned long long)pc, wrote, s->writable);
     if (wrote != 4) return wrote < 0 ? wrote : -EFAULT;
-    site_sync(pc, mm_of_task(current) == mm);
+    /* copy_to_user_page() handles D-cache maintenance via the kernel alias,
+     * including when PAN prevents maintenance using the user VA. */
+    uy_flush_icache_all();
     site_set_prot(mm, s->page, (int)s->writable);
     s->armed = 1;
     __atomic_fetch_add(&g_armed, 1, __ATOMIC_ACQ_REL);
@@ -711,8 +697,6 @@ static long site_arm(struct uy_site *s, void *mm, uint64_t pc, int writable)
  * IC IALLUIS, so no instruction cache anywhere keeps the BRK. */
 static void site_disarm(struct uy_site *s, void *mm)
 {
-    int have_user_va;
-
     if (!s->armed) return;
     if (g_sess.mode == UROV_Y_MODE_PAGE_AP) {
         s->armed = 0;
@@ -724,9 +708,8 @@ static void site_disarm(struct uy_site *s, void *mm)
         site_disarm_page(s, mm);
         return;
     }
-    have_user_va = mm_of_task(current) == mm;
-    if (f_access_vm(mm, s->pc, &s->original, 4, UY_FOLL_FORCE | UY_FOLL_WRITE) == 4)
-        site_sync(s->pc, have_user_va);
+    if (f_access_vm(mm, s->pc, &s->original, 4, g_write_gup_flags) == 4)
+        uy_flush_icache_all();
     site_set_prot(mm, s->page, (int)s->writable);
     s->armed = 0;
     __atomic_fetch_sub(&g_armed, 1, __ATOMIC_ACQ_REL);
@@ -992,18 +975,17 @@ static void uy_llsc_commit(struct pt_regs *regs, uint64_t pc, const struct uy_ll
     __atomic_fetch_add(&g_sess.llsc, 1, __ATOMIC_RELAXED);
 }
 
-/* The BRK trap. `unused` is do_debug_exception's addr_if_watchpoint, `esr` is
- * the debug exception syndrome and `regs` the EL0 register frame. */
+/* brk_handler(unused, esr, regs) and do_el0_brk64(esr, regs) both use the
+ * same EL0 syndrome and register frame. udata selects the two-argument ABI. */
 static void uy_brk_before(hook_fargs3_t *args, void *udata)
 {
-    uint64_t esr = args->arg1;
-    struct pt_regs *regs = (struct pt_regs *)args->arg2;
+    uint64_t esr = udata ? args->arg0 : args->arg1;
+    struct pt_regs *regs = (struct pt_regs *)(udata ? args->arg1 : args->arg2);
     struct uy_trap *t;
     uint64_t pc, bad = 0;
     int fake = 0, result;
 
-    (void)udata;
-    if (!g_ready || !regs) return;
+    if (!regs) return;
     if (((esr >> 26) & 0x3fUL) != UY_BRK_EC) return;
     if ((esr & 0xffffUL) != (uint64_t)g_imm) return;
     if (!user_mode(regs)) return;
@@ -1250,33 +1232,24 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
  * get_user_pages based readers such as /proc/self/mem. */
 static void uy_mm_fault_after(hook_fargs4_t *args, void *udata)
 {
-    uint64_t address = args->arg1;
-    uint64_t page;
-    int ret;
+    /* The four- and five-argument wrappers share this prefix. */
+    void *vma = (void *)args->arg0;
+    uint64_t page = page_base(args->arg1);
+    int ret = 0;
 
     (void)udata;
-    if (!g_mmf_hooked) return;
+    if (!g_mmf_hooked || (args->ret & UY_FAULT_INCOMPLETE) || !overlay_live() || !vma) return;
     if (mm_of_task(current) != g_sess.mm) return;
-    page = page_base(address);
+    if (__atomic_load_n((void **)((char *)vma + g_layout.vma_mm), __ATOMIC_RELAXED) != g_sess.mm) return;
 
-    if (ap_mode_live()) {
-        if (page != g_sess.base) return;
-        __atomic_fetch_add(&g_handlers, 1, __ATOMIC_ACQ_REL);
-        if (ap_mode_live() && mm_of_task(current) == g_sess.mm) {
-            ret = page_set_ap(g_sess.mm, page, 0);
-            if (ret > 0) flush_tlb_all();
-        }
-        __atomic_fetch_sub(&g_handlers, 1, __ATOMIC_RELEASE);
-        return;
-    }
-
-    if (!page_mode_live()) return;
-    if (!site_by_page(page)) return;
     __atomic_fetch_add(&g_handlers, 1, __ATOMIC_ACQ_REL);
-    if (page_mode_live() && mm_of_task(current) == g_sess.mm) {
-        ret = page_set_uxn(g_sess.mm, page, 1);
-        if (ret > 0) flush_tlb_all();
+    if (mm_of_task(current) == g_sess.mm) {
+        if (ap_mode_live() && page == g_sess.base)
+            ret = page_set_ap(g_sess.mm, page, 0);
+        else if (page_mode_live() && site_by_page(page))
+            ret = page_set_uxn(g_sess.mm, page, 1);
     }
+    if (ret > 0) flush_tlb_all();
     __atomic_fetch_sub(&g_handlers, 1, __ATOMIC_RELEASE);
 }
 
@@ -1344,8 +1317,7 @@ static long do_register(struct urov_y_request *q)
     if (q->flags || q->caller_count > UROV_Y_MAX_CALLERS) return -EINVAL;
     if (mode != UROV_Y_MODE_SITE_BRK && mode != UROV_Y_MODE_PAGE_UXN &&
         mode != UROV_Y_MODE_PAGE_AP) return -EINVAL;
-    if (mode == UROV_Y_MODE_PAGE_UXN && !g_page_hooked) return -EOPNOTSUPP;
-    if (mode == UROV_Y_MODE_PAGE_AP && (!g_page_hooked || !g_mmf_hooked))
+    if (mode != UROV_Y_MODE_SITE_BRK && (!g_page_hooked || !g_mmf_hooked))
         return -EOPNOTSUPP;
     if (q->site_count == 0U || q->site_count > UROV_Y_MAX_SITES) return -EINVAL;
     if (q->address & (UROV_Y_PAGE - 1U)) return -EINVAL;
@@ -1376,10 +1348,9 @@ static long do_register(struct urov_y_request *q)
         return -EOPNOTSUPP;
     }
 
-    /* The target page is never modified; it must still be exactly the kind of
-     * immutable one-page RX file mapping that the observation contract
-     * describes, so that an unmodified reader sees one consistent view. */
-    f_mmap_write_lock(mm);
+    /* All modes require an immutable one-page RX file mapping. PAGE_AP
+     * changes its leaf PTE only after validation and the snapshot. */
+    uy_mmap_write_lock(mm);
     vma = f_find_vma(mm, q->address);
     ret = validate_target_vma(vma, q->address);
     if (!ret) {
@@ -1405,12 +1376,12 @@ static long do_register(struct urov_y_request *q)
         pr_info("urov-y: validate ret=%ld addr=%llx sites=%u callers=%u\n", ret,
                 (unsigned long long)q->address, q->site_count, q->caller_count);
     if (ret) {
-        f_mmap_write_unlock(mm);
+        uy_mmap_write_unlock(mm);
         memset(g_sess.original, 0, UROV_Y_PAGE);
         f_mmput(mm);
         return ret;
     }
-    f_mmap_write_unlock(mm);
+    uy_mmap_write_unlock(mm);
 
     g_sess.mm = mm;
     g_sess.base = q->address;
@@ -1741,6 +1712,93 @@ static void *lookup(const char *name)
     return (void *)kallsyms_lookup_name(name);
 }
 
+static int supported_pagetables(void)
+{
+    uint64_t tcr;
+    unsigned t0sz, t1sz;
+
+    __asm__ volatile("mrs %0, tcr_el1" : "=r"(tcr));
+    t0sz = tcr & 63U;
+    t1sz = (tcr >> 16) & 63U;
+
+    /* 4 KiB TG0/TG1, no LPA2, and matching walk depths. KernelPatch's
+     * pgtable_entry() uses the TTBR1 depth for the supplied PGD as well. */
+    return !(tcr & (3ULL << 14)) && ((tcr >> 30) & 3U) == 2U &&
+           !(tcr & (1ULL << 59)) && t0sz >= 16U && t1sz >= 16U &&
+           t0sz <= 39U && t1sz <= 39U && (60U - t0sz) / 9U == (60U - t1sz) / 9U;
+}
+
+static long resolve_kernel(int *brk_argc, int *mmf_argc)
+{
+    const char *vma_name = "find_vma", *fault_name = "handle_mm_fault";
+    uintptr_t start = (uintptr_t)lookup("__start_BTF");
+    uintptr_t end = (uintptr_t)lookup("__stop_BTF");
+    struct kclf_btf btf;
+    unsigned foll_force;
+
+    if (kver < VERSION(5, 4, 0) || kver >= VERSION(7, 0, 0) || !supported_pagetables()) {
+        pr_info("urov-y: unsupported kernel or page tables (kver=%x)\n", kver);
+        return -EOPNOTSUPP;
+    }
+    if (!start || end <= start || end - start > 64UL * 1024 * 1024 ||
+        kclf_btf_open(&btf, (const void *)start, end - start) || uy_layout_from_btf(&g_layout, &btf)) {
+        pr_info("urov-y: live BTF missing or incompatible MM/register layout\n");
+        return -EOPNOTSUPP;
+    }
+
+    foll_force = uy_foll_force(&btf, kver >= VERSION(6, 3, 0) ? 0x08U : 0x10U);
+    g_write_gup_flags = UY_FOLL_WRITE | foll_force;
+    f_brk_handler = lookup("do_el0_brk64");
+    *brk_argc = f_brk_handler ? 2 : 3;
+    if (!f_brk_handler) f_brk_handler = lookup("brk_handler");
+
+    f_do_mem_abort = lookup("do_mem_abort");
+    f_handle_mm_fault = lookup(fault_name);
+    *mmf_argc = f_handle_mm_fault ? uy_mm_fault_argc(&btf, fault_name, 4) : 0;
+    if (!*mmf_argc) {
+        fault_name = "do_handle_mm_fault";
+        f_handle_mm_fault = lookup(fault_name);
+        *mmf_argc = f_handle_mm_fault ? uy_mm_fault_argc(&btf, fault_name, 0) : 0;
+    }
+
+    f_get_task_mm = (get_task_mm_t)lookup("get_task_mm");
+    f_mmput = (mmput_t)lookup("mmput");
+    f_find_vma = (find_vma_t)lookup(vma_name);
+    if (!f_find_vma) {
+        vma_name = "__find_vma";
+        f_find_vma = (find_vma_t)lookup(vma_name);
+    }
+    f_mmap_write_lock = (mmap_write_fn)lookup("mmap_write_lock");
+    f_mmap_write_unlock = (mmap_write_fn)lookup("mmap_write_unlock");
+    g_use_rwsem = !f_mmap_write_lock || !f_mmap_write_unlock;
+    if (g_use_rwsem && g_layout.mmap_lock >= 0) {
+        f_mmap_write_lock = (mmap_write_fn)lookup("down_write");
+        f_mmap_write_unlock = (mmap_write_fn)lookup("up_write");
+    }
+
+    f_flush_tlb_mm = (flush_tlb_mm_t)lookup("flush_tlb_mm");
+    f_force_sig_fault = (force_sig_fault_t)lookup("force_sig_fault");
+    f_copy_in = (copy_nofault_t)lookup("copy_from_user_nofault");
+    if (!f_copy_in) f_copy_in = (copy_nofault_t)lookup("probe_user_read");
+    f_copy_out = (copy_nofault_t)lookup("copy_to_user_nofault");
+    f_access_vm = (access_remote_vm_t)lookup("access_remote_vm");
+    if (!f_access_vm) f_access_vm = (access_remote_vm_t)lookup("__access_remote_vm");
+
+    if (!f_brk_handler || !f_get_task_mm || !f_mmput || !f_find_vma ||
+        !f_mmap_write_lock || !f_mmap_write_unlock || !f_force_sig_fault ||
+        !f_copy_in || !f_copy_out || !f_access_vm || !foll_force) {
+        pr_info("urov-y: required BRK/MM/uaccess ABI unavailable\n");
+        return -EOPNOTSUPP;
+    }
+    if (g_verbose)
+        pr_info("urov-y: kver=%x BTF task.mm=%d mm.pgd=%d mm.users=%d vma.flags=%d vma.file=%d "
+                "lookup=%s lock=%s mm_fault=%s/%d brk_args=%d foll_force=0x%x\n",
+                kver, g_layout.task_mm, g_layout.mm_pgd, g_layout.mm_users,
+                g_layout.vma_flags, g_layout.vma_file, vma_name, g_use_rwsem ? "rwsem" : "mmap",
+                *mmf_argc ? fault_name : "none", *mmf_argc, *brk_argc, foll_force);
+    return 0;
+}
+
 static long parse_args(const char *args, uint8_t key[16], int *have_key)
 {
     const char *p = args;
@@ -1772,7 +1830,7 @@ long urov_y_backend_init(const char *args)
     int have_key = 0;
     unsigned int checks = 0;
     long ret;
-    int i;
+    int i, brk_argc, mmf_argc;
 
     memset(key, 0, sizeof(key));
     ret = parse_args(args, key, &have_key);
@@ -1790,27 +1848,12 @@ long urov_y_backend_init(const char *args)
     if (!kallsyms_lookup_name) return -ENOSYS;
     if (uro_core_selftest(g_selftest_ws, &checks) || checks != URO_CORE_CHECKS) return -EINVAL;
 
-    f_brk_handler = lookup("brk_handler");
-    f_do_mem_abort = lookup("do_mem_abort");
-    f_handle_mm_fault = lookup("handle_mm_fault");
-    f_get_task_mm = (get_task_mm_t)lookup("get_task_mm");
-    f_mmput = (mmput_t)lookup("mmput");
-    f_find_vma = (find_vma_t)lookup("find_vma");
-    f_mmap_write_lock = (mmap_write_lock_t)lookup("mmap_write_lock");
-    f_mmap_write_unlock = (mmap_write_unlock_t)lookup("mmap_write_unlock");
-    f_flush_tlb_mm = (flush_tlb_mm_t)lookup("flush_tlb_mm");
-    f_force_sig_fault = (force_sig_fault_t)lookup("force_sig_fault");
-    f_copy_in = (copy_nofault_t)lookup("copy_from_user_nofault");
-    f_copy_out = (copy_nofault_t)lookup("copy_to_user_nofault");
-    f_access_vm = (access_remote_vm_t)lookup("__access_remote_vm");
+    ret = resolve_kernel(&brk_argc, &mmf_argc);
+    if (ret) return ret;
     g_wrapper_mode = has_syscall_wrapper ? 1 : 0;
 
-    if (!f_brk_handler || !f_get_task_mm || !f_mmput || !f_find_vma ||
-        !f_mmap_write_lock || !f_mmap_write_unlock || !f_flush_tlb_mm ||
-        !f_force_sig_fault || !f_copy_in || !f_copy_out || !f_access_vm)
-        return -EOPNOTSUPP;
-
-    ret = hook_wrap(f_brk_handler, 3, uy_brk_before, 0, 0);
+    ret = hook_wrap(f_brk_handler, brk_argc, uy_brk_before, 0,
+                    (void *)(uintptr_t)(brk_argc == 2));
     if (ret) {
         if (g_verbose) pr_info("urov-y: hook brk_handler failed: %ld\n", ret);
         return -EOPNOTSUPP;
@@ -1847,21 +1890,22 @@ long urov_y_backend_init(const char *args)
     g_clone3_hooked = ret ? 0 : 1;
 #endif
 
-    g_ready = 1;
-
-    /* The PAGE_UXN mode needs the EL0 instruction-abort path and the generic
-     * fault installer. Both are optional: without them the module still loads
-     * and the BRK mode keeps working, only the page mode is refused. */
-    if (f_do_mem_abort) {
+    /* Both page modes require the abort hook and the PTE rearm hook. */
+    if (f_do_mem_abort && mmf_argc) {
         ret = hook_wrap(f_do_mem_abort, 3, uy_abort_before, 0, 0);
         g_page_hooked = ret ? 0 : 1;
         if (ret && g_verbose) pr_info("urov-y: hook do_mem_abort failed: %ld\n", ret);
     }
-    if (f_handle_mm_fault) {
-        ret = hook_wrap(f_handle_mm_fault, 4, 0, uy_mm_fault_after, 0);
+    if (g_page_hooked) {
+        ret = hook_wrap(f_handle_mm_fault, mmf_argc, 0, uy_mm_fault_after, 0);
         g_mmf_hooked = ret ? 0 : 1;
-        if (ret && g_verbose) pr_info("urov-y: hook handle_mm_fault failed: %ld\n", ret);
+        if (ret) {
+            if (g_verbose) pr_info("urov-y: hook MM fault handler failed: %ld\n", ret);
+            hook_unwrap(f_do_mem_abort, uy_abort_before, 0);
+            g_page_hooked = 0;
+        }
     }
+    g_ready = 1;
 
     if (g_verbose)
         pr_info("urov-y: backend ready brk_imm=%x trap=%x page_mode=%d\n",
@@ -1879,6 +1923,11 @@ unwind_brk:
         g_brk_hooked = 0;
     }
     return -EOPNOTSUPP;
+}
+
+long urov_y_copy_to_user(void *dst, const void *src, unsigned long len)
+{
+    return f_copy_out(dst, src, len);
 }
 
 long urov_y_backend_exit(void)

@@ -1,0 +1,164 @@
+[145218.311562] type=1400 audit(1793891947.552:195793): avc: denied { getopt } for comm="binder:2629_1A" scontext=u:r:system_server:s0 tcontext=u:r:shell:s0 tclass=unix_stream_socket permissive=0
+[145218.384196] cnss: Runtime suspend start
+[145218.385102] [kworke][0x6b820fc317c][23:19:07.630089] kiwi_v2: [19551:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145218.417628] cnss: Setting MHI state: SUSPEND(6)
+[145218.417665] cnss: Suspending PCI link
+[145218.417671] cnss: Use PCIe DRV suspend
+[145218.426350] cnss: Runtime suspend status: 0
+[145218.836289] BATTERY_CHG: handle_message: [ADSP] fg_update_status:: ssoc: 45, rsoc: 44, raw_soc: 4395, vbat: 3895, ibat: -197, temp: 341, ffc: 0, rm: 1703, bf: 3874, bc: 129, client: PdAuthClien, fcc: 5000
+[145219.765891] cnss: Runtime resume start
+[145219.766059] cnss: Resuming PCI link
+[145219.774911] cnss: Set PCI link status to: 2
+[145219.774981] cnss: Setting MHI state: RESUME(7)
+[145219.780583] [kworke][0x6b8229505e0][23:19:09.025561] kiwi_v2: [19551:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145219.797446] cnss: Runtime resume status: 0
+[145220.846285] BATTERY_CHG: xm_batt_update_work: batt_update_work: batt_temp:34100 blank_state:0,interval:10,soc:45
+[145220.879004] cnss: Runtime suspend start
+[145220.883867] [kworke][0x6b823d8404d][23:19:10.128847] kiwi_v2: [19551:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145220.911380] cnss: Setting MHI state: SUSPEND(6)
+[145220.911439] cnss: Suspending PCI link
+[145220.911457] cnss: Use PCIe DRV suspend
+[145220.923269] cnss: Runtime suspend status: 0
+[145221.717400] BATTERY_CHG: power_supply_read_temp: batt_thermal temp:341 ,delta:1006 rc=0
+[145221.804768] cnss: Runtime resume start
+[145221.804889] cnss: Resuming PCI link
+[145221.814468] cnss: Set PCI link status to: 2
+[145221.814531] cnss: Setting MHI state: RESUME(7)
+[145221.820865] [kworke][0x6b824eac34a][23:19:11.065847] kiwi_v2: [19551:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145221.837166] cnss: Runtime resume status: 0
+[145223.145907] (virq:irq_count)- 1:435387161 11:229638880 6:85426432 32:29064694 2:24182351 20:16374099 243:11810695 358:10605522 34:9909832 241:8892944 
+[145223.146036] (cpu:irq_count)- 0:181125920 1:158888325 2:160214067 3:119318750 4:86846186 5:54505439 6:57076845 7:68579927 
+[145223.146096] (ipi:irq_count)- 0:435387161 1:24182351 2:0 3:0 4:0 5:85426432 6:0 
+[145223.653399] cnss: Runtime suspend start
+[145223.658525] [kworke][0x6b8270523ac][23:19:12.903505] kiwi_v2: [19551:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145223.686507] cnss: Setting MHI state: SUSPEND(6)
+[145223.686577] cnss: Suspending PCI link
+[145223.686597] cnss: Use PCIe DRV suspend
+[145223.696985] cnss: Runtime suspend status: 0
+[145223.844421] cnss: Runtime resume start
+[145223.844554] cnss: Resuming PCI link
+[145223.852064] cnss: Set PCI link status to: 2
+[145223.852662] cnss: Setting MHI state: RESUME(7)
+[145223.858713] [kworke][0x6b8273fc4a8][23:19:13.103625] kiwi_v2: [19551:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145223.874471] cnss: Runtime resume status: 0
+[145224.480534] cnss: Runtime suspend start
+[145224.481479] [kworke][0x6b827f63d9b][23:19:13.726464] kiwi_v2: [19551:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145224.508753] [kworke][0x6b827fe3b3f][23:19:13.753739] kiwi_v2: [19551:I:HIF] hif_try_complete_tasks: waiting for tasklets 0 grp tasklets 0 work 2
+[145224.524324] cnss: Setting MHI state: SUSPEND(6)
+[145224.524376] cnss: Suspending PCI link
+[145224.524385] cnss: Use PCIe DRV suspend
+[145224.530461] cnss: Runtime suspend status: 0
+[145225.881839] cnss: Runtime resume start
+[145225.881990] cnss: Resuming PCI link
+[145225.890872] cnss: Set PCI link status to: 2
+[145225.890930] cnss: Setting MHI state: RESUME(7)
+[145225.897696] [kworke][0x6b82995258c][23:19:15.142677] kiwi_v2: [19551:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145225.913793] cnss: Runtime resume status: 0
+[145226.485191] cnss: Runtime suspend start
+[145226.487062] [kworke][0x6b82a41cfbe][23:19:15.732039] kiwi_v2: [19551:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145226.519888] cnss: Setting MHI state: SUSPEND(6)
+[145226.519948] cnss: Suspending PCI link
+[145226.519968] cnss: Use PCIe DRV suspend
+[145226.530866] cnss: Runtime suspend status: 0
+[145227.920637] cnss: Runtime resume start
+[145227.920778] cnss: Resuming PCI link
+[145227.929986] cnss: Set PCI link status to: 2
+[145227.930046] cnss: Setting MHI state: RESUME(7)
+[145227.936372] [kworke][0x6b82bea631d][23:19:17.181258] kiwi_v2: [19551:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145227.952979] cnss: Runtime resume status: 0
+[145228.577907] cnss: Runtime suspend start
+[145228.582201] [kworke][0x6b82ca79f60][23:19:17.827181] kiwi_v2: [19551:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145228.607741] cnss: Setting MHI state: SUSPEND(6)
+[145228.607807] cnss: Suspending PCI link
+[145228.607828] cnss: Use PCIe DRV suspend
+[145228.615486] cnss: Runtime suspend status: 0
+[145228.909824] BATTERY_CHG: handle_message: [ADSP] fg_update_status:: ssoc: 45, rsoc: 44, raw_soc: 4398, vbat: 3904, ibat: -471, temp: 341, ffc: 0, rm: 1704, bf: 3874, bc: 129, client: PdAuthClien, fcc: 5000
+[145229.959096] cnss: Runtime resume start
+[145229.959244] cnss: Resuming PCI link
+[145229.969372] cnss: Set PCI link status to: 2
+[145229.969430] cnss: Setting MHI state: RESUME(7)
+[145229.975710] [kworke][0x6b82e3fe085][23:19:19.220690] kiwi_v2: [19551:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145229.993584] cnss: Runtime resume status: 0
+[145230.408059] type=1400 audit(1793891959.648:195794): avc: denied { getopt } for comm="binder:2629_1A" scontext=u:r:system_server:s0 tcontext=u:r:shell:s0 tclass=unix_stream_socket permissive=0
+[145230.408862] type=1400 audit(1793891959.648:195795): avc: denied { getopt } for comm="binder:2629_1A" scontext=u:r:system_server:s0 tcontext=u:r:shell:s0 tclass=unix_stream_socket permissive=0
+[145230.408949] type=1400 audit(1793891959.648:195796): avc: denied { getopt } for comm="binder:2629_1A" scontext=u:r:system_server:s0 tcontext=u:r:shell:s0 tclass=unix_stream_socket permissive=0
+[145230.519572] type=1400 audit(1793891959.760:195797): avc: denied { search } for comm="kpatch" name="nativetest" dev="dm-44" ino=9 scontext=u:r:shell:s0 tcontext=u:object_r:nativetest_data_file:s0 tclass=dir permissive=0
+[145230.519848] type=1400 audit(1793891959.760:195798): avc: denied { search } for comm="kpatch" name="nativetest64" dev="dm-44" ino=10 scontext=u:r:shell:s0 tcontext=u:object_r:nativetest_data_file:s0 tclass=dir permissive=0
+[145230.519909] type=1400 audit(1793891959.760:195799): avc: denied { search } for comm="kpatch" name="nativetest" dev="dm-44" ino=9 scontext=u:r:shell:s0 tcontext=u:object_r:nativetest_data_file:s0 tclass=dir permissive=0
+[145230.520022] type=1400 audit(1793891959.760:195800): avc: denied { search } for comm="kpatch" name="nativetest64" dev="dm-44" ino=10 scontext=u:r:shell:s0 tcontext=u:object_r:nativetest_data_file:s0 tclass=dir permissive=0
+[145230.520078] type=1400 audit(1793891959.760:195801): avc: denied { search } for comm="kpatch" name="nativetest" dev="dm-44" ino=9 scontext=u:r:shell:s0 tcontext=u:object_r:nativetest_data_file:s0 tclass=dir permissive=0
+[145230.520363] type=1400 audit(1793891959.760:195802): avc: denied { search } for comm="kpatch" name="nativetest64" dev="dm-44" ino=10 scontext=u:r:shell:s0 tcontext=u:object_r:nativetest_data_file:s0 tclass=dir permissive=0
+[145230.584686] audit: audit_lost=120958 audit_rate_limit=5 audit_backlog_limit=64
+[145230.584710] audit: rate limit exceeded
+[145230.594315] [+] KP I commit_common_su: pid: 14612, tgid: 14612, to_uid: 0, sctx: , via_hook: 1
+[145230.616455] cnss: Runtime suspend start
+[145230.617602] [kworke][0x6b82efbea73][23:19:19.862528] kiwi_v2: [19551:I:PMO] pmo_core_enable_wow_in_fw: drv wow is enabled
+[145230.647011] cnss: Setting MHI state: SUSPEND(6)
+[145230.647049] cnss: Suspending PCI link
+[145230.647057] cnss: Use PCIe DRV suspend
+[145230.650897] cnss: Runtime suspend status: 0
+[145231.065925] [ FTS ] fts_drm_panel_notifier_callback: FB_BLANK_UNBLANK
+[145231.065939] [mi_disp:_sde_kms_drm_check_dpms [msm_drm]][2026-11-05 23:19:20.310927] [I]conn66 early_trigger:1 (power mode 1->2, fps 120->120) - 0.16(ms)
+[145231.067067] [drm:dsi_display_set_mode [msm_drm]] [msm-dsi-info]: mdp_transfer_time=7300, hactive=1080, vactive=2400, fps=120, clk_rate=832000000
+[145231.067320] [drm:dsi_ctrl_isr_configure [msm_drm]] [msm-dsi-info]: dsi-ctrl-0: IRQ 356 registered
+[145231.067567] [ FTS ] [xiaomi_touch_utc] [2026-11-05 15:19:20.312555]
+[145231.067578] [ FTS ] fts_disableInterrupt depth:0
+[145231.067595] [ FTS ] Interrupt Disabled!
+[145231.067596] [ FTS ] System resetting...
+[145231.067598] [ FTS ] fts_disableInterruptNoSync depth:1
+[145231.067599] [ FTS ] disable irq no sync, is_irq_enabled = 0 
+[145231.086062] BATTERY_CHG: xm_batt_update_work: batt_update_work: batt_temp:34100 blank_state:0,interval:10,soc:45
+[145231.088752] [ FTS ] System reset DONE!
+[145231.088763] [ FTS ] release all touches
+[145231.088764] [ FTS ] fts_mode_handler: Screen ON... 
+[145231.088766] [ FTS ] fts_mode_handler: Sense ON
+[145231.104128] [ FTS ] fts_write_charge_status charging_status:2
+[145231.104330] [ FTS ] fts_enableInterrupt depth:1
+[145231.104349] [ FTS ] Interrupt Enabled!
+[145231.104910] [ FTS ] fts_status_event_handler Mutual negative detect Force cal = 01 00 00 00 00 02
+[145231.120743] [ FTS ] fts_palm_sensor_cmd 1
+[145231.120757] palm_sensor_store value:1
+[145231.236279] [mi_disp:mi_dsi_panel_set_dc_mode_locked [msm_drm]] [I]DC mode: On
+[145231.238402] [mi_disp:dsi_panel_enable [msm_drm]][2026-11-05 23:19:20.483388] [I]primary panel: DSI_CMD_SET_ON
+[145231.240808] [mi_disp:dsi_display_set_power [msm_drm]][2026-11-05 23:19:20.485795] [I]Display (primary), Power mode (On)
+[145231.257482] [mi_disp:mi_disp_lhbm_fod_allow_tx_lhbm [msm_drm]] [I]primary display allow_tx_lhbm = 1
+[145231.258278] [mi_disp:mi_disp_lhbm_fod_allow_tx_lhbm [msm_drm]] [I]primary display wake up local disp_fod kthread
+[145231.258967] [mi_disp:mi_dsi_panel_esd_irq_ctrl_locked [msm_drm]] [I][primary] esd irq is enable
+[145231.259610] [mi_disp:_sde_kms_drm_check_dpms [msm_drm]][2026-11-05 23:19:20.504597] [I]conn66 early_trigger:0 (power mode 1->2, fps 120->120) - 0.28(ms)
+[145231.262425] [mi_disp:mi_sde_connector_check_layer_flags [msm_drm]] [I]layer gxzw_anim = 1
+[145231.263077] [mi_disp:mi_dsi_panel_set_disp_param [msm_drm]][2026-11-05 23:19:20.508062] [I][primary] feature: aod_to_normal, value: 1
+[145231.263673] [mi_disp:mi_disp_update_0size_lhbm_layer [msm_drm]] [E]invalid panel_build_id
+[145231.264039] xiaomi_touch_dev_open
+[145231.264060] xiaomi_touch_dev_ioctl cmd:7, touchId:0, mode:15, value:96
+[145231.264070] [ FTS ] fts_set_mode_long_value, mode:15, len:96
+[145231.264218] [ FTS ] set cmd:0xc0 0xc grip_type:2, grip_pos:0,x_start:0,y_start:0,x_end:0,y_end:0
+[145231.266709] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=5  ffc:=0, pd_verifed:=0
+[145231.276608] [ FTS ] set cmd:0xc0 0xc grip_type:2, grip_pos:1,x_start:0,y_start:0,x_end:0,y_end:0
+[145231.289379] [ FTS ] set cmd:0xc0 0xc grip_type:2, grip_pos:2,x_start:0,y_start:0,x_end:0,y_end:2399
+[145231.304018] [mi_disp:mi_sde_connector_check_layer_flags [msm_drm]] [I]layer aod = 0
+[145231.305168] [ FTS ] set cmd:0xc0 0xc grip_type:2, grip_pos:3,x_start:1079,y_start:0,x_end:1079,y_end:2399
+[145231.308956] [mi_disp:mi_dsi_panel_set_brightness_clone [msm_drm]][2026-11-05 23:19:20.553944] [I][primary] set brightness clone to 8191
+[145231.314362] [mi_disp:mi_dsi_print_51_backlight_log [msm_drm]][2026-11-05 23:19:20.559349] [I][primary] set 51 backlight 2047
+[145231.317177] [ FTS ] set cmd:0xc0 0xc grip_type:1, grip_pos:0,x_start:0,y_start:0,x_end:0,y_end:0
+[145231.328916] [ FTS ] set cmd:0xc0 0xc grip_type:1, grip_pos:1,x_start:0,y_start:0,x_end:0,y_end:0
+[145231.337504] BATTERY_CHG: xm_charger_debug_info_print_work: usb_present: 1
+[145231.338470] BATTERY_CHG: xm_charger_debug_info_print_work: wls_present: 0
+[145231.342141] [ FTS ] set cmd:0xc0 0xc grip_type:1, grip_pos:2,x_start:0,y_start:0,x_end:35,y_end:2399
+[145231.352336] BATTERY_CHG: xm_charger_debug_info_print_work: chg_type= SDP tl:= 5  ffc:= 0, pd_verifed:= 0, FG_VENDOR_ID:= 3
+[145231.352526] [ FTS ] set cmd:0xc0 0xc grip_type:1, grip_pos:3,x_start:1044,y_start:0,x_end:1079,y_end:2399
+[145231.354777] BATTERY_CHG: xm_charger_debug_info_print_work: vbus_vol_uv: 4499000, ibus_ua: 450000
+[145231.366318] [ FTS ] set cmd:0xc0 0xc grip_type:0, grip_pos:0,x_start:0,y_start:0,x_end:0,y_end:0
+[145231.376618] [ FTS ] set cmd:0xc0 0xc grip_type:0, grip_pos:1,x_start:0,y_start:0,x_end:0,y_end:0
+[145231.389280] [ FTS ] set cmd:0xc0 0xc grip_type:0, grip_pos:2,x_start:0,y_start:2229,x_end:150,y_end:2399
+[145231.401007] [ FTS ] set cmd:0xc0 0xc grip_type:0, grip_pos:3,x_start:929,y_start:2229,x_end:1079,y_end:2399
+[145231.436216] [mi_disp:mi_disp_set_dimming_delayed_work_handler [msm_drm]] [I][primary] panel set backlight dimming on
+[145231.436873] [mi_disp:mi_dsi_panel_set_disp_param [msm_drm]][2026-11-05 23:19:20.681860] [I][primary] feature: dimming, value: 1
+[145231.559257] init: starting service 'mdnsd'...
+[145231.559936] init: Created socket '/dev/socket/mdnsd', mode 660, user 1020, group 3003
+[145231.566763] init: Control message: Processed ctl.start for 'mdnsd' from pid: 1754 (/system/bin/netd)
+[145231.581891] cnss: Runtime resume start
+[145231.581910] cnss: Resuming PCI link
+[145231.586418] cnss: Set PCI link status to: 2
+[145231.586433] cnss: Setting MHI state: RESUME(7)
+[145231.590110] [kworke][0x6b83018d92f][23:19:20.835098] kiwi_v2: [542:I:PMO] pmo_core_psoc_send_host_wakeup_ind_to_fw: Host wakeup indication sent to fw
+[145231.604224] cnss: Runtime resume status: 0

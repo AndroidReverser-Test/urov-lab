@@ -904,14 +904,24 @@ static void hold_until_unload(const struct page *p)
 static void log_context(void)
 {
     char buf[256];
+    char context[256] = "unavailable";
+    unsigned long long caps = ~0ULL;
+    int seccomp = -1;
     FILE *f = fopen("/proc/self/attr/current", "re");
-    if (f) { if (fgets(buf, sizeof(buf), f)) LOG("CONTEXT pid=%d uid=%d selinux=%s", getpid(), getuid(), buf); fclose(f); }
-    f = fopen("/proc/self/status", "re");
     if (f) {
-        while (fgets(buf, sizeof(buf), f))
-            if (!strncmp(buf, "Seccomp:", 8) || !strncmp(buf, "CapEff:", 7)) LOG("CONTEXT %s", buf);
+        if (fgets(context, sizeof(context), f)) context[strcspn(context, "\r\n")] = '\0';
         fclose(f);
     }
+    f = fopen("/proc/self/status", "re");
+    if (f) {
+        while (fgets(buf, sizeof(buf), f)) {
+            if (!strncmp(buf, "CapEff:", 7)) (void)sscanf(buf + 7, "%llx", &caps);
+            if (!strncmp(buf, "Seccomp:", 8)) (void)sscanf(buf + 8, "%d", &seccomp);
+        }
+        fclose(f);
+    }
+    LOG("CONTEXT pid=%d uid=%d selinux=%s CapEff: %016llx Seccomp: %d",
+        getpid(), getuid(), context, caps, seccomp);
 }
 
 /* Observation fixtures know the key only to establish ground truth. Neither
@@ -1299,6 +1309,7 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
              observed_control.verdict, observed_control.scope, observed_views.file_diff);
     page_close(&p);
 done:
+    log_context();
     LOG("NATIVE_RESULT %s mode=%s", result, mode);
     (*env)->ReleaseStringUTFChars(env, mode_value, mode);
     if (key_value) (*env)->ReleaseStringUTFChars(env, key_value, key);
