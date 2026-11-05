@@ -5,6 +5,7 @@
 
 #define UD_OBSERVE_EPOCHS 3U
 #define UD_OBSERVE_TRIALS 32U
+#define UD_STORE_TRIALS 32U
 
 struct ud_exclusive_observation {
     enum ud_verdict reservation_loss;
@@ -18,6 +19,13 @@ struct ud_reader_observation {
     int error;
     unsigned completed;
     uint64_t direct_value, reader_value, file_value;
+};
+
+struct ud_store_observation {
+    enum ud_verdict verdict;
+    int error;
+    unsigned completed, unexpected_stores;
+    uint64_t elapsed_ns;
 };
 
 typedef uint64_t (*ud_plain_reader)(const void *);
@@ -40,6 +48,18 @@ typedef uint64_t (*ud_plain_reader)(const void *);
 void ud_observe_exclusive(const void *address, const void *reference,
                           int backing_fd, off_t offset,
                           struct ud_exclusive_observation *out);
+
+/* Same retained RX mappings, offset and worker-thread requirements as above.
+ * CLREX clears the reservation and a branch skips the LDXR next to the LDRB.
+ * MATCH requires an unexpected STXR success AND a changed private scratch
+ * word in every target trial, with native failure on both reference trials.
+ * The read byte must agree with the file throughout. Mixed results or bad
+ * controls yield UNKNOWN. This tests the PAGE_AP bridge's store semantics
+ * on the sampled page. The only write address is private stack storage.
+ */
+void ud_observe_unreserved_store(const void *address, const void *reference,
+                                 int backing_fd, off_t offset,
+                                 struct ud_store_observation *out);
 
 /* Observe instruction fetch on an app-owned canary. Both addresses must be
  * 8-byte aligned, callable immutable RX entries for the same file bytes in

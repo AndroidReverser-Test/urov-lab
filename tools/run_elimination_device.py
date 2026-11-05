@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UROV-Y device matrix, including keyless instruction-fetch detection.
+"""UROV-Y device matrix with keyless instruction-fetch and store checks.
 
 Runs on one device; root only loads/unloads modules and collects kernel truth:
 
@@ -9,9 +9,10 @@ Runs on one device; root only loads/unloads modules and collects kernel truth:
   - UROV-Y PAGE_UXN: the site word is unchanged and canary fetches trap.
   - UROV-Y PAGE_AP: site word and canary are native; a data read is trapped,
     and the adjacent LDXR/STXR bridge keeps the exclusive probe negative.
+    Skipping the LDXR after CLREX exposes the bridge's unconditional store.
   - All UROV-Y modes: the business reader receives the fake value.
-  - A separate UID sees a clean canary while the owner's PAGE_UXN is live.
-  - The owner sees a clean canary after deactivation or active-session unload.
+  - A separate UID sees no findings while the owner's PAGE_UXN or PAGE_AP is live.
+  - The owner sees no findings after deactivation or active-session unload.
 
 Build the two APKs with apps/urov-detect/build.ps1 (second time with -Observer).
 """
@@ -111,6 +112,19 @@ def main():
     def execution_cases(logs):
         return [kv(line) for line in re.findall(r"ELIM_EXEC [^\n]+", logs)]
 
+    def store_cases(logs, mode):
+        cases = [kv(line) for line in re.findall(r"ELIM_STORE [^\n]+", logs)]
+        if not cases:
+            raise RuntimeError(f"{mode}: no store observations")
+        for case in cases:
+            expected = ((mode == "w-active" and case["name"].startswith("active_")) or
+                        (mode == "w-hold" and case["name"] == "hold_active"))
+            match, clean = int(case["match"]), int(case["clean"])
+            expected_count, wrong_count = (match, clean) if expected else (clean, match)
+            if int(case["expected"]) != expected or not expected_count or wrong_count:
+                raise RuntimeError(f"{mode}: unexpected store result {case}")
+        return cases
+
     def collect(pid, label, mode, wait_for=None):
         until = time.monotonic() + 120
         logs = ""
@@ -136,6 +150,8 @@ def main():
         run = {"label": label, "mode": mode, "pid": pid, "result": found[0],
                "app_pass": found[1] == "PASS", "cases": cases,
                "execution": execution_cases(logs),
+               "store_checks": store_cases(logs, mode),
+               "store_state": re.findall(r"ELIM_STORE_STATE [^\n]+", logs),
                "execution_state": re.findall(r"ELIM_EXEC_STATE [^\n]+", logs),
                "features": re.findall(r"ELIM_FEATURE [^\n]+", logs),
                "business": re.findall(r"ELIM_BUSINESS [^\n]+", logs),
@@ -260,6 +276,11 @@ def main():
             run, _ = run_app(f"06-ap-{cycle + 1}", "w-active", key=module_key)
             if not run["cases"]:
                 raise RuntimeError("w-active produced no observation cases")
+            store_names = {c["name"] for c in run["store_checks"]}
+            if not {"active_changed", "active_outside_window", "active_equal_value",
+                    "baseline", "deactivated"} <= store_names or not any(
+                        name.startswith("active_cpu_") for name in store_names):
+                raise RuntimeError("w-active store matrix incomplete")
             for case in run["cases"]:
                 if case["name"].startswith("active") and (
                         int(case["exclusive_match"]) != 0 or int(case["reader_match"]) != 0):
@@ -296,14 +317,24 @@ def main():
             if "state=active" not in status:
                 raise RuntimeError(f"{label} session is not active")
             uid = app_uid(hold_logs)
-            if hold_mode == "z-hold":
-                observer, _ = run_app("08-other-uid", "z-observer", package=OBSERVER)
+            hold_stores = store_cases(hold_logs, hold_mode)
+            if hold_mode == "w-hold":
+                stores = sum(int(c["stores"]) for c in hold_stores)
+                if int(kv(status)["llsc"]) != stores or stores == 0:
+                    raise RuntimeError("AP bridge count disagrees with the app's private writes")
+            if hold_mode in ("z-hold", "w-hold"):
+                is_ap = hold_mode == "w-hold"
+                observer_label = "09-other-uid-ap" if is_ap else "08-other-uid"
+                observer, _ = run_app(observer_label, "z-observer", package=OBSERVER)
                 if observer["uid"] == uid:
                     raise RuntimeError("observer has the owner's UID")
-                status = kp("kpm", "ctl0", "urov-y", "status")
-                report["other_uid_owner_status"] = status
-                if "state=active" not in status:
+                after_observer = kp("kpm", "ctl0", "urov-y", "status")
+                status_key = "other_uid_ap_owner_status" if is_ap else "other_uid_owner_status"
+                report[status_key] = after_observer
+                if "state=active" not in after_observer:
                     raise RuntimeError("owner session ended during observation")
+                if kv(after_observer)["llsc"] != kv(status)["llsc"]:
+                    raise RuntimeError("owner bridge counter changed during foreign observation")
             report[f"{label}_unload"] = kp("kpm", "unload", "urov-y", check=False)
             if kp("kpm", "list").strip():
                 raise RuntimeError("unload with a live session did not remove the module")
@@ -320,7 +351,9 @@ def main():
                 raise RuntimeError("app died during the unload")
             report["runs"].append({"label": f"{label}-after-unload", "mode": hold_mode,
                                    "pid": pid, "uid": uid, "result": result[0],
-                                   "execution": execution_cases(hold_logs), "restored": restored,
+                                   "execution": execution_cases(hold_logs),
+                                   "store_checks": store_cases(hold_logs, hold_mode),
+                                   "restored": restored,
                                    "log": f"{label}-after-unload-{pid}.log"})
             print(f"{label}-after-unload: {result[0]}", flush=True)
             for line in restored:
@@ -378,6 +411,8 @@ def main():
                             "control_failed")
         execution = {scope: dict.fromkeys(execution_fields, 0)
                      for scope in ("active_page", "controls")}
+        store_fields = ("n", "match", "clean", "unknown", "completed", "stores", "total_ns")
+        stores = {scope: dict.fromkeys(store_fields, 0) for scope in ("ap_active", "controls")}
         for run in report["runs"]:
             for case in run.get("cases", []):
                 totals["elim_cases"] += 1
@@ -398,8 +433,13 @@ def main():
                 scope = "active_page" if case["expected"] == "1" else "controls"
                 for field in execution_fields:
                     execution[scope][field] += int(case[field])
+            for case in run.get("store_checks", []):
+                scope = "ap_active" if case["expected"] == "1" else "controls"
+                for field in store_fields:
+                    stores[scope][field] += int(case[field])
         report["totals"] = totals
         report["execution_totals"] = execution
+        report["store_totals"] = stores
         save("summary.json", json.dumps(report, ensure_ascii=False, indent=2))
         print(f"RESULT {'PASS' if report['passed'] else 'FAIL'} {output}", flush=True)
     return 0 if report["passed"] else 1

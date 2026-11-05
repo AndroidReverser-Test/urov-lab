@@ -75,6 +75,78 @@ static unsigned exclusive_once(const void *address, uint64_t *scratch, unsigned 
     return failed;
 }
 
+/* Keep the LDXR in the instruction stream for the bridge's look-behind, but
+ * branch over it. The native STXR must see an open exclusive monitor. */
+__attribute__((noinline))
+static int unreserved_store_once(const void *address, uint64_t *scratch, unsigned *byte)
+{
+    const uint64_t initial = UINT64_C(0x5a5a5a5aa5a5a5a5);
+    const uint64_t sentinel = UINT64_C(0xc3175ed9246ab08f);
+    uint64_t value = sentinel;
+    unsigned status;
+
+    *scratch = initial;
+    __asm__ volatile("clrex\n"
+                     "b 1f\n"
+                     "ldxr %0, [%3]\n"
+                     "1: ldrb %w2, [%4]\n"
+                     "stxr %w1, %0, [%3]\n"
+                     : "+&r"(value), "=&r"(status), "=&r"(*byte)
+                     : "r"(scratch), "r"(address) : "memory");
+    uint64_t observed = *scratch;
+    if (status == 1 && observed == initial) return 0;
+    if (status == 0 && observed == sentinel) return 1;
+    return -1;
+}
+
+void ud_observe_unreserved_store(const void *address, const void *reference,
+                                 int backing_fd, off_t offset,
+                                 struct ud_store_observation *out)
+{
+    struct sample_identity target, control, after;
+    uint64_t scratch;
+    uint8_t file_byte;
+    int saved = errno;
+    uint64_t begin = now_ns();
+
+    memset(out, 0, sizeof(*out));
+    out->verdict = UD_UNKNOWN;
+    if (address == reference) { out->error = EINVAL; goto done; }
+    out->error = identity(address, 1, backing_fd, offset, &target);
+    if (out->error) goto done;
+    out->error = identity(reference, 1, backing_fd, offset, &control);
+    if (out->error) goto done;
+    ssize_t got = pread(backing_fd, &file_byte, 1, offset);
+    if (got != 1) { out->error = got < 0 ? errno : EIO; goto done; }
+
+    for (unsigned i = 0; i < UD_STORE_TRIALS; ++i) {
+        unsigned a, b, c;
+        int before = unreserved_store_once(reference, &scratch, &a);
+        int tested = unreserved_store_once(address, &scratch, &b);
+        int after_control = unreserved_store_once(reference, &scratch, &c);
+        if (before != 0 || after_control != 0 || tested < 0 ||
+            a != file_byte || b != file_byte || c != file_byte) {
+            out->error = EAGAIN;
+            goto done;
+        }
+        ++out->completed;
+        out->unexpected_stores += tested == 1;
+    }
+
+    out->error = identity(address, 1, backing_fd, offset, &after);
+    if (out->error) goto done;
+    if (!unchanged(&target, &after)) { out->error = EAGAIN; goto done; }
+    out->error = identity(reference, 1, backing_fd, offset, &after);
+    if (out->error) goto done;
+    if (!unchanged(&control, &after)) { out->error = EAGAIN; goto done; }
+    if (out->unexpected_stores == UD_STORE_TRIALS) out->verdict = UD_MATCH;
+    else if (out->unexpected_stores == 0) out->verdict = UD_NO_MATCH;
+    else out->error = EAGAIN;
+done:
+    out->elapsed_ns = now_ns() - begin;
+    errno = saved;
+}
+
 static uint64_t scalar_word(const void *address)
 {
     uint64_t value;

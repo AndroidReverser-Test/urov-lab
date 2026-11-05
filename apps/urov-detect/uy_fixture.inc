@@ -7,13 +7,16 @@
  * as the business call windows.
  *
  * Expected result against urov-y:
- *   - ud_observe_exclusive() on the target page: NO_MATCH (the page is an
- *     ordinary readable mapping, no data abort is ever taken);
+ *   - ud_observe_exclusive() on the target page: NO_MATCH (a native load
+ *     in BRK/UXN modes, or the adjacent LL/SC bridge in AP mode);
  *   - ud_observe_reader() with the bare reader routine: NO_MATCH (a call from
  *     outside the business window is emulated from the original bytes);
  *   - ud_observe_execution() on the canary: MATCH only in active PAGE_UXN;
+ *   - ud_observe_unreserved_store(): MATCH only in active PAGE_AP;
  *   - the registered business call still returns the fake value.
  */
+
+#include "uy_fixture_control.h"
 
 __asm__(".pushsection .text.uy_sites,\"ax\",%progbits\n"
         ".p2align 12\n"
@@ -52,44 +55,6 @@ extern uint64_t uy_business_ldr(const void *p);
 extern uint32_t uy_business_ldrb(const void *p);
 extern char uy_business_ldr_end[];
 extern char uy_business_ldrb_end[];
-
-struct uy_ctx {
-    int have;
-    struct urov_x_keys keys;
-};
-
-static int uy_init_key(struct uy_ctx *ctx, const char *hex)
-{
-    uint8_t key[16];
-    unsigned len = hex ? (unsigned)strlen(hex) : 0U;
-    memset(ctx, 0, sizeof(*ctx));
-    if (urov_x_parse_key(hex, len, key)) return -1;
-    urov_x_derive(key, &ctx->keys);
-    memset(key, 0, sizeof(key));
-    ctx->have = 1;
-    return 0;
-}
-
-static struct urov_y_request uy_req(unsigned op)
-{
-    struct urov_y_request q;
-    memset(&q, 0, sizeof(q));
-    q.size = (uint32_t)sizeof(q);
-    q.version = UROV_Y_ABI_VERSION;
-    q.op = (uint16_t)op;
-    q.request_id = UINT64_C(0x55524f56594c4142);
-    return q;
-}
-
-static long uy_control(const struct uy_ctx *ctx, unsigned op, struct urov_y_request *q)
-{
-    q->size = (uint32_t)sizeof(*q);
-    q->version = UROV_Y_ABI_VERSION;
-    q->op = (uint16_t)op;
-    q->mac = urov_y_request_mac(ctx->keys.mac, q);
-    return syscall(__NR_prctl, (long)ctx->keys.option, (long)ctx->keys.magic,
-                   (long)op, q, (long)sizeof(*q));
-}
 
 static int uy_register_page(const struct uy_ctx *ctx, const struct page *p,
                             unsigned length, uint64_t value, unsigned mode,
@@ -198,7 +163,8 @@ static void elimination_exec_case(const char *name, const struct page *reference
         (unsigned long long)total_ns, (unsigned long long)max_ns);
 }
 
-static void elimination_exec_each_cpu(const struct page *reference, enum ud_verdict expected)
+static void elimination_each_cpu(const struct page *page, enum ud_verdict expected,
+                                  int test_store)
 {
     cpu_set_t available;
     unsigned tested = 0;
@@ -217,7 +183,8 @@ static void elimination_exec_each_cpu(const struct page *reference, enum ud_verd
             continue;
         }
         snprintf(name, sizeof(name), "active_cpu_%d", cpu);
-        elimination_exec_case(name, reference, 3, expected);
+        if (test_store) store_case(name, page, 8, 3, expected);
+        else elimination_exec_case(name, page, 3, expected);
         ++tested;
     }
     REQUIRE(!sched_setaffinity(0, sizeof(available), &available) && tested > 0,
@@ -225,10 +192,11 @@ static void elimination_exec_each_cpu(const struct page *reference, enum ud_verd
 }
 
 /* Standalone observer path: no UROV control request or key input. */
-static void elimination_exec_passive(int repeats)
+static void elimination_observe_passive(int repeats)
 {
-    struct page reference;
+    struct page reference, p;
     struct ud_exclusive_observation obs;
+    struct ud_store_observation store;
     const void *site = (const void *)(uintptr_t)&uy_site_canary;
     size_t reader_offset = (uintptr_t)&uy_site_ldr % UROV_Y_PAGE;
 
@@ -246,6 +214,22 @@ static void elimination_exec_passive(int repeats)
     REQUIRE(obs.reservation_loss == UD_UNKNOWN && obs.error == EPROTO && obs.accepted == 0,
             "UY non-canary instructions accepted");
     page_close(&reference);
+
+    if (page_open(&p, MAP_SHARED)) {
+        REQUIRE(0, "UY open store probe page errno=%d", errno);
+        return;
+    }
+    store_case("unregistered", &p, 8, repeats, UD_NO_MATCH);
+    const void *at = p.address + p.entry + 8;
+    const void *control = (const uint8_t *)(uintptr_t)&ud_payload + 8;
+    off_t offset = p.file_offset + p.entry + 8;
+    ud_observe_unreserved_store(at, at, p.fd, offset, &store);
+    REQUIRE(store.verdict == UD_UNKNOWN && store.error == EINVAL && store.completed == 0,
+            "UY store probe accepted same-address reference");
+    ud_observe_unreserved_store(at, control, p.fd, offset + 1, &store);
+    REQUIRE(store.verdict == UD_UNKNOWN && store.error == ESTALE && store.completed == 0,
+            "UY store probe accepted wrong file offset");
+    page_close(&p);
 }
 
 /* Private_Dirty / Anonymous kB of the VMA holding addr. */
@@ -369,7 +353,6 @@ static void elimination_clean(void)
     memset(key, 0x5a, sizeof(key));
     urov_x_derive(key, &ctx.keys);
     memset(key, 0, sizeof(key));
-    ctx.have = 1;
     ++g_cases;
 
     ud_probe_control(&ctl);
@@ -418,6 +401,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     struct ud_reader_observation rd;
     struct urov_y_request st = {0}, before = {0};
     enum ud_verdict expected_exec = mode == UROV_Y_MODE_PAGE_UXN ? UD_MATCH : UD_NO_MATCH;
+    enum ud_verdict expected_store = mode == UROV_Y_MODE_PAGE_AP ? UD_MATCH : UD_NO_MATCH;
     unsigned base_dirty = 0, base_anon = 0;
     const uint64_t fake = UINT64_C(0x8877665544332211);
 
@@ -446,6 +430,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     REQUIRE(!app_pread(p.fd, p.file_offset + p.entry, disk64, sizeof(disk64)), "UY pread64");
     elimination_case("baseline", &p, 8, repeats);
     elimination_exec_case("baseline", &reference, repeats, UD_NO_MATCH);
+    store_case("baseline", &p, 8, repeats, UD_NO_MATCH);
 
     if (uy_register_page(&ctx, &p, 8, fake, mode, &generation)) goto out;
 
@@ -503,7 +488,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
             "UY status before execution probe");
     elimination_exec_case("active_changed", &reference, repeats, expected_exec);
     if (mode == UROV_Y_MODE_PAGE_UXN || mode == UROV_Y_MODE_PAGE_AP)
-        elimination_exec_each_cpu(&reference, expected_exec);
+        elimination_each_cpu(&reference, expected_exec, 0);
     int same_session = !uy_status(&ctx, &st) && st.state == UROV_Y_ACTIVE &&
         st.generation == before.generation && st.value == before.value &&
         st.hits == before.hits && st.replays == before.replays && st.failures == before.failures;
@@ -511,6 +496,21 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     LOG("ELIM_EXEC_STATE unchanged=%d generation=%llu hits=%llu replays=%llu failures=%llu",
         same_session, (unsigned long long)st.generation, (unsigned long long)st.hits,
         (unsigned long long)st.replays, (unsigned long long)st.failures);
+
+    before = st;
+    store_case("active_changed", &p, 8, repeats, expected_store);
+    store_case("active_outside_window", &p, 96, repeats, expected_store);
+    if (mode == UROV_Y_MODE_PAGE_AP) elimination_each_cpu(&p, expected_store, 1);
+    same_session = !uy_status(&ctx, &st) && st.state == UROV_Y_ACTIVE &&
+        st.mode == before.mode && st.generation == before.generation && st.value == before.value &&
+        st.hits == before.hits && st.failures == before.failures &&
+        (mode == UROV_Y_MODE_PAGE_AP ? st.replays > before.replays : st.replays == before.replays);
+    REQUIRE(same_session, "UY session changed during store probe");
+    LOG("ELIM_STORE_STATE mode=%s preserved=%d generation=%llu hits=%llu failures=%llu "
+        "replays_before=%llu replays_after=%llu",
+        uy_mode_name(mode), same_session, (unsigned long long)st.generation,
+        (unsigned long long)st.hits, (unsigned long long)st.failures,
+        (unsigned long long)before.replays, (unsigned long long)st.replays);
 
     /* A detector that runs the registered business call window observes the
      * overlay: that is the feature, not a module fingerprint. Log it so the
@@ -541,6 +541,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     REQUIRE(uy_business_ldr(at) == disk, "UY identity SET not visible");
     elimination_case("active_equal_value", &p, 8, repeats);
     elimination_exec_case("active_equal_value", &reference, repeats, expected_exec);
+    store_case("active_equal_value", &p, 8, repeats, expected_store);
 
     REQUIRE(!uy_status(&ctx, &st) && st.state == UROV_Y_ACTIVE &&
             st.generation == generation + 2 && st.failures == 0 &&
@@ -578,6 +579,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     }
     elimination_case("deactivated", &p, 8, repeats);
     elimination_exec_case("deactivated", &reference, repeats, UD_NO_MATCH);
+    store_case("deactivated", &p, 8, repeats, UD_NO_MATCH);
 
 out:
     if (have_thread) {
@@ -624,6 +626,8 @@ static void elimination_hold(const char *key_hex, unsigned mode)
     REQUIRE(uy_business_ldr(at) == UINT64_C(0x8877665544332211), "UY hold not armed");
     elimination_exec_case("hold_active", &reference, 3,
                           mode == UROV_Y_MODE_PAGE_UXN ? UD_MATCH : UD_NO_MATCH);
+    store_case("hold_active", &p, 8, 3,
+               mode == UROV_Y_MODE_PAGE_AP ? UD_MATCH : UD_NO_MATCH);
     LOG("ELIM_HOLD_READY pid=%d uid=%d mode=%s", getpid(), getuid(), uy_mode_name(mode));
     for (unsigned i = 0; i < 900; ++i) {
         unsigned dirty = 0, anon = 0;
@@ -645,7 +649,10 @@ static void elimination_hold(const char *key_hex, unsigned mode)
     }
     ++g_cases;
     REQUIRE(restored, "UY hold did not observe a restored site");
-    if (restored) elimination_exec_case("hold_restored", &reference, 3, UD_NO_MATCH);
+    if (restored) {
+        elimination_exec_case("hold_restored", &reference, 3, UD_NO_MATCH);
+        store_case("hold_restored", &p, 8, 3, UD_NO_MATCH);
+    }
     page_close(&reference);
     page_close(&p);
 }

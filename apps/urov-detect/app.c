@@ -28,6 +28,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <zlib.h>
 #include "urov_detect.h"
 #include "urov_observe.h"
 #include "../../urov_abi.h"
@@ -1074,6 +1075,44 @@ static void observation_each_cpu(const struct page *p)
     LOG("OBS_CPUS tested=%u worker_affinity_restored=1", tested);
 }
 
+static void store_case(const char *name, const struct page *p, unsigned delta,
+                       int repeats, enum ud_verdict expected)
+{
+    const uint8_t *at = p->address + p->entry + delta;
+    const uint8_t *reference = (const uint8_t *)(uintptr_t)&ud_payload + delta;
+    const off_t offset = p->file_offset + p->entry + delta;
+    unsigned match = 0, clean = 0, unknown = 0, completed = 0, stores = 0;
+    uint64_t total_ns = 0, max_ns = 0;
+    off_t position = lseek(p->fd, 0, SEEK_CUR);
+    int probe_fds = probe_fd_count();
+
+    ++g_cases;
+    for (int i = 0; i < repeats; ++i) {
+        struct ud_store_observation obs;
+        errno = EDOM;
+        ud_observe_unreserved_store(at, reference, p->fd, offset, &obs);
+        REQUIRE(errno == EDOM, "%s store probe changed errno", name);
+        REQUIRE(obs.verdict == expected ||
+                (obs.verdict == UD_UNKNOWN && obs.error == EAGAIN),
+                "%s store=%d expected=%d completed=%u stores=%u error=%d",
+                name, obs.verdict, expected, obs.completed, obs.unexpected_stores, obs.error);
+        match += obs.verdict == UD_MATCH;
+        clean += obs.verdict == UD_NO_MATCH;
+        unknown += obs.verdict == UD_UNKNOWN;
+        completed += obs.completed;
+        stores += obs.unexpected_stores;
+        total_ns += obs.elapsed_ns;
+        if (obs.elapsed_ns > max_ns) max_ns = obs.elapsed_ns;
+    }
+    REQUIRE(match + clean > 0, "%s all store observations were inconclusive", name);
+    REQUIRE(lseek(p->fd, 0, SEEK_CUR) == position, "%s store probe changed file position", name);
+    REQUIRE(probe_fds == probe_fd_count(), "%s store probe leaked metadata fd", name);
+    LOG("ELIM_STORE name=%s n=%d expected=%d match=%u clean=%u unknown=%u "
+        "completed=%u stores=%u total_ns=%llu max_ns=%llu",
+        name, repeats, expected, match, clean, unknown, completed, stores,
+        (unsigned long long)total_ns, (unsigned long long)max_ns);
+}
+
 static void observation_matrix(const char *key, int repeats, int active)
 {
     struct page p;
@@ -1107,6 +1146,7 @@ static void observation_matrix(const char *key, int repeats, int active)
             REQUIRE(0, "OBS register errno=%d", errno); goto finish;
         }
         observation_case("active_changed", &p, 8, repeats, UD_MATCH, UD_MATCH);
+        store_case("x_active", &p, 8, repeats, UD_NO_MATCH);
         observation_case("active_outside_window", &p, 96, repeats, UD_MATCH, UD_NO_MATCH);
         struct page alias;
         if (!page_open(&alias, MAP_SHARED)) {
@@ -1157,9 +1197,9 @@ finish:
     page_close(&p);
 }
 
-/* urov-y (site-trap variant) fixtures live in their own include so the
- * detector core and the urov-x fixtures stay untouched. */
+/* UROV-Y fixtures share the observation helpers above. */
 #include "uy_fixture.inc"
+#include "crc_fixture.inc"
 
 JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
     JNIEnv *env, jclass cls, jstring mode_value, jint repeats, jstring key_value)
@@ -1180,6 +1220,14 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
     g_checks = g_fail = g_cases = 0;
     log_context();
     LOG("BEGIN mode=%s repeats=%d", mode, (int)repeats);
+    if (!strncmp(mode, "crc-", 4)) {
+        uint32_t clean_crc = 0, patched_crc = 0;
+        crc_injection(mode, key, (int)repeats, &clean_crc, &patched_crc);
+        snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u "
+                 "crc32_file=%08x crc32_patched=%08x", g_fail ? "FAIL" : "PASS",
+                 g_cases, g_checks, g_fail, clean_crc, patched_crc);
+        goto done;
+    }
     if (!strncmp(mode, "observe-", 8)) {
         observation_matrix(key, (int)repeats, !strcmp(mode, "observe-active"));
         snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
@@ -1211,7 +1259,7 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
             elimination_hold(key, trap);
         else {
             if (strcmp(mode, "z-observer")) elimination_clean();
-            elimination_exec_passive((int)repeats);
+            elimination_observe_passive((int)repeats);
         }
         snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
                  g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);

@@ -26,8 +26,15 @@ New-Item -ItemType Directory -Force -Path $out, $classes, $dex | Out-Null
     '-Wl,--build-id=sha1' '-Wl,-z,noexecstack' '-Wl,-z,max-page-size=16384' `
     -I (Join-Path $lab 'native') (Join-Path $here 'app.c') `
     (Join-Path $lab 'native\urov_detect.c') (Join-Path $lab 'native\urov_observe.c') `
-    -o (Join-Path $out 'liburovdetect.so') -llog -ldl
+    -o (Join-Path $out 'liburovdetect.so') -llog -ldl -lz
 if ($LASTEXITCODE -ne 0) { throw 'Native build failed' }
+if (!$Observer) {
+    & "$bin\clang.exe" --target=aarch64-linux-android31 -std=gnu11 -shared -fPIC -O2 -g0 `
+        -Wall -Wextra -Werror -Wformat=2 -Wshadow `
+        '-Wl,--build-id=sha1' '-Wl,-z,noexecstack' '-Wl,-z,max-page-size=16384' `
+        (Join-Path $here 'crc_patch_fixture.c') -o (Join-Path $out 'liburov_crc_patch.so')
+    if ($LASTEXITCODE -ne 0) { throw 'CRC fixture build failed' }
+}
 & javac -encoding UTF-8 -source 8 -target 8 -Xlint:-options `
     -bootclasspath "$jar;$tools\core-lambda-stubs.jar" -d $classes `
     (Join-Path $here 'MainActivity.java') (Join-Path $here 'ObserverActivity.java')
@@ -47,6 +54,11 @@ try {
     foreach ($item in @(@('classes.dex', (Join-Path $dex 'classes.dex')),
                        @('lib/arm64-v8a/liburovdetect.so', (Join-Path $out 'liburovdetect.so')))) {
         [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $item[1], $item[0],
+            [IO.Compression.CompressionLevel]::Optimal) | Out-Null
+    }
+    if (!$Observer) {
+        [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip,
+            (Join-Path $out 'liburov_crc_patch.so'), 'lib/arm64-v8a/liburov_crc_patch.so',
             [IO.Compression.CompressionLevel]::Optimal) | Out-Null
     }
 } finally { $zip.Dispose() }
