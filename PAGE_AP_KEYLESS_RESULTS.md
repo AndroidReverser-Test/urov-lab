@@ -1,5 +1,11 @@
 # 普通 App 无密钥复核 UROV-Y PAGE_AP
 
+> 后续（2026-11-05，第四轮）：本文“新探针”记录的 `ud_observe_unreserved_store()`
+> 特征已在 [PAGE_AP_KEYLESS_RESULTS_R2.md](PAGE_AP_KEYLESS_RESULTS_R2.md) 中消除。
+> 桥现在只在 `LDXR` 的目的寄存器仍等于 `[Xn]`（即 `LDXR` 确实执行）时代写；
+> 分支跳过 `LDXR` 的序列由 `STXR` 原生失败。设计见
+> [ELIMINATION_DESIGN.md](ELIMINATION_DESIGN.md) §11。
+
 2026-11-05，Pixel 6，Android 16，arm64，内核 `6.1.134-android14-11`，KernelPatch `0xc00`。本轮以 `c452720` 的 KPM 后端为基线，重建的 `urov-y.kpm` SHA-256 为 `fbe8dc8409351696f0f17ecaf2da77818a8df2cfdcb4e8fd6d0b81d02d38a87b`，与消除实验使用的产物一致。日志目录使用主机 UTC+8 时间，logcat 使用设备时钟。[既有消除结果](ELIMINATION_RESULTS.md) · [本轮机器结果](results/eliminate-20261105-215844/summary.json)
 
 ## 源码复核

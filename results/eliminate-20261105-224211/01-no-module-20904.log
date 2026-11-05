@@ -1,0 +1,10 @@
+--------- beginning of main
+10-02 13:16:52.895 20904 20933 I urovdetect: CONTEXT pid=20904 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768
+10-02 13:16:52.895 20904 20933 I urovdetect: CONTEXT CapEff:	0000000000000000
+10-02 13:16:52.895 20904 20933 I urovdetect: CONTEXT Seccomp:	2
+10-02 13:16:52.895 20904 20933 I urovdetect: BEGIN mode=y-clean repeats=6
+10-02 13:16:53.004 20904 20933 I urovdetect: ELIM_CASE name=idle_unregistered result=PASS n=3 exclusive_match=0 exclusive_clean=3 exclusive_unknown=0 accepted=288 failed=0 control_failed=0 reader_match=0 reader_clean=3 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-02 13:16:53.032 20904 20933 I urovdetect: ELIM_EXEC name=unregistered n=6 expected=0 match=0 clean=6 unknown=0 accepted=576 failed=0 control_failed=0 total_ns=26861694 max_ns=4938192
+10-02 13:16:53.059 20904 20933 I urovdetect: ELIM_STORE name=unregistered n=6 expected=0 match=0 clean=6 unknown=0 completed=192 stores=0 total_ns=22279176 max_ns=3941243
+10-02 13:16:53.060 20904 20933 I urovdetect: NATIVE_RESULT PASS cases=4 assertions=67 failures=0 mode=y-clean
+10-02 13:16:53.250 20904 20904 I urovdetect: DETECT_RESULT PASS mode=y-clean worker_ms=351 ui_ticks=129 ui_max_gap_ms=20 native=PASS cases=4 assertions=67 failures=0

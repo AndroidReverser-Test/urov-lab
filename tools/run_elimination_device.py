@@ -8,8 +8,9 @@ Runs on one device; root only loads/unloads modules and collects kernel truth:
   - UROV-Y BRK: the site word changes, but the canary executes natively.
   - UROV-Y PAGE_UXN: the site word is unchanged and canary fetches trap.
   - UROV-Y PAGE_AP: site word and canary are native; a data read is trapped,
-    and the adjacent LDXR/STXR bridge keeps the exclusive probe negative.
-    Skipping the LDXR after CLREX exposes the bridge's unconditional store.
+    the adjacent LDXR/STXR bridge keeps an executed-LDXR exclusive probe
+    negative, and the bridge refuses a store whose LDXR was skipped (the
+    2026-11-05 CLREX/branch probe must now see the native STXR failure).
   - All UROV-Y modes: the business reader receives the fake value.
   - A separate UID sees no findings while the owner's PAGE_UXN or PAGE_AP is live.
   - The owner sees no findings after deactivation or active-session unload.
@@ -117,11 +118,11 @@ def main():
         if not cases:
             raise RuntimeError(f"{mode}: no store observations")
         for case in cases:
-            expected = ((mode == "w-active" and case["name"].startswith("active_")) or
-                        (mode == "w-hold" and case["name"] == "hold_active"))
-            match, clean = int(case["match"]), int(case["clean"])
-            expected_count, wrong_count = (match, clean) if expected else (clean, match)
-            if int(case["expected"]) != expected or not expected_count or wrong_count:
+            # No mode may retire a Store-Exclusive whose Load-Exclusive was
+            # skipped: the native monitor is open, so every active sample must
+            # be a clean native failure with zero unexpected writes.
+            if int(case["expected"]) != 0 or int(case["match"]) != 0 or \
+                    int(case["clean"]) == 0 or int(case["stores"]) != 0:
                 raise RuntimeError(f"{mode}: unexpected store result {case}")
         return cases
 
@@ -320,8 +321,12 @@ def main():
             hold_stores = store_cases(hold_logs, hold_mode)
             if hold_mode == "w-hold":
                 stores = sum(int(c["stores"]) for c in hold_stores)
-                if int(kv(status)["llsc"]) != stores or stores == 0:
-                    raise RuntimeError("AP bridge count disagrees with the app's private writes")
+                # The skipped-LDXR probe must not retire a store, so a live AP
+                # session with no executed adjacent LDXR has llsc=0 as well.
+                if stores != 0:
+                    raise RuntimeError("AP bridge retired a skipped-LDXR store")
+                if int(kv(status)["llsc"]) != 0:
+                    raise RuntimeError("AP bridge armed without an executed LDXR")
             if hold_mode in ("z-hold", "w-hold"):
                 is_ap = hold_mode == "w-hold"
                 observer_label = "09-other-uid-ap" if is_ap else "08-other-uid"
@@ -434,7 +439,7 @@ def main():
                 for field in execution_fields:
                     execution[scope][field] += int(case[field])
             for case in run.get("store_checks", []):
-                scope = "ap_active" if case["expected"] == "1" else "controls"
+                scope = "ap_active" if run.get("mode") in ("w-active", "w-hold") else "controls"
                 for field in store_fields:
                     stores[scope][field] += int(case[field])
         report["totals"] = totals

@@ -539,3 +539,94 @@ python .\kpms\urov-lab\tools\run_elimination_device.py `
 
 App 模式新增 `w-active`/`w-hold`（`mode=3`），root 程序新增 `--mode ap`。
 `y-*` 仍是 BRK 阳性对照，`z-*` 仍是 UXN 取指特征阳性对照。
+
+## 11. 第四轮：LL/SC 桥的执行存证（PAGE_AP）
+
+### 11.1 触发本轮的特征
+
+2026-11-05 的无密钥复核新增了 `ud_observe_unreserved_store()`：32 组
+「正常别名 → 目标页 → 正常别名」，每组三条指令
+
+```asm
+clrex
+b    1f
+ldxr x9, [x1]
+1: ldrb w11, [x0]
+stxr w10, x9, [x1]
+```
+
+`CLREX` 清空本地独占监视器，分支跳过 `LDXR`，目标页的 `LDRB` 进入 EL1。原生语义下
+`STXR` 必须失败（`Ws=1`、不写内存、栈变量保持初值）；活动 `PAGE_AP` 的桥只按
+"前一条是 `LDXR`、后一条是 `STXR`"匹配，于是代写了哨兵并把 `Ws` 置 0。真机 345 次
+活动 AP 检查全部命中、11,040 次哨兵写入（其中主窗口 90/90；
+[PAGE_AP_KEYLESS_RESULTS.md](PAGE_AP_KEYLESS_RESULTS.md)）。
+这个信号与伪值、调用窗口、代码页都无关，是第三轮消除后留下的确定性特征。
+
+### 11.2 根因：桥只匹配编码，不验证执行
+
+`AP[1]` 异常必经 `ERET`，`ERET` 把本地独占监视器恢复为 Open Access。为了让
+`LDXR; load; STXR` 看起来成功，handler 必须代写。代写的前提是"`LDXR` 确实执行过"，
+但旧实现只比较相邻指令字，无法区分：
+
+| 序列 | LDXR 是否执行 | Xt（STXR 数据寄存器） | [Xn] | 原生 STXR | 旧桥 |
+|---|---|---|---|---|---|
+| 正常 LL/SC | 是 | LDXR 装回的值 | 同一值 | 成功 | 代写成功（正确） |
+| 分支跳过 LDXR | 否 | 调用者预置值 | 初值 | 失败 | **代写成功（特征）** |
+
+`LDXR` 留给 handler 的唯一架构痕迹是目的寄存器 `Xt`：执行后它必然等于 `[Xn]`。
+旧桥没有使用这个不变量。
+
+### 11.3 机制：只对"有执行证据"的 STXR 代写
+
+`uy_llsc_prepare()` 在发现紧邻形状后增加一次 nofault 读：
+
+1. 读取 `LDXR` 的目的寄存器 `Xt` 与基址内存 `[Xn]`；
+2. 要求 `LDXR`/`STXR` 宽度一致；`Xt=31`（`XZR`）没有可验证的寄存器，不桥；
+3. 仅当 `Xt == [Xn]` 时才 armed；否则桥不生效，PC 只推进到 `STXR`，让它按原生
+   路径执行。
+
+结果：分支跳过的序列里 `Xt` 仍是调用者预置值，检查失败，`STXR` 原生执行并失败
+（`Ws=1`、不写内存），与无模块完全一致；真正执行过 `LDXR` 的序列仍然代写成功，
+`ud_observe_exclusive()` 继续阴性。该检查同时覆盖并发写：`LDXR` 与 `STXR` 之间
+另一个 PE 改了 `[Xn]` 时，原生 `STXR` 也应失败，桥不再把失败改写成成功。
+
+成本与暴露面：只在紧邻 LL/SC 形状的异常上多一次 `copy_from_user_nofault` 读
+（同一 cache line、已在异常前被 `LDXR` 读过），没有新增 hook、PTE 位、指令改写、
+调试寄存器或 syscall；`llsc` 计数只统计真正代写的次数。
+
+### 11.4 被否决的替代方案
+
+| 方案 | 否决原因 |
+|---|---|
+| 静态扫描 PC-8 的分支 | 只对当前探针的相邻 `b` 形状有效；从更远处或间接跳转仍可绕过，而且会误伤"从别处跳回 LDXR"的合法循环，重新引入监视器失效 |
+| 去掉桥 | 回到第三轮前的独占监视器特征（`urov-x` 阳性对照） |
+| 在 EL1 用 `STXR` 探测本地监视器 | AArch64 没有读监视器状态的指令；异常入口/`ERET` 是否清监视器由实现决定，探测本身会消费或误判 |
+| 单步/硬件观察点 | 仍要 `ERET`，仍要桥；新增调试状态 |
+| 把 `STXR` 改成 `BRK` | 又回到代码页差异 |
+
+### 11.5 残余特征与限制（诚实清单）
+
+1. **寄存器预置可伪造证据**：调用者若先读 `[Xn]`，把 `Xt` 预置成同一值再分支跳过
+   `LDXR`，检查会通过。这是同一根因的残余：handler 无法区分"`LDXR` 装了同一值"
+   与"调用者预置了同一值"。利用它需要显式的额外预置步骤；当前检测 App 不做。
+2. **非紧邻形状**：`LDXR; NOP; load; STXR`、跨基本块、函数调用仍会看到监视器失效
+   （§10.7.2 未变）。
+3. **`Xt=31`**：`ldxr xzr` 没有可验证的寄存器，按 fail-closed 不桥。
+4. **桥的语义**：仍是 nofault 写而非真正独占 store；`STLXR` 顺序、多线程争用
+   （§10.7.3 未变）。
+5. **时间**：每次读取仍一次同步异常（本轮 AP 实测 `site_call_ns≈275–280`）。
+6. **PTE 重装窗口、root 可见性、注册事务窗口**：同 §10.7。
+
+### 11.6 构建与验证入口
+
+```powershell
+.\kpms\urov-lab\build.ps1
+.\kpms\urov-lab\apps\urov-detect\build.ps1
+.\kpms\urov-lab\apps\urov-detect\build.ps1 -Observer
+python .\kpms\urov-lab\tools\run_elimination_device.py `
+  --serial <SERIAL> --key <KP-SUPERKEY> --repeats 12 --cycles 2
+```
+
+单变量 A/B（同一 APK，旧/新 KPM）见
+[PAGE_AP_KEYLESS_RESULTS_R2.md](PAGE_AP_KEYLESS_RESULTS_R2.md) 与
+[results/ab-llsc-baseline-vs-verified](results/ab-llsc-baseline-vs-verified)。

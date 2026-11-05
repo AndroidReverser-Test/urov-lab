@@ -19,7 +19,10 @@
  * native, while every data read is emulated with the same caller-window rules.
  * Because a synchronous abort still returns through ERET, PAGE_AP also
  * bridges the immediately adjacent LDXR/LDAXR; load; STXR/STLXR shape and
- * performs the store/status itself.
+ * performs the store/status itself -- but only after checking that the LDXR's
+ * destination register still holds the value at its base address, i.e. that
+ * the LDXR actually executed.  A skipped LDXR leaves the STXR native and it
+ * fails, exactly as it would without the overlay.
  *
  * Honest residuals are documented in ELIMINATION_DESIGN.md: BRK dirties the
  * site code page; PAGE_UXN makes the site page unexecutable at EL0; PAGE_AP
@@ -876,9 +879,22 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
  *
  * If that exact neighbour pair is present, the handler performs the store and
  * retires the STXR itself, so the caller observes the success it would have
- * observed without the trap.  This is deliberately a neighbour-pair bridge,
- * not a general LL/SC emulator: a detector that moves the store across a
- * branch is outside this contract and remains a documented residual. */
+ * observed without the trap.
+ *
+ * Adjacency alone is not proof that the LDXR was executed: a branch can jump
+ * straight to the trapped load, and then the native STXR must fail (no
+ * reservation) even though the three instruction words still line up.  The
+ * only architectural trace an executed LDXR leaves for us is its destination
+ * register: after `ldxr Xt, [Xn]` the register holds the word at [Xn].  A
+ * skipped LDXR leaves the caller's pre-load value there, and any write to
+ * [Xn] between the pair makes a native STXR fail as well.  So the bridge is
+ * armed only when Rt still equals the memory the LDXR would have read; if it
+ * does not, the STXR is left in the instruction stream and fails natively.
+ *
+ * This is deliberately a neighbour-pair bridge, not a general LL/SC emulator:
+ * a detector that moves the store across a branch, or preloads Rt with the
+ * exact value at [Xn] before jumping over the LDXR, is outside this contract
+ * and remains a documented residual (ELIMINATION_DESIGN.md section 11). */
 struct uy_llsc {
     int valid;
     int wide;
@@ -888,7 +904,7 @@ struct uy_llsc {
     uint64_t address;
 };
 
-static int uy_is_ldxr(uint32_t insn, unsigned *rn, unsigned *rt)
+static int uy_is_ldxr(uint32_t insn, unsigned *rn, unsigned *rt, int *wide)
 {
     uint32_t base = insn & 0xfffffc00U;
 
@@ -897,6 +913,7 @@ static int uy_is_ldxr(uint32_t insn, unsigned *rn, unsigned *rt)
         return 0;
     *rn = (insn >> 5) & 31U;
     *rt = insn & 31U;
+    *wide = (base & 0x40000000U) != 0;
     return 1;
 }
 
@@ -917,22 +934,37 @@ static int uy_is_stxr(uint32_t insn, unsigned *rn, unsigned *rt, unsigned *statu
 static void uy_llsc_prepare(struct pt_regs *regs, uint64_t pc, struct uy_llsc *out)
 {
     uint32_t prev, next;
+    uint64_t loaded = 0;
     unsigned lrn, lrt, srn, srt, srs;
-    int wide;
+    int wide, lwide;
 
     memset(out, 0, sizeof(*out));
     if (pc < 4U || f_copy_in(&prev, (const void *)(pc - 4U), 4U) ||
         f_copy_in(&next, (const void *)(pc + 4U), 4U))
         return;
-    if (!uy_is_ldxr(prev, &lrn, &lrt) || !uy_is_stxr(next, &srn, &srt, &srs, &wide))
+    if (!uy_is_ldxr(prev, &lrn, &lrt, &lwide) ||
+        !uy_is_stxr(next, &srn, &srt, &srs, &wide))
         return;
-    if (lrn != srn || lrt != srt) return;
+    if (lrn != srn || lrt != srt || lwide != wide) return;
     out->address = lrn == 31U ? regs->sp : regs->regs[lrn];
     out->base_reg = lrn;
     out->value_reg = lrt;
     out->status = srs;
     out->wide = wide;
     if (out->address < UROV_Y_PAGE || out->address >= UY_USER_LIMIT - 8U) return;
+
+    /* Do not retire a store the caller did not earn.  If the LDXR really
+     * executed, Rt is exactly the value it loaded; the extra nofault read is
+     * the same kind of access the handler already performs for the site
+     * instruction.  Failure to read (unmapped, raced unmap, or [Xn] on the
+     * protected page) leaves the bridge unarmed and the STXR native. */
+    if (lrt == 31U) return;
+    if (f_copy_in(&loaded, (const void *)out->address, wide ? 8U : 4U)) return;
+    if (lwide) {
+        if (regs->regs[lrt] != loaded) return;
+    } else if ((uint32_t)regs->regs[lrt] != (uint32_t)loaded) {
+        return;
+    }
     out->valid = 1;
 }
 
@@ -1150,7 +1182,8 @@ static void uy_page_abort(uint64_t far, uint64_t esr, struct pt_regs *regs,
 /* EL0 data abort (EC 0x24) on the AP[1]-protected target page.  Every load of
  * that page arrives here; the caller window still selects fake versus the
  * registration snapshot, and the immediate LDXR/STXR bridge below hides the
- * one side effect the older data-page detector observed. */
+ * one side effect the older data-page detector observed -- only when the
+ * adjacent LDXR demonstrably executed (its result is still in Rt). */
 static void uy_ap_abort(uint64_t far, uint64_t esr, struct pt_regs *regs,
                         hook_fargs4_t *args)
 {

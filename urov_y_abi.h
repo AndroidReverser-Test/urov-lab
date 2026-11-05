@@ -20,7 +20,10 @@
  *     emulates the resulting data abort.  It additionally bridges the
  *     immediate LDXR/load/STXR pattern so an ordinary local exclusive
  *     monitor sequence still observes a successful store, matching native
- *     execution for the one side effect a synchronous read trap has;
+ *     execution for the one side effect a synchronous read trap has; the
+ *     bridge is armed only when the LDXR's result is still in its target
+ *     register, so a branch that skips the LDXR leaves the STXR native and
+ *     failing as it would without the module;
  *   - the trap honours an optional business-caller window (return address
  *     PC range).  A plain call of the same site routine from unrelated code
  *     is emulated with the original bytes, i.e. it returns exactly what the
@@ -56,8 +59,10 @@
  * every EL0 data read of that page takes a permission abort while fetch of
  * the same or any other page stays native.  The data abort is emulated with
  * the same fake/caller-window rules; a directly adjacent LDXR/STXR pair is
- * completed by the handler so the local exclusive monitor sequence that
- * noticed the older data-page trap no longer reports a failed store. */
+ * completed by the handler only if the LDXR actually executed (the value it
+ * loaded is still in its destination register), so the local exclusive
+ * monitor sequence that noticed the older data-page trap no longer reports a
+ * failed store while a branch-skipped LDXR still fails natively. */
 #define UROV_Y_MODE_SITE_BRK 1U
 #define UROV_Y_MODE_PAGE_UXN 2U
 #define UROV_Y_MODE_PAGE_AP 3U

@@ -12,7 +12,11 @@
  *   - ud_observe_reader() with the bare reader routine: NO_MATCH (a call from
  *     outside the business window is emulated from the original bytes);
  *   - ud_observe_execution() on the canary: MATCH only in active PAGE_UXN;
- *   - ud_observe_unreserved_store(): MATCH only in active PAGE_AP;
+ *   - ud_observe_unreserved_store(): NO_MATCH in every mode.  In active
+ *     PAGE_AP the trapped LDRB still runs through EL1, but the branch-skips-
+ *     LDXR sequence must be left to its native STXR failure: the bridge only
+ *     retires a store whose LDXR result is still in the target register.
+ *     Matching here would mean the handler invented a store.
  *   - the registered business call still returns the fake value.
  */
 
@@ -401,7 +405,10 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     struct ud_reader_observation rd;
     struct urov_y_request st = {0}, before = {0};
     enum ud_verdict expected_exec = mode == UROV_Y_MODE_PAGE_UXN ? UD_MATCH : UD_NO_MATCH;
-    enum ud_verdict expected_store = mode == UROV_Y_MODE_PAGE_AP ? UD_MATCH : UD_NO_MATCH;
+    /* The 2026-11-05 PAGE_AP fingerprint (a store retired although the LDXR
+     * was never executed) is expected to be gone in every mode: a negative
+     * verdict here means the native STXR failed and no sentinel was written. */
+    enum ud_verdict expected_store = UD_NO_MATCH;
     unsigned base_dirty = 0, base_anon = 0;
     const uint64_t fake = UINT64_C(0x8877665544332211);
 
@@ -626,8 +633,7 @@ static void elimination_hold(const char *key_hex, unsigned mode)
     REQUIRE(uy_business_ldr(at) == UINT64_C(0x8877665544332211), "UY hold not armed");
     elimination_exec_case("hold_active", &reference, 3,
                           mode == UROV_Y_MODE_PAGE_UXN ? UD_MATCH : UD_NO_MATCH);
-    store_case("hold_active", &p, 8, 3,
-               mode == UROV_Y_MODE_PAGE_AP ? UD_MATCH : UD_NO_MATCH);
+    store_case("hold_active", &p, 8, 3, UD_NO_MATCH);
     LOG("ELIM_HOLD_READY pid=%d uid=%d mode=%s", getpid(), getuid(), uy_mode_name(mode));
     for (unsigned i = 0; i < 900; ++i) {
         unsigned dirty = 0, anon = 0;

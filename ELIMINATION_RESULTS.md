@@ -24,6 +24,14 @@
 > AP 两次运行各 48 次 execution 观测、24 个 per-CPU canary 全部 `match=0`，
 > 业务伪值保留。详细数据与残余见 §10。
 
+> 2026-11-05 第四轮：无密钥复核的 `CLREX/B;LDXR/LDRB;STXR` 探针发现
+> `PAGE_AP` 的相邻 LL/SC 桥只匹配编码，分支跳过 `LDXR` 也会代写。桥现在要求
+> `LDXR` 的目的寄存器仍等于 `[Xn]` 才 armed；分支跳过的序列由 `STXR` 原生失败。
+> 同 APK 单变量 A/B：旧 KPM 42/42 次异常写入，新 KPM 0/42；正式矩阵
+> [results/eliminate-20261105-224534](results/eliminate-20261105-224534)
+> 15 次 App 运行、441 次观测，AP store 174 次观测 / 5,568 个目标试验 **0 写入**、
+> 独占 MATCH **0**，业务伪值保留。详细数据与残余见 §11。
+
 ## 1. 设备与产物
 
 | 项目 | 实测值 |
@@ -315,3 +323,75 @@ private_dirty_kb=0 anonymous_kb=0`，进程未收信号；模块列表为空。
 2. 桥只覆盖紧邻的 `LDXR/load/STXR`；换一种 LL/SC 排布仍可看到监视器失效。
 3. AP[1] 是页级数据权限，SIMD/原子/独占 load 仍 fail-closed；PTE 重新装回有
    微秒级窗口。该模式消除的是**当前检测集的取指 canary**，不是"任意检测面"。
+
+## 11. 第四轮：LL/SC 桥的执行存证
+
+### 11.1 单变量 A/B：同一 APK，只换 KPM
+
+`PAGE_AP_KEYLESS_RESULTS.md` 的 `ud_observe_unreserved_store()` 在旧桥上全部命中
+（该文档主窗口 90/90，345 次活动 AP 检查共 11,040 次写入）。本轮先保留旧产物
+`urov-y-baseline.kpm`（`fbe8dc84…`，与第三轮文档一致），用同一个新 APK
+（`urovdetect.apk ccb327d9…`）分别对旧、新 KPM 跑 `w-active repeats=6`：
+
+| KPM | SHA256 | 活动 store 观测 | 哨兵写入 | App |
+|---|---|---:|---:|---|
+| 旧桥 | `fbe8dc840935…` | **42/42 MATCH** | 1,344 | FAIL（新探针现在要求原生失败） |
+| 执行存证 | `55361f3bdf09…` | **0/42，42 clean** | **0** | PASS（551 项断言） |
+
+两次运行的 `active_page exclusive_match=0` 都成立：真正执行过 `LDXR` 的
+`ud_observe_exclusive()` 仍由桥代写成功；`ELIM_FEATURE` 的伪值
+（`0x8877665544332211`）也都不变。因此 A/B 的差异只来自桥的存证检查。
+原始日志：[baseline](results/ab-llsc-baseline-vs-verified/baseline.log)、
+[verified](results/ab-llsc-baseline-vs-verified/verified.log)。
+
+### 11.2 正式矩阵
+
+运行器：`tools/run_elimination_device.py --repeats 12 --cycles 2`。
+15 次 App 运行、39 组用例、441 次完整 API 观测、42,336 个被接受三元组，
+`RESULT PASS`（[summary.json](results/eliminate-20261105-224534/summary.json)）。
+
+| 项目 | 本轮 12/2 矩阵 |
+|---|---:|
+| AP 运行内 store 观测（w-active/w-hold，含 baseline/deactivated） | 174 次，0 MATCH，174 clean |
+| AP store 目标试验 | 5,568 次，0 次写入 |
+| 全部独占观测（AP/BRK/UXN/无模块） | 441 clean，0 MATCH，0 UNKNOWN |
+| 对照 store 观测（y-*/z-*） | 324 次，0 MATCH，0 写入 |
+| 独占探针的目标 STXR 失败 | 0 |
+| 业务伪值 | 6/6 |
+| 内核 Oops/WARNING | 0 |
+
+作为对照，本会话早先用旧桥 + 旧 APK 跑同一夹具（`--repeats 6 --cycles 1`，
+[summary.json](results/eliminate-20261105-224211/summary.json)）得到
+`ap_active n=45 match=45 stores=1,440`；本轮同量级 A/B 为 0/42、0 写入。
+
+AP 逐轮：`06-ap-1/2` 均 PASS（各 32 用例、839 项断言），
+`active_page`、`active_outside_window`、`active_equal_value` 与 8 个
+`active_cpu_*` 的 store 全部 `match=0 clean=12/3`、`stores=0`；
+`ELIM_TIMING mode=ap site_call_ns=280/275`。活动会话中卸载（`09-hold-ap`）：
+
+```text
+mode=data-ap state=active sites=2 armed=2 hits=2 replays=96 failures=0 llsc=0
+ELIM_HOLD_RESTORED pid=23387 opcode=f9400000 direct=f2c66881f2aaacc1
+private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0
+```
+
+`llsc=0` 是新的预期：hold 夹具在活动会话里只跑那个"分支跳过 `LDXR`"的探针，桥
+不应代写任何一次。另一 UID 的观察者用例仍看不到 owner 的伪值，模块卸载后
+`kpm list` 为空，`kernel-new.log` 无 Oops/BUG/WARNING/挂起。root 验收
+`urov_y_test --mode ap --key …` 通过：
+
+```text
+TRAP mode=ap site_word=f9400000 dirty_kb=20 base_dirty_kb=20 anon_kb=0 base_anon_kb=0
+TRAP_CALL mode=ap active_ns=525
+TRAP_CALL mode=ap restored_ns=2
+PASS cases=1 assertions=33 failures=0
+```
+
+### 11.3 结论边界
+
+本轮消除的是"分支跳过 `LDXR` 仍被代写"这一确定性语义特征；桥仍只覆盖紧邻形状，
+且预置 `Xt == [Xn]` 的加强探针仍可构造出同样的代写（§11.5.1）。
+AP 模式固有的一次同步异常（~275–280 ns）、页级 `AP[1]` 的 fail-closed 边界、
+PTE 重装窗口和 root 可见性都没有变化。检测 App 的其余探针（独占、reader、
+取指 canary、代码页/COW）与本轮结论一致：活动 AP 上仅剩"业务窗口返回伪值"
+这一合作模型功能本身。
