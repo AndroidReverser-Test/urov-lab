@@ -1,0 +1,14 @@
+--------- beginning of main
+10-02 14:28:19.684  8887  8911 I urovdetect: CONTEXT pid=8887 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-02 14:28:19.685  8887  8911 I urovdetect: BEGIN mode=crc-ap-text repeats=3
+10-02 14:28:19.686  8887  8911 I urovdetect: CRC_FIXTURE dlopen=1 mode=crc-ap-text all_callers=0
+10-02 14:28:19.692  8887  8911 I urovdetect: CRC_QUERY authenticated=1 state=0
+10-02 14:28:19.706  8887  8911 I urovdetect: CRC_TEXT address=0x702d766000 lib=/data/app/~~IAtIomZ7OYTjKFuz_k8Gew==/com.example.urovdetect-GbfvXjTSKpYyt_iN1jqDCw==/lib/arm64/liburovdetect.so span=90112 offset=6000 shared=0 maywrite=1
+10-02 14:28:19.750  8887  8911 I urovdetect: CRC_VMA name=linker_text span=90112 offset=6000 rx=1 shared=0 maywrite=1 dc=0 private_dirty_kb=0 anonymous_kb=0
+10-02 14:28:19.750  8887  8911 I urovdetect: CRC_PAGE name=linker_text stage=clean n=3 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=3 bridge_unknown=0
+10-02 14:28:19.750  8887  8911 I urovdetect: CRC_PAGE name=linker_text stage=overlay n=3 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=0c7da8a0 bridge_match=0 bridge_clean=3 bridge_unknown=0
+10-02 14:28:19.750  8887  8911 I urovdetect: CRC_OVERLAY mode=3 generation=1 hits=36 replays=72 failures=0
+10-02 14:28:19.777  8887  8911 I urovdetect: CRC_PAGE name=linker_text stage=deactivated n=3 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=3 bridge_unknown=0
+10-02 14:28:19.798  8887  8911 I urovdetect: CONTEXT pid=8887 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-02 14:28:19.798  8887  8911 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=16 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0 mode=crc-ap-text
+10-02 14:28:20.041  8887  8887 I urovdetect: DETECT_RESULT PASS mode=crc-ap-text worker_ms=351 ui_ticks=128 ui_max_gap_ms=21 native=PASS cases=2 assertions=16 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0

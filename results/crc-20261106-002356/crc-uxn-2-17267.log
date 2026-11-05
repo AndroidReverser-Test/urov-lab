@@ -1,0 +1,18 @@
+--------- beginning of main
+10-02 14:58:45.493 17267 17290 I urovdetect: CONTEXT pid=17267 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-02 14:58:45.493 17267 17290 I urovdetect: BEGIN mode=crc-uxn repeats=15
+10-02 14:58:45.495 17267 17290 I urovdetect: CRC_FIXTURE dlopen=1 mode=crc-uxn all_callers=0
+10-02 14:58:45.503 17267 17290 I urovdetect: CRC_QUERY authenticated=1 state=0
+10-02 14:58:45.634 17267 17290 I urovdetect: CRC_STAGE name=clean n=15 execute=1234 file=f50bcaf6 backing=f50bcaf6 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0
+10-02 14:58:45.634 17267 17290 I urovdetect: CRC_REMAP same_va=1 original_offset=98304 patched_offset=102400
+10-02 14:58:45.636 17267 17290 I urovdetect: CRC_MAP original_identity=-1 error=116
+10-02 14:58:45.722 17267 17290 I urovdetect: CRC_STAGE name=patch_only n=15 execute=1235 file=f50bcaf6 backing=0c7da8a0 direct=0c7da8a0 site=0c7da8a0 window=0c7da8a0 bridge_match=0 bridge_clean=15 bridge_unknown=0
+10-02 14:58:45.807 17267 17290 I urovdetect: CRC_STAGE name=overlay n=15 execute=1235 file=f50bcaf6 backing=0c7da8a0 direct=0c7da8a0 site=0c7da8a0 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0
+10-02 14:58:45.807 17267 17290 I urovdetect: CRC_SITE file=39400000 live=39400000 differs=0
+10-02 14:58:45.866 17267 17290 I urovdetect: ELIM_EXEC name=crc_overlay n=15 expected=1 match=15 clean=0 unknown=0 accepted=1440 failed=1440 control_failed=0 total_ns=58197061 max_ns=3931559
+10-02 14:58:45.872 17267 17290 I urovdetect: CRC_CHANGED_BYTE probe=0 error=0 completed=32
+10-02 14:58:45.872 17267 17290 I urovdetect: CRC_OVERLAY mode=2 generation=1 hits=180 replays=180 failures=0
+10-02 14:58:45.957 17267 17290 I urovdetect: CRC_STAGE name=deactivated n=15 execute=1235 file=f50bcaf6 backing=0c7da8a0 direct=0c7da8a0 site=0c7da8a0 window=0c7da8a0 bridge_match=0 bridge_clean=15 bridge_unknown=0
+10-02 14:58:45.958 17267 17290 I urovdetect: CONTEXT pid=17267 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-02 14:58:45.958 17267 17290 I urovdetect: NATIVE_RESULT PASS cases=5 assertions=161 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0 mode=crc-uxn
+10-02 14:58:45.964 17267 17267 I urovdetect: DETECT_RESULT PASS mode=crc-uxn worker_ms=466 ui_ticks=140 ui_max_gap_ms=17 native=PASS cases=5 assertions=161 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0

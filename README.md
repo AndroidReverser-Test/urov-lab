@@ -102,6 +102,20 @@ UROV-LAB 是一个适用于 Android arm64 的独立 KPM：把一个一页只读�
 | `PAGE_UXN` | EL0 取指异常 | 设置读取点页的 UXN，模拟该页的读取点及支持的控制指令 |
 | `PAGE_AP` | EL0 数据读权限异常 | 清目标页的 AP[1]，继续从原页原生取指 |
 
+`PAGE_AP` 的目标不再限一页共享别名：普通 app 可以注册 linker 加载的 `.text`
+中的一页（私有、多页 VMA、带 `VM_MAYWRITE`）。注册时先 fault-in 目标页，再在
+`mmap_write_lock` 下复核 VMA/PTE；共享 VMA 仍保留一页、无 `VM_MAYWRITE` 的
+约束。2026-11-05 的 `crc-ap-text` 真机数据（90,112 字节 VMA 的普通
+`MAP_PRIVATE` `.text`，覆盖中 `Private_Dirty/Anonymous=0`）见
+[CRC_INJECTION_RESULTS.md](CRC_INJECTION_RESULTS.md)。
+
+业务调用窗口除当前 `x30` 外，还会沿 `x29` 帧链最多回溯 16 层，因此
+`memcpy`/`memcmp`/`strlen` 以及 zlib `crc32` 这类内部有嵌套调用的 libc 读者
+也能在业务窗口内命中；无帧指针时退回只检查当前 LR。`crc-ap-libc` 验证了
+12 字节 `memcpy`、32 字节 `memcmp`、31 字节 `strlen` 和 zlib CRC 的标量路径。
+bionic 在更大范围会走 SIMD `LDR q`/`LDP q`，这些路径仍 fail-closed，需
+FPSIMD 向量寄存器模拟才能覆盖。
+
 2.1.1 加载时从运行内核的 BTF 获取 `task_struct`、`mm_struct`、VMA 和寄存器帧布局。小米 13 的 Android 5.15 使用 `__find_vma`、`down_write/up_write` 和五参数 `do_handle_mm_fault`。Pixel 6 的 Android 6.1 使用 `find_vma`、原生 `mmap_write_lock/unlock` 和四参数 `handle_mm_fault`。模块根据符号和 BTF 选择入口，并在注册时用 `get_task_mm()` 复核 `task_struct.mm`。[BTF 布局与签名校验](urov_y_compat.h)
 
 BRK 入口支持 `brk_handler` 和较新内核的 `do_el0_brk64`。COW 写入和恢复优先从 BTF 取 `FOLL_FORCE`，回退值按 Linux 6.3 的编号切换。页面模式只在缺页调用成功并仍持有映射保护时重新设置 PTE。[ARM64 BRK 入口](https://raw.githubusercontent.com/torvalds/linux/v6.18/arch/arm64/kernel/debug-monitors.c) · [Linux 6.2 GUP 标志](https://raw.githubusercontent.com/torvalds/linux/v6.2/include/linux/mm.h) · [Linux 6.3 GUP 标志](https://raw.githubusercontent.com/torvalds/linux/v6.3/include/linux/mm_types.h)

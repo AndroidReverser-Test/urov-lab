@@ -1,0 +1,11 @@
+--------- beginning of main
+10-02 14:31:40.382 10610 10635 I urovdetect: CONTEXT pid=10610 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-02 14:31:40.382 10610 10635 I urovdetect: BEGIN mode=crc-clean repeats=15
+10-02 14:31:40.383 10610 10635 I urovdetect: CRC_FIXTURE dlopen=1 mode=crc-clean all_callers=0
+10-02 14:31:40.499 10610 10635 I urovdetect: CRC_STAGE name=clean n=15 execute=1234 file=f50bcaf6 backing=f50bcaf6 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0
+10-02 14:31:40.499 10610 10635 I urovdetect: CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208
+10-02 14:31:40.501 10610 10635 I urovdetect: CRC_MAP original_identity=-1 error=116
+10-02 14:31:40.586 10610 10635 I urovdetect: CRC_STAGE name=patch_only n=15 execute=1235 file=f50bcaf6 backing=0c7da8a0 direct=0c7da8a0 site=0c7da8a0 window=0c7da8a0 bridge_match=0 bridge_clean=15 bridge_unknown=0
+10-02 14:31:40.586 10610 10635 I urovdetect: CONTEXT pid=10610 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-02 14:31:40.586 10610 10635 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=63 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0 mode=crc-clean
+10-02 14:31:40.738 10610 10610 I urovdetect: DETECT_RESULT PASS mode=crc-clean worker_ms=351 ui_ticks=128 ui_max_gap_ms=25 native=PASS cases=2 assertions=63 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0

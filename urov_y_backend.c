@@ -443,6 +443,27 @@ static int validate_site_vma(void *vma, uint64_t pc, int page_mode, int *writabl
     return 0;
 }
 
+/* A target page is only ever read by the backend: SITE_BRK writes the reader
+ * instruction on its site page, PAGE_UXN flips UXN on a site page, and PAGE_AP
+ * flips AP[1] on the target leaf PTE.  None of them changes the target's VMA
+ * or its bytes, so binding one page inside an ordinary code mapping is safe as
+ * long as the mapping itself cannot be made writable from under the session.
+ *
+ * Historically this check required the whole VMA to be exactly one page and
+ * rejected VM_MAYWRITE, which excluded every normal app .text mapping (the
+ * linker maps file-backed PT_LOAD segments MAP_PRIVATE, so the VMA is
+ * multi-page and carries VM_MAYWRITE).  The relaxed shape below accepts:
+ *
+ *   - a page inside a private, file-backed, read-only executable VMA of any
+ *     size (the normal linker .text / oat case);
+ *   - the original dedicated one-page MAP_SHARED RX alias.
+ *
+ * A shared VMA stays restricted to the dedicated one-page, no-MAYWRITE shape:
+ * another mapping of a writable file could change the page cache under us.
+ * A private page has no other writer, and the mmap/mprotect/munmap/mremap/
+ * madvise/MAP_FIXED gates end the session before such a change can happen.
+ * VM_WRITE itself is always rejected, so a page that is currently writable
+ * (for example after a failed execmod restore) can never be registered. */
 static int validate_target_vma(void *vma, uint64_t address)
 {
     unsigned long start, end, flags;
@@ -452,11 +473,15 @@ static int validate_target_vma(void *vma, uint64_t address)
     end = *(unsigned long *)((char *)vma + g_layout.vma_end);
     flags = *(unsigned long *)((char *)vma + g_layout.vma_flags);
     file = *(void **)((char *)vma + g_layout.vma_file);
-    if (start != address || end != address + UROV_Y_PAGE) return -EINVAL;
+    if (address < start || address >= end || end - address < UROV_Y_PAGE) return -EINVAL;
     if ((flags & (UY_VM_READ | UY_VM_EXEC)) != (UY_VM_READ | UY_VM_EXEC)) return -EINVAL;
-    if (flags & (UY_VM_WRITE | UY_VM_MAYWRITE | UY_VM_PFNMAP | UY_VM_HUGETLB |
+    if (flags & (UY_VM_WRITE | UY_VM_PFNMAP | UY_VM_HUGETLB |
                  UY_VM_IO | UY_VM_MIXEDMAP)) return -EINVAL;
     if (!file) return -EINVAL;
+    if (flags & UY_VM_SHARED) {
+        if (start != address || end != address + UROV_Y_PAGE) return -EINVAL;
+        if (flags & UY_VM_MAYWRITE) return -EINVAL;
+    }
     return 0;
 }
 
@@ -490,7 +515,7 @@ static int page_pte_leaf(void *mm, uint64_t page, uint64_t **slot, uint64_t *out
     uint64_t *ptep = pte_of(mm, page);
     uint64_t pte;
 
-    if (!ptep) return -EFAULT;
+    if (!ptep) return -EAGAIN;
     pte = __atomic_load_n(ptep, __ATOMIC_ACQUIRE);
     if ((pte & (PTE_VALID | PTE_TYPE_MASK)) != (PTE_VALID | PTE_TYPE_PAGE))
         return -EAGAIN;
@@ -556,18 +581,28 @@ static int page_set_ap(void *mm, uint64_t page, int set)
 }
 
 /* Registration already faulted the target page in and copied it, so arming
- * only needs to flip AP[1] under the mmap write lock. */
+ * only needs to flip AP[1] under the mmap write lock.  A private .text page is
+ * ordinary reclaimable file-backed memory, so a re-fault between the snapshot
+ * and the lock can drop the PTE again; fault it back in and retry rather than
+ * failing a registration that raced with reclaim. */
 static long ap_arm_target(struct uy_session *s, void *mm)
 {
-    int ret;
+    uint32_t word;
+    int ret = -EAGAIN, tries;
 
-    uy_mmap_write_lock(mm);
-    ret = page_set_ap(mm, s->base, 0);
-    if (ret > 0) flush_tlb_all();
-    uy_mmap_write_unlock(mm);
-    if (ret < 0) return ret;
-    s->ap_armed = 1;
-    return 0;
+    for (tries = 0; tries < 4; ++tries) {
+        uy_mmap_write_lock(mm);
+        ret = page_set_ap(mm, s->base, 0);
+        if (ret > 0) flush_tlb_all();
+        uy_mmap_write_unlock(mm);
+        if (ret >= 0) {
+            s->ap_armed = 1;
+            return 0;
+        }
+        if (ret != -EAGAIN && ret != -EFAULT) return ret;
+        if (f_access_vm(mm, s->base, &word, 4, 0) != 4) return -EFAULT;
+    }
+    return ret;
 }
 
 static void ap_disarm_target(struct uy_session *s, void *mm)
@@ -728,6 +763,38 @@ static int caller_allowed(uint64_t lr)
     return 0;
 }
 
+/* libc routines such as memcpy/memcmp/strlen are leaf functions, so the LR at
+ * their loads is the business return address and caller_allowed() matches
+ * directly.  A library routine that calls an internal helper (for example
+ * zlib's crc32 -> crc32_body) leaves the immediate LR pointing inside the
+ * library, outside the business window.  Walk the AArch64 frame-pointer chain
+ * once to find a saved LR in a window.  A missing frame pointer, a non-user
+ * address or a non-monotonic record simply ends the walk, so code compiled
+ * without frame pointers keeps the old immediate-LR behaviour.  The stack is
+ * read with the same nofault helper the handler already uses for site
+ * instructions; a malicious app can only lie about its own caller window. */
+static int caller_allowed_deep(struct pt_regs *regs)
+{
+    uint64_t fp;
+    unsigned i;
+
+    if (caller_allowed(regs->regs[30])) return 1;
+    fp = regs->regs[29];
+    for (i = 0; i < 16; ++i) {
+        uint64_t frame[2];
+        if (fp < UROV_Y_PAGE || fp > UY_USER_LIMIT - sizeof(frame) || (fp & 7U))
+            return 0;
+        if (f_copy_in(frame, (const void *)(uintptr_t)fp, sizeof(frame)))
+            return 0;
+        if (caller_allowed(frame[1])) return 1;
+        if (frame[0] <= fp || frame[0] > UY_USER_LIMIT - sizeof(frame) ||
+            (frame[0] & 7U))
+            return 0;
+        fp = frame[0];
+    }
+    return 0;
+}
+
 /* Commit a decoded GPR load whose source bytes are already in `bytes`. */
 static void uy_commit(struct uro_regs *m, const struct uro_load *d, const uint8_t *bytes)
 {
@@ -802,7 +869,7 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
 
     if (overlay_live() && mm_of_task(current) == g_sess.mm &&
         !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) &&
-        caller_allowed(regs->regs[30]) &&
+        caller_allowed_deep(regs) &&
         load.address >= g_sess.base &&
         load.address - g_sess.base <= UROV_Y_PAGE - total) {
         if (fake_snapshot(words, &fake_len)) return -4;
@@ -1312,6 +1379,7 @@ static long do_register(struct urov_y_request *q)
     unsigned i;
     uint32_t mode = q->mode ? q->mode : UROV_Y_MODE_SITE_BRK;
     int site_writable[UROV_Y_MAX_SITES];
+    unsigned tries;
     long ret;
 
     if (q->flags || q->caller_count > UROV_Y_MAX_CALLERS) return -EINVAL;
@@ -1348,40 +1416,62 @@ static long do_register(struct urov_y_request *q)
         return -EOPNOTSUPP;
     }
 
-    /* All modes require an immutable one-page RX file mapping. PAGE_AP
-     * changes its leaf PTE only after validation and the snapshot. */
-    uy_mmap_write_lock(mm);
-    vma = f_find_vma(mm, q->address);
-    ret = validate_target_vma(vma, q->address);
-    if (!ret) {
-        ptep = pte_of(mm, q->address);
-        if (!ptep) {
+    /* Fault the target in and take a first snapshot before taking the mmap
+     * write lock.  copy_from_user_nofault() does not fault pages in, so a
+     * demand-paged .text page needs access_remote_vm() here; doing it under
+     * the write lock would recurse into handle_mm_fault. */
+    if (f_access_vm(mm, q->address, g_sess.original, UROV_Y_PAGE, 0) !=
+        (int)UROV_Y_PAGE) {
+        memset(g_sess.original, 0, UROV_Y_PAGE);
+        f_mmput(mm);
+        return -EFAULT;
+    }
+
+    ret = -EAGAIN;
+    for (tries = 0; tries < 4; ++tries) {
+        uy_mmap_write_lock(mm);
+        vma = f_find_vma(mm, q->address);
+        ret = validate_target_vma(vma, q->address);
+        if (!ret) {
+            ptep = pte_of(mm, q->address);
+            if (!ptep) {
+                ret = -EAGAIN;
+            } else {
+                pte = __atomic_load_n(ptep, __ATOMIC_ACQUIRE);
+                if (!(pte & 1ULL) || (pte & 3ULL) != 3ULL) {
+                    ret = -EAGAIN;
+                } else if (!(pte & PTE_USER) || !(pte & PTE_RDONLY) ||
+                           (pte & PTE_UXN) || (pte & PTE_CONT) ||
+                           (pte & PTE_SPECIAL) || (pte & PTE_PROT_NONE) ||
+                           (pte & PTE_DEVMAP)) {
+                    ret = -EOPNOTSUPP;
+                }
+            }
+        }
+        for (i = 0; !ret && i < q->site_count; ++i) {
+            site_writable[i] = 0;
+            ret = validate_site_vma(f_find_vma(mm, q->sites[i]), q->sites[i],
+                                    mode != UROV_Y_MODE_SITE_BRK, &site_writable[i]);
+        }
+        if (!ret && f_copy_in(g_sess.original, (const void *)q->address, UROV_Y_PAGE))
+            ret = -EAGAIN;
+        uy_mmap_write_unlock(mm);
+        if (ret != -EAGAIN) break;
+        /* The page was evicted between the snapshot and the write lock. */
+        if (f_access_vm(mm, q->address, g_sess.original, UROV_Y_PAGE, 0) !=
+            (int)UROV_Y_PAGE) {
             ret = -EFAULT;
-        } else {
-            pte = __atomic_load_n(ptep, __ATOMIC_ACQUIRE);
-            if (!(pte & 1ULL) || (pte & 3ULL) != 3ULL || !(pte & PTE_USER) ||
-                !(pte & PTE_RDONLY) || (pte & PTE_UXN) || (pte & PTE_CONT) ||
-                (pte & PTE_SPECIAL))
-                ret = -EOPNOTSUPP;
+            break;
         }
     }
-    for (i = 0; !ret && i < q->site_count; ++i) {
-        site_writable[i] = 0;
-        ret = validate_site_vma(f_find_vma(mm, q->sites[i]), q->sites[i],
-                                mode != UROV_Y_MODE_SITE_BRK, &site_writable[i]);
-    }
-    if (!ret && f_copy_in(g_sess.original, (const void *)q->address, UROV_Y_PAGE))
-        ret = -EFAULT;
     if (g_verbose)
         pr_info("urov-y: validate ret=%ld addr=%llx sites=%u callers=%u\n", ret,
                 (unsigned long long)q->address, q->site_count, q->caller_count);
     if (ret) {
-        uy_mmap_write_unlock(mm);
         memset(g_sess.original, 0, UROV_Y_PAGE);
         f_mmput(mm);
         return ret;
     }
-    uy_mmap_write_unlock(mm);
 
     g_sess.mm = mm;
     g_sess.base = q->address;
@@ -1665,13 +1755,31 @@ static const int g_gate_nrs[UY_GATE_NUM] = {
     __NR_mprotect, __NR_munmap, __NR_mremap, __NR_mmap, __NR_madvise, __NR_execve,
 };
 
+/* True when [start, start+len) intersects the target page or any site page.
+ * A zero length is not a range. */
+static int gate_range_overlaps(uint64_t start, uint64_t len)
+{
+    uint64_t end = start + len;
+    uint64_t base = g_sess.base;
+    unsigned i;
+
+    if (!len) return 0;
+    if (end < start) end = ~0ULL;
+    if (start < base + UROV_Y_PAGE && end > base) return 1;
+    for (i = 0; i < g_sess.site_count && i < UROV_Y_MAX_SITES; ++i) {
+        uint64_t p = g_sess.sites[i].page;
+        if (start < p + UROV_Y_PAGE && end > p) return 1;
+    }
+    return 0;
+}
+
 /* A mapping change that overlaps the target page or any patched site page
  * silently ends the session (restoring the site instructions) and then runs
- * natively, so no mapping syscall has a module-specific errno. */
+ * natively, so no mapping syscall has a module-specific errno.  mremap with
+ * MREMAP_FIXED also installs the moved range at the destination, so that
+ * range has to be checked as well. */
 static void uy_gate_before(hook_fargs6_t *args, void *udata)
 {
-    uint64_t start, len, end, base;
-    unsigned i;
     int kind = (int)(uintptr_t)udata;
 
     if (!overlay_live()) return;
@@ -1686,18 +1794,9 @@ static void uy_gate_before(hook_fargs6_t *args, void *udata)
         return;
     }
 
-    start = sys_arg(args, 0);
-    len = sys_arg(args, 1);
-    if (!len) return;
-    end = start + len;
-    if (end < start) end = ~0ULL;
-    base = g_sess.base;
-    if (end <= base || start >= base + UROV_Y_PAGE) {
-        for (i = 0; i < g_sess.site_count && i < UROV_Y_MAX_SITES; ++i) {
-            uint64_t p = g_sess.sites[i].page;
-            if (start < p + UROV_Y_PAGE && end > p) break;
-        }
-        if (i >= g_sess.site_count) return;
+    if (!gate_range_overlaps(sys_arg(args, 0), sys_arg(args, 1))) {
+        if (kind != UY_GATE_MREMAP || !(sys_arg(args, 3) & 0x2ULL)) return;
+        if (!gate_range_overlaps(sys_arg(args, 4), sys_arg(args, 2))) return;
     }
     if (ctrl_lock_wait()) {
         release_session();

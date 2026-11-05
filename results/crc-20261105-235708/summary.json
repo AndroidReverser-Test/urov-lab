@@ -1,0 +1,1140 @@
+{
+  "serial": "25091FDF60063J",
+  "repeats": 15,
+  "cycles": 3,
+  "runs": [
+    {
+      "label": "no-module",
+      "mode": "crc-clean",
+      "uid": 10284,
+      "pid": "10610",
+      "log": "no-module-10610.log",
+      "result": "DETECT_RESULT PASS mode=crc-clean worker_ms=351 ui_ticks=128 ui_max_gap_ms=25 native=PASS cases=2 assertions=63 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116"
+      ]
+    },
+    {
+      "label": "loaded-idle",
+      "mode": "crc-clean",
+      "uid": 10284,
+      "pid": "10718",
+      "log": "loaded-idle-10718.log",
+      "result": "DETECT_RESULT PASS mode=crc-clean worker_ms=351 ui_ticks=127 ui_max_gap_ms=20 native=PASS cases=2 assertions=63 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116"
+      ]
+    },
+    {
+      "label": "crc-brk-1",
+      "mode": "crc-brk",
+      "uid": 10284,
+      "pid": "10792",
+      "log": "crc-brk-1-10792.log",
+      "result": "DETECT_RESULT PASS mode=crc-brk worker_ms=416 ui_ticks=134 ui_max_gap_ms=20 native=PASS cases=5 assertions=161 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "overlay",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "deactivated",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116",
+        "CRC_SITE file=39400000 live=d43c4060 differs=1",
+        "ELIM_EXEC name=crc_overlay n=15 expected=0 match=0 clean=15 unknown=0 accepted=1440 failed=0 control_failed=0 total_ns=56000772 max_ns=3837484",
+        "CRC_CHANGED_BYTE probe=0 error=0 completed=32",
+        "CRC_OVERLAY mode=1 generation=1 hits=180 replays=180 failures=0"
+      ]
+    },
+    {
+      "label": "crc-uxn-1",
+      "mode": "crc-uxn",
+      "uid": 10284,
+      "pid": "10869",
+      "log": "crc-uxn-1-10869.log",
+      "result": "DETECT_RESULT PASS mode=crc-uxn worker_ms=487 ui_ticks=140 ui_max_gap_ms=19 native=PASS cases=5 assertions=161 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "overlay",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "deactivated",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116",
+        "CRC_SITE file=39400000 live=39400000 differs=0",
+        "ELIM_EXEC name=crc_overlay n=15 expected=1 match=15 clean=0 unknown=0 accepted=1440 failed=1440 control_failed=0 total_ns=58285765 max_ns=3941243",
+        "CRC_CHANGED_BYTE probe=0 error=0 completed=32",
+        "CRC_OVERLAY mode=2 generation=1 hits=180 replays=180 failures=0"
+      ]
+    },
+    {
+      "label": "crc-ap-1",
+      "mode": "crc-ap",
+      "uid": 10284,
+      "pid": "10943",
+      "log": "crc-ap-1-10943.log",
+      "result": "DETECT_RESULT PASS mode=crc-ap worker_ms=449 ui_ticks=137 ui_max_gap_ms=21 native=PASS cases=7 assertions=189 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "overlay",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "deactivated",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_VMA name=private_alias span=4096 offset=16000 rx=1 shared=0 maywrite=1 dc=0 private_dirty_kb=0 anonymous_kb=0",
+        "CRC_PAGE name=private_alias stage=clean n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_PAGE name=private_alias stage=overlay n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=0c7da8a0 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_OVERLAY mode=3 generation=1 hits=180 replays=360 failures=0",
+        "CRC_PAGE name=private_alias stage=deactivated n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_PRIVATE wrote=1 patch_errno=13 direct=0c7da8a0 execute=0000",
+        "CRC_REJECT name=private_after_write span=4096 rx=0 maywrite=1 writable=1 register_rc=-1 register_errno=22",
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116",
+        "CRC_SITE file=39400000 live=39400000 differs=0",
+        "ELIM_EXEC name=crc_overlay n=15 expected=0 match=0 clean=14 unknown=1 accepted=1408 failed=1 control_failed=0 total_ns=53380331 max_ns=3822429",
+        "CRC_CHANGED_BYTE probe=0 error=0 completed=32",
+        "CRC_OVERLAY mode=3 generation=1 hits=180 replays=872 failures=0"
+      ]
+    },
+    {
+      "label": "crc-ap-all-1",
+      "mode": "crc-ap-all",
+      "uid": 10284,
+      "pid": "11017",
+      "log": "crc-ap-all-1-11017.log",
+      "result": "DETECT_RESULT PASS mode=crc-ap-all worker_ms=431 ui_ticks=136 ui_max_gap_ms=20 native=PASS cases=5 assertions=161 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "overlay",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "deactivated",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116",
+        "CRC_SITE file=39400000 live=39400000 differs=0",
+        "ELIM_EXEC name=crc_overlay n=15 expected=0 match=0 clean=15 unknown=0 accepted=1440 failed=0 control_failed=0 total_ns=57352744 max_ns=3993530",
+        "CRC_CHANGED_BYTE probe=-1 error=11 completed=0",
+        "CRC_OVERLAY mode=3 generation=1 hits=1021 replays=0 failures=0"
+      ]
+    },
+    {
+      "label": "crc-ap-text-1",
+      "mode": "crc-ap-text",
+      "uid": 10284,
+      "pid": "11090",
+      "log": "crc-ap-text-1-11090.log",
+      "result": "DETECT_RESULT PASS mode=crc-ap-text worker_ms=351 ui_ticks=127 ui_max_gap_ms=21 native=PASS cases=2 assertions=28 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "linker_text",
+          "stage": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "linker_text",
+          "stage": "overlay",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "linker_text",
+          "stage": "deactivated",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_TEXT address=0x702d75b000 lib=/data/app/~~MqvfSRpJBvumK7Sa7VGN9g==/com.example.urovdetect-rAdAVcUZNmYrGpsizCT0Sw==/lib/arm64/liburovdetect.so span=90112 offset=6000 shared=0 maywrite=1",
+        "CRC_VMA name=linker_text span=90112 offset=6000 rx=1 shared=0 maywrite=1 dc=0 private_dirty_kb=0 anonymous_kb=0",
+        "CRC_PAGE name=linker_text stage=clean n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_PAGE name=linker_text stage=overlay n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=0c7da8a0 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_OVERLAY mode=3 generation=1 hits=180 replays=360 failures=0",
+        "CRC_PAGE name=linker_text stage=deactivated n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0"
+      ]
+    },
+    {
+      "label": "crc-brk-2",
+      "mode": "crc-brk",
+      "uid": 10284,
+      "pid": "11166",
+      "log": "crc-brk-2-11166.log",
+      "result": "DETECT_RESULT PASS mode=crc-brk worker_ms=400 ui_ticks=134 ui_max_gap_ms=20 native=PASS cases=5 assertions=161 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "overlay",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "deactivated",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116",
+        "CRC_SITE file=39400000 live=d43c4060 differs=1",
+        "ELIM_EXEC name=crc_overlay n=15 expected=0 match=0 clean=14 unknown=1 accepted=1376 failed=1 control_failed=0 total_ns=55718547 max_ns=3883341",
+        "CRC_CHANGED_BYTE probe=0 error=0 completed=32",
+        "CRC_OVERLAY mode=1 generation=1 hits=180 replays=180 failures=0"
+      ]
+    },
+    {
+      "label": "crc-uxn-2",
+      "mode": "crc-uxn",
+      "uid": 10284,
+      "pid": "11240",
+      "log": "crc-uxn-2-11240.log",
+      "result": "DETECT_RESULT PASS mode=crc-uxn worker_ms=456 ui_ticks=139 ui_max_gap_ms=19 native=PASS cases=5 assertions=161 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "overlay",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "deactivated",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116",
+        "CRC_SITE file=39400000 live=39400000 differs=0",
+        "ELIM_EXEC name=crc_overlay n=15 expected=1 match=15 clean=0 unknown=0 accepted=1440 failed=1440 control_failed=0 total_ns=58197999 max_ns=3940511",
+        "CRC_CHANGED_BYTE probe=0 error=0 completed=32",
+        "CRC_OVERLAY mode=2 generation=1 hits=180 replays=180 failures=0"
+      ]
+    },
+    {
+      "label": "crc-ap-2",
+      "mode": "crc-ap",
+      "uid": 10284,
+      "pid": "11322",
+      "log": "crc-ap-2-11322.log",
+      "result": "DETECT_RESULT PASS mode=crc-ap worker_ms=463 ui_ticks=139 ui_max_gap_ms=20 native=PASS cases=7 assertions=189 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "overlay",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "deactivated",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_VMA name=private_alias span=4096 offset=16000 rx=1 shared=0 maywrite=1 dc=0 private_dirty_kb=0 anonymous_kb=0",
+        "CRC_PAGE name=private_alias stage=clean n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_PAGE name=private_alias stage=overlay n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=0c7da8a0 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_OVERLAY mode=3 generation=1 hits=180 replays=360 failures=0",
+        "CRC_PAGE name=private_alias stage=deactivated n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_PRIVATE wrote=1 patch_errno=13 direct=0c7da8a0 execute=0000",
+        "CRC_REJECT name=private_after_write span=4096 rx=0 maywrite=1 writable=1 register_rc=-1 register_errno=22",
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116",
+        "CRC_SITE file=39400000 live=39400000 differs=0",
+        "ELIM_EXEC name=crc_overlay n=15 expected=0 match=0 clean=15 unknown=0 accepted=1440 failed=0 control_failed=0 total_ns=57157386 max_ns=3905762",
+        "CRC_CHANGED_BYTE probe=0 error=0 completed=32",
+        "CRC_OVERLAY mode=3 generation=1 hits=180 replays=872 failures=0"
+      ]
+    },
+    {
+      "label": "crc-ap-all-2",
+      "mode": "crc-ap-all",
+      "uid": 10284,
+      "pid": "11396",
+      "log": "crc-ap-all-2-11396.log",
+      "result": "DETECT_RESULT PASS mode=crc-ap-all worker_ms=441 ui_ticks=135 ui_max_gap_ms=25 native=PASS cases=5 assertions=161 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "overlay",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "deactivated",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116",
+        "CRC_SITE file=39400000 live=39400000 differs=0",
+        "ELIM_EXEC name=crc_overlay n=15 expected=0 match=0 clean=15 unknown=0 accepted=1440 failed=0 control_failed=0 total_ns=57379556 max_ns=3894247",
+        "CRC_CHANGED_BYTE probe=-1 error=11 completed=0",
+        "CRC_OVERLAY mode=3 generation=1 hits=1021 replays=0 failures=0"
+      ]
+    },
+    {
+      "label": "crc-ap-text-2",
+      "mode": "crc-ap-text",
+      "uid": 10284,
+      "pid": "11470",
+      "log": "crc-ap-text-2-11470.log",
+      "result": "DETECT_RESULT PASS mode=crc-ap-text worker_ms=350 ui_ticks=127 ui_max_gap_ms=21 native=PASS cases=2 assertions=28 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "linker_text",
+          "stage": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "linker_text",
+          "stage": "overlay",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "linker_text",
+          "stage": "deactivated",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_TEXT address=0x702d761000 lib=/data/app/~~MqvfSRpJBvumK7Sa7VGN9g==/com.example.urovdetect-rAdAVcUZNmYrGpsizCT0Sw==/lib/arm64/liburovdetect.so span=90112 offset=6000 shared=0 maywrite=1",
+        "CRC_VMA name=linker_text span=90112 offset=6000 rx=1 shared=0 maywrite=1 dc=0 private_dirty_kb=0 anonymous_kb=0",
+        "CRC_PAGE name=linker_text stage=clean n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_PAGE name=linker_text stage=overlay n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=0c7da8a0 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_OVERLAY mode=3 generation=1 hits=180 replays=360 failures=0",
+        "CRC_PAGE name=linker_text stage=deactivated n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0"
+      ]
+    },
+    {
+      "label": "crc-brk-3",
+      "mode": "crc-brk",
+      "uid": 10284,
+      "pid": "11544",
+      "log": "crc-brk-3-11544.log",
+      "result": "DETECT_RESULT PASS mode=crc-brk worker_ms=482 ui_ticks=139 ui_max_gap_ms=22 native=PASS cases=5 assertions=161 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "overlay",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "deactivated",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116",
+        "CRC_SITE file=39400000 live=d43c4060 differs=1",
+        "ELIM_EXEC name=crc_overlay n=15 expected=0 match=0 clean=15 unknown=0 accepted=1440 failed=0 control_failed=0 total_ns=57474854 max_ns=3908000",
+        "CRC_CHANGED_BYTE probe=0 error=0 completed=32",
+        "CRC_OVERLAY mode=1 generation=1 hits=180 replays=180 failures=0"
+      ]
+    },
+    {
+      "label": "crc-uxn-3",
+      "mode": "crc-uxn",
+      "uid": 10284,
+      "pid": "11624",
+      "log": "crc-uxn-3-11624.log",
+      "result": "DETECT_RESULT PASS mode=crc-uxn worker_ms=462 ui_ticks=138 ui_max_gap_ms=23 native=PASS cases=5 assertions=161 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "overlay",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "deactivated",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116",
+        "CRC_SITE file=39400000 live=39400000 differs=0",
+        "ELIM_EXEC name=crc_overlay n=15 expected=1 match=15 clean=0 unknown=0 accepted=1440 failed=1440 control_failed=0 total_ns=58148682 max_ns=5623861",
+        "CRC_CHANGED_BYTE probe=0 error=0 completed=32",
+        "CRC_OVERLAY mode=2 generation=1 hits=180 replays=180 failures=0"
+      ]
+    },
+    {
+      "label": "crc-ap-3",
+      "mode": "crc-ap",
+      "uid": 10284,
+      "pid": "11698",
+      "log": "crc-ap-3-11698.log",
+      "result": "DETECT_RESULT PASS mode=crc-ap worker_ms=514 ui_ticks=144 ui_max_gap_ms=20 native=PASS cases=7 assertions=189 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "overlay",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "deactivated",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_VMA name=private_alias span=4096 offset=16000 rx=1 shared=0 maywrite=1 dc=0 private_dirty_kb=0 anonymous_kb=0",
+        "CRC_PAGE name=private_alias stage=clean n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_PAGE name=private_alias stage=overlay n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=0c7da8a0 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_OVERLAY mode=3 generation=1 hits=180 replays=360 failures=0",
+        "CRC_PAGE name=private_alias stage=deactivated n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_PRIVATE wrote=1 patch_errno=13 direct=0c7da8a0 execute=0000",
+        "CRC_REJECT name=private_after_write span=4096 rx=0 maywrite=1 writable=1 register_rc=-1 register_errno=22",
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116",
+        "CRC_SITE file=39400000 live=39400000 differs=0",
+        "ELIM_EXEC name=crc_overlay n=15 expected=0 match=0 clean=15 unknown=0 accepted=1440 failed=0 control_failed=0 total_ns=55174807 max_ns=3755331",
+        "CRC_CHANGED_BYTE probe=0 error=0 completed=32",
+        "CRC_OVERLAY mode=3 generation=1 hits=180 replays=872 failures=0"
+      ]
+    },
+    {
+      "label": "crc-ap-all-3",
+      "mode": "crc-ap-all",
+      "uid": 10284,
+      "pid": "11772",
+      "log": "crc-ap-all-3-11772.log",
+      "result": "DETECT_RESULT PASS mode=crc-ap-all worker_ms=426 ui_ticks=135 ui_max_gap_ms=20 native=PASS cases=5 assertions=161 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "f50bcaf6",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "patch_only",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "overlay",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "deactivated",
+          "n": "15",
+          "execute": "1235",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "0c7da8a0",
+          "site": "0c7da8a0",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_REMAP same_va=1 original_offset=90112 patched_offset=94208",
+        "CRC_MAP original_identity=-1 error=116",
+        "CRC_SITE file=39400000 live=39400000 differs=0",
+        "ELIM_EXEC name=crc_overlay n=15 expected=0 match=0 clean=15 unknown=0 accepted=1440 failed=0 control_failed=0 total_ns=58040367 max_ns=3969808",
+        "CRC_CHANGED_BYTE probe=-1 error=11 completed=0",
+        "CRC_OVERLAY mode=3 generation=1 hits=1021 replays=0 failures=0"
+      ]
+    },
+    {
+      "label": "crc-ap-text-3",
+      "mode": "crc-ap-text",
+      "uid": 10284,
+      "pid": "11847",
+      "log": "crc-ap-text-3-11847.log",
+      "result": "DETECT_RESULT PASS mode=crc-ap-text worker_ms=350 ui_ticks=128 ui_max_gap_ms=21 native=PASS cases=2 assertions=28 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0",
+      "stages": [
+        {
+          "name": "linker_text",
+          "stage": "clean",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "linker_text",
+          "stage": "overlay",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "0c7da8a0",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        },
+        {
+          "name": "linker_text",
+          "stage": "deactivated",
+          "n": "15",
+          "execute": "1234",
+          "file": "f50bcaf6",
+          "backing": "0c7da8a0",
+          "direct": "f50bcaf6",
+          "site": "f50bcaf6",
+          "window": "f50bcaf6",
+          "bridge_match": "0",
+          "bridge_clean": "15",
+          "bridge_unknown": "0"
+        }
+      ],
+      "details": [
+        "CRC_TEXT address=0x702d766000 lib=/data/app/~~MqvfSRpJBvumK7Sa7VGN9g==/com.example.urovdetect-rAdAVcUZNmYrGpsizCT0Sw==/lib/arm64/liburovdetect.so span=90112 offset=6000 shared=0 maywrite=1",
+        "CRC_VMA name=linker_text span=90112 offset=6000 rx=1 shared=0 maywrite=1 dc=0 private_dirty_kb=0 anonymous_kb=0",
+        "CRC_PAGE name=linker_text stage=clean n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_PAGE name=linker_text stage=overlay n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=0c7da8a0 bridge_match=0 bridge_clean=15 bridge_unknown=0",
+        "CRC_OVERLAY mode=3 generation=1 hits=180 replays=360 failures=0",
+        "CRC_PAGE name=linker_text stage=deactivated n=15 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=15 bridge_unknown=0"
+      ]
+    }
+  ],
+  "passed": true,
+  "initial_modules": "",
+  "kernel": "Linux localhost 6.1.134-android14-11-g66e758f7d0c0-ab13748739 #1 SMP PREEMPT Tue Jul  8 09:17:32 UTC 2025 aarch64 Toybox",
+  "kpver": "c00",
+  "selinux": "Enforcing",
+  "artifacts": {
+    "urovdetect.apk": "9e9cc1e12c6f961ddebae81f27722a01637b6311c298057eb06cbed715ce62c1",
+    "urov-y.kpm": "4fe8e121816ca64efad75c6c6dca01cb5b0684a5ad85ebcce24b22b393b5aa9b"
+  },
+  "loaded_status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=e203 hooks=0x7f core_checks=4139",
+  "final_modules": "",
+  "kernel_issues": []
+}

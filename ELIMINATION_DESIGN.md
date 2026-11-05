@@ -440,7 +440,9 @@ AXI 上没有"按 PC 决定数据权限"的位；任何同步异常进入 EL1 �
 `UROV_Y_MODE_PAGE_AP`（ABI v6，`mode = 3`）：
 
 1. **目标页只清 `PTE_USER`（AP[1]）**。VMA、`vm_flags`、`vm_page_prot`、文件页、
-   code page 全都不动；`UXN=0`，因此目标页和读取点页的 EL0 取指都是原生。
+   code page 全都不动；`UXN=0`，因此目标页和读取点页的 EL0 取指都是原生。目标
+   可以是一页共享专用别名，也可以是普通 app 私有、多页、带 `VM_MAYWRITE` 的
+   `.text` 中的一页，见 §12。
 2. **数据异常由已有的 `do_mem_abort` hook 接管**：EC `0x24`、`WnR=0`、
    FSC permission、`mm` 属于会话、`FAR` 落在目标页。命中后仍走
    `uy_emulate_load()`：调用者窗口内合并伪值，窗口外从注册快照逐字节透明模拟。
@@ -457,7 +459,9 @@ AXI 上没有"按 PC 决定数据权限"的位；任何同步异常进入 EL1 �
    内核 nofault 写完成这次 store，把 `Ws` 置 0，并把 PC 直接推进到 `PC+8`。
    于是调用者看到 `STXR` 成功，和没有陷阱时一样。`ctl0 status` 的 `llsc` 计数
    每次桥接加一。桥只处理**紧邻**的三条指令，不是通用 LL/SC 模拟器。
-4. **生命周期**：注册时在 `mmap_write_lock` 下清目标页 AP[1] 并 `flush_tlb_all`；
+4. **生命周期**：注册时先用 `access_remote_vm()` fault-in 目标页并快照，再在
+   `mmap_write_lock` 下复核 VMA/PTE、清目标页 AP[1] 并 `flush_tlb_all`（PTE 被
+   回收时重新 fault-in 重试）；
    `handle_mm_fault` 的 after-hook 在目标页重新装回后再次清 AP[1]；clone 前恢复、
    clone 后重装；注销/卸载恢复 AP[1]。`mprotect/munmap/mremap/mmap(MAP_FIXED)/
    madvise/execve` 门控与 §9 相同。站点表在 AP 模式只做状态记账，不改站点页。
@@ -630,3 +634,84 @@ python .\kpms\urov-lab\tools\run_elimination_device.py `
 单变量 A/B（同一 APK，旧/新 KPM）见
 [PAGE_AP_KEYLESS_RESULTS_R2.md](PAGE_AP_KEYLESS_RESULTS_R2.md) 与
 [results/ab-llsc-baseline-vs-verified](results/ab-llsc-baseline-vs-verified)。
+
+## 12. 第五轮：普通 app 私有 `.text` 目标页
+
+### 12.1 原限制与解除思路
+
+前三轮的目标注册沿用旧 `urov-x` 的“专用页”假设：VMA 必须恰好一页、文件后备、
+当前 RX、无 `VM_MAYWRITE`。普通 app 的 linker `.text` 是 `MAP_PRIVATE` 多页
+VMA，私有文件映射天然带 `VM_MAYWRITE`（可被 COW），因此 CRC 夹具对 linker
+`.text` 和私有 RX 别名的注册都得到 `EINVAL`（见
+[CRC_INJECTION_RESULTS.md](CRC_INJECTION_RESULTS.md) 的历史负向段）。
+
+但 `urov-y` 的三种模式都不写目标页：BRK 只写读取点页，UXN 只改读取点页 PTE，
+AP 只清目标页叶子 PTE 的 `AP[1]`。目标页只需要“可读、文件后备、内容在会话
+期间不被应用换掉”。因此把目标页校验与读取点页校验分开：
+
+```text
+目标页在 VMA 内（start <= address && end - address >= 4096）
+VM_READ | VM_EXEC，无 VM_WRITE、PFNMAP、HUGETLB、VM_IO、VM_MIXEDMAP
+vm_file != NULL
+共享 VMA：仍要求恰好一页、无 VM_MAYWRITE（保持旧专用别名契约）
+私有 VMA：允许 VM_MAYWRITE、允许多页（普通 .text / oat / 已装入 native lib）
+```
+
+`VM_WRITE` 始终拒绝，所以写入后未恢复 RX 的私有页仍返回 `EINVAL`。
+
+### 12.2 注册事务
+
+1. `access_remote_vm(mm, address, snapshot, 4096, 0)`：fault-in 目标页并取第一份
+   快照。`copy_from_user_nofault()` 不会 fault-in，不能用于冷页。
+2. `mmap_write_lock` → `find_vma` → 复核 VMA/PTE（present、user、read-only、
+   UXN=0、非 CONT/SPECIAL/DEVMAP/PROT_NONE）→ 用 nofault 复制快照。
+3. PTE 在锁窗口内被回收时返回 `-EAGAIN`，解锁后重新 `access_remote_vm`，最多
+   重试 4 次；AP 模式的 `ap_arm_target()` 对同样的回收窗口也重试。
+4. AP 模式只清目标页 `PTE_USER`。`handle_mm_fault` after-hook 在目标页重新装入
+   PTE 后再次清 `AP[1]`；注销/卸载恢复 `PTE_USER`。
+
+会话归属、映射门控、fork 前后恢复、死 owner 回收和卸载顺序都不变；目标页仍不
+pin、不写字节、不改 VMA。
+
+### 12.3 真机验证
+
+Pixel 6（Android 16、6.1.134）上的 `crc-ap-text` 直接注册
+`liburovdetect.so` 的 linker `.text` 页：VMA 90,112 字节、`r-xp`、私有、
+`maywrite=1`，页 `Private_Dirty=0`、`Anonymous=0`。覆盖中业务窗口读到伪值
+（CRC `0c7da8a0`），执行仍返回 `0x1234`，裸站点/直接读回原 CRC
+`f50bcaf6`；注销后全部恢复。15 轮 × 3 cycle，`hits=180/轮`、
+`replays=360/轮`、`failures=0`。完整矩阵 20 次运行全 PASS，root
+`urov_y_test --mode ap` 33 项断言通过。数据与复现见
+[CRC_INJECTION_RESULTS.md](CRC_INJECTION_RESULTS.md) 与
+[results/crc-20261106-002515](results/crc-20261106-002515)。
+
+### 12.4 libc 读者与嵌套调用
+
+`crc-ap-libc` 用 32 字节 fake 窗口注册同一 `.text` 页，业务窗口只覆盖
+`crc_libc_business()`。`memcpy`/`memcmp`/`strlen` 是 bionic 的叶子函数，load
+处的 `x30` 直接落在业务窗口内；zlib `crc32` 会调用内部 helper，load 处的
+`x30` 在 libz 内。后端新增 `caller_allowed_deep()`：当前 LR 不命中时沿
+`x29` 帧链最多回溯 16 层，用 `copy_from_user_nofault` 读 `[x29]`/`[x29+8]`，
+命中任一保存的返回地址即允许伪值。没有帧指针时自动退回原行为。
+
+实测 `memcpy12`、`memcmp32`、`strlen31`、zlib `crc32` 直接读页和读复制缓冲
+都得到伪值；窗口外直接读/裸站点读仍是原值，执行仍是原指令，注销恢复。
+15 轮 × 3 cycle 的 `hits=360/轮`、`replays=504/轮`、`failures=0`。
+
+这个修复覆盖的是标量 libc 路径。bionic `memcpy` 从 16 字节起、`memcmp`
+从 160 字节起、`strlen` 越过前 32 字节后会使用 SIMD `LDR q`/`LDP q`；这些
+大范围路径仍 fail-closed（SIGSEGV），要支持它们需要 FPSIMD 向量寄存器模拟，
+是下一层改动。内核辅助读取仍看到真实字节。
+
+### 12.5 残余
+
+1. 目标页若是之前已被 COW 的私有页，页内容不再来自文件；会话期间它仍受映射
+   门控保护，但“文件后备内容不变”的证明不再成立。当前实现不检测 PTE 背后的
+   page 是否仍是文件页。
+2. 通过 `/proc/self/mem`、ptrace、`process_vm_readv` 的内核辅助读取仍看到真实
+   字节；这是合作模型，不是隔离。
+3. 目标页被回收后，新 PTE 安装到 after-hook 重新清 `AP[1]` 之间有一个极窄的
+   窗口，其他线程可能读到原字节；与 §10.7 的注册/重装窗口同类。
+4. 门控检查 `mremap` 的源区间和 `MREMAP_FIXED` 的目标区间；`pkey_mprotect`、
+   `remap_file_pages` 等未 hook 的映射路径仍是残余，应用自己换掉目标页后覆盖
+   会静默失效（不涉及内存安全）。

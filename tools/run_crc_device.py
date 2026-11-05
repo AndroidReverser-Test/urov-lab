@@ -87,17 +87,39 @@ def main():
         if not uid or int(uid[1]) < 10000 or not re.search(r"CapEff:\s*0{16}\b", logs) or not re.search(
                 r"Seccomp:\s*2\b", logs):
             raise RuntimeError(f"{label}: invalid app credentials")
-        stages = [dict(KV.findall(line)) for line in re.findall(r"CRC_STAGE [^\n]+", logs)]
-        expected = ["clean", "patch_only", "overlay", "deactivated"] if active else ["clean", "patch_only"]
-        if [stage["name"] for stage in stages] != expected or "CRC_FIXTURE dlopen=1" not in logs:
+        if mode == "crc-ap-text":
+            stages = [dict(KV.findall(line)) for line in
+                      re.findall(r"CRC_PAGE name=linker_text [^\n]+", logs)]
+            stage_key = "stage"
+        else:
+            stages = [dict(KV.findall(line)) for line in re.findall(r"CRC_STAGE [^\n]+", logs)]
+            stage_key = "name"
+        if mode in ("crc-ap-text", "crc-ap-libc"):
+            expected = ["clean", "overlay", "deactivated"]
+        else:
+            expected = ["clean", "patch_only", "overlay", "deactivated"] if active else \
+                       ["clean", "patch_only"]
+        if [stage[stage_key] for stage in stages] != expected or "CRC_FIXTURE dlopen=1" not in logs:
             raise RuntimeError(f"{label}: incomplete CRC matrix")
+        if mode == "crc-ap-text" and not re.search(
+                r"CRC_VMA name=linker_text .*shared=0 maywrite=1 dc=0 private_dirty_kb=0 "
+                r"anonymous_kb=0", logs):
+            raise RuntimeError(f"{label}: linker text VMA was not the normal private mapping")
+        if mode == "crc-ap-libc" and not re.search(
+                r"CRC_LIBC_VMA .*private_dirty_kb=0 anonymous_kb=0", logs):
+            raise RuntimeError(f"{label}: libc text VMA was not the normal private mapping")
         if active and "state=inactive" not in kp("kpm", "ctl0", MODULE, "status"):
             raise RuntimeError(f"{label}: fixture left an active session")
         report["runs"].append({"label": label, "mode": mode, "uid": int(uid[1]), "pid": pid,
                                "log": log_path.name, "result": result[0], "stages": stages,
                                "details": re.findall(r"(?:CRC_(?:REJECT|PRIVATE|REMAP|MAP|OVERLAY|SITE|"
-                                                     r"CHANGED_BYTE)|ELIM_EXEC) [^\n]+", logs)})
-        last = stages[2] if active else stages[-1]
+                                                     r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC)|ELIM_EXEC) [^\n]+", logs)})
+        if mode in ("crc-ap-text", "crc-ap-libc"):
+            last = stages[1]
+        elif active:
+            last = stages[2]
+        else:
+            last = stages[-1]
         print(f"{label} PASS execute={last['execute']} file={last['file']} "
               f"direct={last['direct']} window={last['window']} bridge={last['bridge_match']}/"
               f"{last['n']}", flush=True)
@@ -127,7 +149,8 @@ def main():
             raise RuntimeError("UROV-Y hooks incomplete")
         run_app("loaded-idle", "crc-clean")
         for i in range(1, args.cycles + 1):
-            for mode in ("crc-brk", "crc-uxn", "crc-ap", "crc-ap-all"):
+            for mode in ("crc-brk", "crc-uxn", "crc-ap", "crc-ap-all", "crc-ap-text",
+                         "crc-ap-libc"):
                 run_app(f"{mode}-{i}", mode)
         report["passed"] = True
     except Exception as exc:

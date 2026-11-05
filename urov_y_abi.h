@@ -87,7 +87,9 @@ struct urov_y_request {
     uint16_t op;
     uint64_t request_id;
     uint64_t session;
-    uint64_t address;             /* page-aligned target page, read-only RX */
+    uint64_t address;             /* page-aligned target: one page in a private
+                                   * file-backed RX VMA (normal .text) or the
+                                   * dedicated one-page MAP_SHARED RX alias */
     uint64_t expected_generation;
     uint64_t value;
     uint32_t offset;              /* overlay byte offset inside the page */
