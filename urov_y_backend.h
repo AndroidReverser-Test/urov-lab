@@ -8,6 +8,7 @@ struct uy_status {
     uint64_t hits;
     uint64_t replays;
     uint64_t failures;
+    uint64_t llsc;
     uint32_t active;
     uint32_t sites;
     uint32_t armed;
@@ -18,7 +19,7 @@ struct uy_status {
     uint32_t degraded;
 };
 
-/* Installs the reader-site trap (BRK mode and/or PAGE_UXN mode), the
+/* Installs the reader-site traps (BRK, PAGE_UXN and/or PAGE_AP mode), the
  * authenticated prctl channel and the mapping lifecycle gates. The argument
  * string must contain key=<32 hex digits>; "verbose" enables printk. */
 long urov_y_backend_init(const char *args);

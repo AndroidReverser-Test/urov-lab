@@ -1,0 +1,23 @@
+--------- beginning of main
+10-02 11:42:25.542  8031  8054 I urovdetect: CONTEXT pid=8031 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768
+10-02 11:42:25.542  8031  8054 I urovdetect: CONTEXT CapEff:	0000000000000000
+10-02 11:42:25.542  8031  8054 I urovdetect: CONTEXT Seccomp:	2
+10-02 11:42:25.542  8031  8054 I urovdetect: BEGIN mode=y-active repeats=30
+10-02 11:42:25.869  8031  8054 I urovdetect: ELIM_CASE name=baseline result=PASS n=30 exclusive_match=0 exclusive_clean=30 exclusive_unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 reader_clean=30 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-02 11:42:25.981  8031  8054 I urovdetect: ELIM_EXEC name=baseline n=30 expected=0 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 total_ns=111693071 max_ns=3795899
+10-02 11:42:25.992  8031  8054 I urovdetect: ELIM_RESIDUAL mode=brk site_file_word=f9400000 site_live_word=d42a85a0 differs=1 site_cow_private=1 private_dirty_kb=4 anonymous_kb=4 base_dirty_kb=0 base_anonymous_kb=0
+10-02 11:42:26.204  8031  8054 I urovdetect: ELIM_CASE name=active_page result=PASS n=30 exclusive_match=0 exclusive_clean=30 exclusive_unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 reader_clean=30 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-02 11:42:26.416  8031  8054 I urovdetect: ELIM_CASE name=active_outside_window result=PASS n=30 exclusive_match=0 exclusive_clean=30 exclusive_unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 reader_clean=30 reader_unknown=0 direct=0x0 file=0x0
+10-02 11:42:26.529  8031  8054 I urovdetect: ELIM_EXEC name=active_changed n=30 expected=0 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 total_ns=112234372 max_ns=3875000
+10-02 11:42:26.529  8031  8054 I urovdetect: ELIM_EXEC_STATE unchanged=1 generation=1 hits=2 replays=361 failures=0
+10-02 11:42:26.532  8031  8054 I urovdetect: ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1
+10-02 11:42:26.532  8031  8054 I urovdetect: ELIM_TIMING mode=brk site_call_ns=231
+10-02 11:42:26.750  8031  8054 I urovdetect: ELIM_CASE name=active_after_set result=PASS n=30 exclusive_match=0 exclusive_clean=30 exclusive_unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 reader_clean=30 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-02 11:42:26.968  8031  8054 I urovdetect: ELIM_CASE name=active_equal_value result=PASS n=30 exclusive_match=0 exclusive_clean=30 exclusive_unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 reader_clean=30 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-02 11:42:27.085  8031  8054 I urovdetect: ELIM_EXEC name=active_equal_value n=30 expected=0 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 total_ns=115380940 max_ns=3931763
+10-02 11:42:27.096  8031  8054 I urovdetect: ELIM_RESIDUAL restored_site_file_word=f9400000 live_word=f9400000 equal=1 private_dirty_kb=4 anonymous_kb=4 base_dirty_kb=0 base_anonymous_kb=0
+10-02 11:42:27.315  8031  8054 I urovdetect: ELIM_CASE name=deactivated result=PASS n=30 exclusive_match=0 exclusive_clean=30 exclusive_unknown=0 accepted=2880 failed=0 control_failed=0 reader_match=0 reader_clean=30 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-02 11:42:27.431  8031  8054 I urovdetect: ELIM_EXEC name=deactivated n=30 expected=0 match=0 clean=30 unknown=0 accepted=2880 failed=0 control_failed=0 total_ns=115394778 max_ns=3974976
+10-02 11:42:27.432  8031  8054 I urovdetect: ELIM_BUSINESS ops=371712 errors=0 execution=original
+10-02 11:42:27.432  8031  8054 I urovdetect: NATIVE_RESULT PASS cases=11 assertions=1240 failures=0 mode=y-active
+10-02 11:42:27.435  8031  8031 I urovdetect: DETECT_RESULT PASS mode=y-active worker_ms=1890 ui_ticks=278 ui_max_gap_ms=22 native=PASS cases=11 assertions=1240 failures=0

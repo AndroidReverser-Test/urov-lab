@@ -125,6 +125,13 @@ static int mapping_private_kb(const void *addr, unsigned *dirty, unsigned *anon)
     return found ? 0 : -1;
 }
 
+static const char *mode_name(unsigned mode)
+{
+    if (mode == UROV_Y_MODE_PAGE_UXN) return "page";
+    if (mode == UROV_Y_MODE_PAGE_AP) return "ap";
+    return "brk";
+}
+
 struct y_ctx {
     int have;
     struct urov_x_keys keys;
@@ -350,7 +357,7 @@ static int run_active(const char *key, unsigned mode)
     /* The decisive observable: does the trap modify the code page at all? */
     live0 = load32_scalar((const void *)&uy_site_ldr);
     rc = mapping_private_kb((const void *)&uy_site_ldr, &dirty, &anon);
-    if (mode == UROV_Y_MODE_PAGE_UXN) {
+    if (mode != UROV_Y_MODE_SITE_BRK) {
         CHECK(live0 == st0, "page mode changed the site instruction: %08x -> %08x",
               st0, live0);
         CHECK(rc == 0 && dirty == base_dirty && anon == base_anon,
@@ -363,11 +370,9 @@ static int run_active(const char *key, unsigned mode)
     }
     printf("TRAP mode=%s site_word=%08x dirty_kb=%u base_dirty_kb=%u anon_kb=%u "
            "base_anon_kb=%u\n",
-           mode == UROV_Y_MODE_PAGE_UXN ? "page" : "brk", live0, dirty, base_dirty,
-           anon, base_anon);
+           mode_name(mode), live0, dirty, base_dirty, anon, base_anon);
     printf("TRAP_CALL mode=%s active_ns=%llu\n",
-           mode == UROV_Y_MODE_PAGE_UXN ? "page" : "brk",
-           (unsigned long long)call_cost_ns(&p, 200));
+           mode_name(mode), (unsigned long long)call_cost_ns(&p, 200));
 
     rc = y_set(&ctx, 1, fake_b);
     CHECK(rc == 0, "SET rc=%d errno=%d", rc, errno);
@@ -422,8 +427,8 @@ static int run_active(const char *key, unsigned mode)
     CHECK(rc == 0, "DEACTIVATE rc=%d errno=%d", rc, errno);
     CHECK(uy_business_ldr(p.address + WIN) == original, "deactivated site not restored");
     CHECK(load32_scalar((const void *)&uy_site_ldr) == st0, "site opcode not restored");
-    if (mode == UROV_Y_MODE_PAGE_UXN) {
-        /* The page-trap mode never touched the page, so the baseline must hold. */
+    if (mode != UROV_Y_MODE_SITE_BRK) {
+        /* Both page modes never touched the site page, so the baseline holds. */
         CHECK(!mapping_private_kb((const void *)&uy_site_ldr, &dirty, &anon) &&
               dirty == base_dirty && anon == base_anon,
               "deactivate left the site page private: dirty=%u (base %u) anon=%u (base %u)",
@@ -436,8 +441,7 @@ static int run_active(const char *key, unsigned mode)
               anon >= base_anon + 4U, "brk mode lost its COW page after deactivate");
     }
     printf("TRAP_CALL mode=%s restored_ns=%llu\n",
-           mode == UROV_Y_MODE_PAGE_UXN ? "page" : "brk",
-           (unsigned long long)call_cost_ns(&p, 200));
+           mode_name(mode), (unsigned long long)call_cost_ns(&p, 200));
     CHECK(!y_status(&ctx, &st) && st.state == UROV_Y_INACTIVE, "STATUS after deactivate");
 
     /* Mapping gate: a mapping change that overlaps the target page ends the
@@ -478,7 +482,7 @@ static int run_hold(const char *key, unsigned mode)
     }
     CHECK(uy_business_ldr(p.address + WIN) == fake_a, "hold site not armed");
     printf("HOLD_READY pid=%d uid=%d mode=%s\n", (int)getpid(), (int)getuid(),
-           mode == UROV_Y_MODE_PAGE_UXN ? "page" : "brk");
+           mode_name(mode));
     for (unsigned i = 0; i < 600; ++i) {
         struct urov_y_request st;
         uint64_t got;
@@ -493,7 +497,7 @@ static int run_hold(const char *key, unsigned mode)
                    (int)getpid(), insn, (unsigned long long)uy_site_ldr(p.address + WIN),
                    dirty, base_dirty, anon, base_anon);
             restored = insn == 0xf9400000U && uy_site_ldr(p.address + WIN) == original &&
-                       anon == base_anon;
+                       (mode == UROV_Y_MODE_SITE_BRK || anon == base_anon);
             break;
         }
         if (!y_status(&ctx, &st) && st.state == UROV_Y_INACTIVE) {
@@ -521,6 +525,7 @@ int main(int argc, char **argv)
             const char *m = argv[++i];
             if (!strcmp(m, "brk")) mode = UROV_Y_MODE_SITE_BRK;
             else if (!strcmp(m, "page")) mode = UROV_Y_MODE_PAGE_UXN;
+            else if (!strcmp(m, "ap")) mode = UROV_Y_MODE_PAGE_AP;
             else { fprintf(stderr, "unknown mode %s\n", m); return 2; }
         }
         else if (!strcmp(argv[i], "--clean")) clean = 1;

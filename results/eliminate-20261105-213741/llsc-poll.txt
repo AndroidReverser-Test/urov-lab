@@ -1,0 +1,30 @@
+AP LL/SC bridge, final artifact
+date: 2026-11-05 21:14 UTC+8
+serial: 25091FDF60063J
+urov-y.kpm sha256: fbe8dc8409351696f0f17ecaf2da77818a8df2cfdcb4e8fd6d0b81d02d38a87b
+APK sha256: 04d55b42371b95337a0cd9a31376cbdd1691a44e0208ba042d2c4016a44334f8
+
+Module loaded with key=<redacted>; app started with:
+  am start -n com.example.urovdetect/.MainActivity --es mode w-active --es key <redacted> --ei repeats 30
+
+While the app was active, the runner polled:
+  kpatch <SUPERKEY> kpm ctl0 urov-y status
+
+llsc samples (every ~150 ms):
+  0,0,0,0,0,0,0,416,3640,6240,6240,6240,8840,11960,0,0,0,0,0,0,0,0,0,0,0
+max llsc: 11960
+
+App assertions from the same run:
+  ELIM_CASE name=active_page result=PASS n=30 exclusive_match=0 exclusive_clean=30
+    exclusive_unknown=0 accepted=2880 failed=0 control_failed=0
+    reader_match=0 reader_clean=30 reader_unknown=0
+    direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+  ELIM_EXEC name=active_changed n=30 expected=0 match=0 clean=30 unknown=0
+    accepted=2880 failed=0 control_failed=0
+  DETECT_RESULT PASS mode=w-active worker_ms=2193 ui_ticks=307 ui_max_gap_ms=18
+    native=PASS cases=19 assertions=1314 failures=0
+
+The counter is reset when the session ends, hence the trailing zeros. A nonzero
+counter together with exclusive_match=0 is the direct evidence that the immediate
+LDXR/LDRB/STXR probe was bridged; urov-x's active page is the positive control
+where the same probe reports MATCH.

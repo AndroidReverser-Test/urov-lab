@@ -1,6 +1,6 @@
 # UROV-LAB 当前进度
 
-更新于 2026-11-03（Asia/Shanghai）。
+更新于 2026-11-05（Asia/Shanghai）。
 
 **独立 KPM 已在 Pixel 6 上完成活动覆盖验收。** `urov-lab.kpm` 自带解码/模拟核心、EL0 数据异常后端和控制 syscall hook，不再依赖任何外部宿主补丁或内置内核后端。普通 `load` 读取注册页时获得伪造值，同一页的取指仍执行原始机器码；更新、注销和卸载均已验证。
 
@@ -18,6 +18,13 @@
 > 见 [ELIMINATION_DESIGN.md](ELIMINATION_DESIGN.md)（§9）与
 > [ELIMINATION_RESULTS.md](ELIMINATION_RESULTS.md)。原 `urov-x`、`urov-lab.kpm`
 > 未改动。
+>
+> 2026-11-05 第三轮：`ud_observe_execution()` 证明 UXN 模式的读取点页可被取指
+> canary 识别（255/255）。新增 `PAGE_AP`（ABI v6，`mode=3`）：只清目标页 AP[1]，
+> 读取点页取指原生；数据 permission abort 由紧邻 LL/SC 桥消除监视器信号。正式
+> 矩阵 14 次运行、225 次观测，独占/reader MATCH 0，AP 的 48 次 execution 观测
+> 全部 `match=0`；30 次 `w-active` 轮询到 `llsc=11,960`。见 §10 与
+> [结果](results/eliminate-20261105-213741/summary.json)。
 
 ## 本次交付
 

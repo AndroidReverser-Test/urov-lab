@@ -1,0 +1,13 @@
+--------- beginning of main
+10-02 11:45:03.214  9636  9660 I urovdetect: CONTEXT pid=9636 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768
+10-02 11:45:03.214  9636  9660 I urovdetect: CONTEXT CapEff:	0000000000000000
+10-02 11:45:03.214  9636  9660 I urovdetect: CONTEXT Seccomp:	2
+10-02 11:45:03.214  9636  9660 I urovdetect: BEGIN mode=hold repeats=20
+10-02 11:45:03.532  9636  9660 I urovdetect: CASE baseline_owned result=PASS n=20 ctl=1 scope=0 caps=0xeb7 file=0 dc=0 rr=0 diff_at=-1 views_us_p50=2820 views_us_p95=9581 views_us_max=14926 ctl_us_p50=4 ctl_us_p95=9 smaps_us_p50=8193 smaps_us_p95=18471 fd_delta=0 probe_fd_delta=0
+10-02 11:45:03.573  9636  9660 I urovdetect: CASE hold_active result=PASS n=3 ctl=1 scope=1 caps=0xeb7 file=1 dc=0 rr=1 diff_at=4 views_us_p50=2859 views_us_p95=2895 views_us_max=2895 ctl_us_p50=4 ctl_us_p95=4 smaps_us_p50=8098 smaps_us_p95=8109 fd_delta=0 probe_fd_delta=0
+10-02 11:45:03.573  9636  9660 I urovdetect: HOLD_READY pid=9636 uid=10284
+10-02 11:45:07.883  9636  9660 I urovdetect: CASE unloaded_live result=PASS n=10 ctl=0 scope=-1 caps=0x0 file=0 dc=0 rr=0 diff_at=-1 views_us_p50=28291 views_us_p95=42039 views_us_max=42039 ctl_us_p50=8 ctl_us_p95=13 smaps_us_p50=87421 smaps_us_p95=100886 fd_delta=0 probe_fd_delta=0
+10-02 11:45:07.884  9636  9660 I urovdetect: HOLD_UNLOADED restored=1 execution=original
+10-02 11:45:07.885  9636  9660 I urovdetect: BUSINESS ops=873600 errors=0 execution=original normal_io=ok
+10-02 11:45:07.920  9636  9660 I urovdetect: NATIVE_RESULT PASS cases=3 assertions=223 failures=0 module=0 scope=-1 integrity_diff=0 mode=hold
+10-02 11:45:07.931  9636  9636 I urovdetect: DETECT_RESULT PASS mode=hold worker_ms=4707 ui_ticks=545 ui_max_gap_ms=31 native=PASS cases=3 assertions=223 failures=0 module=0 scope=-1 integrity_diff=0

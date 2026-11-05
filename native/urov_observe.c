@@ -75,11 +75,50 @@ static unsigned exclusive_once(const void *address, uint64_t *scratch, unsigned 
     return failed;
 }
 
-void ud_observe_exclusive(const void *address, const void *reference,
-                          int backing_fd, off_t offset,
-                          struct ud_exclusive_observation *out)
+static uint64_t scalar_word(const void *address)
+{
+    uint64_t value;
+    __asm__ volatile("ldr %0, [%1]" : "=r"(value) : "r"(address) : "memory");
+    return value;
+}
+
+static int check_canary(const void *address, const void *reference, int fd, off_t offset)
+{
+    /* Little-endian encodings of BTI C and RET x30. */
+    const uint64_t canary = UINT64_C(0xd65f03c0d503245f);
+    uint64_t file;
+    ssize_t got = pread(fd, &file, sizeof(file), offset);
+    if (got != (ssize_t)sizeof(file)) return got < 0 ? errno : EIO;
+    if (file != canary || scalar_word(address) != canary ||
+        scalar_word(reference) != canary) return EPROTO;
+    return 0;
+}
+
+__attribute__((noinline))
+static unsigned execution_once(const void *address, uint64_t *scratch, unsigned *byte)
+{
+    uint64_t old;
+    unsigned failed;
+    /* The only callable code in this window is the verified two-word canary.
+     * BTI JC also accepts a branch type left over by an emulated return. */
+    __asm__ volatile("ldxr %0, [%2]\n"
+                     "blr %3\n"
+                     "hint #38\n"
+                     "stxr %w1, %0, [%2]\n"
+                     : "=&r"(old), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "x30", "memory");
+    *byte = 0;
+    return failed;
+}
+
+static void observe_reservation(const void *address, const void *reference,
+                                int backing_fd, off_t offset, int execute,
+                                struct ud_exclusive_observation *out)
 {
     struct sample_identity target, control, after;
+    size_t size = execute ? sizeof(uint64_t) : 1U;
+    unsigned (*sample)(const void *, uint64_t *, unsigned *) =
+        execute ? execution_once : exclusive_once;
     /* Keep the scratch away from normal stack writes and compiler spills.
      * The caller does not share this stack storage with other threads.
      */
@@ -90,19 +129,24 @@ void ud_observe_exclusive(const void *address, const void *reference,
     unsigned baseline_byte = 0;
     memset(out, 0, sizeof(*out));
     out->reservation_loss = UD_UNKNOWN;
-    error = identity(address, 1, backing_fd, offset, &target);
+    error = identity(address, size, backing_fd, offset, &target);
     if (error) { out->error = error; goto done; }
-    error = identity(reference, 1, backing_fd, offset, &control);
+    error = identity(reference, size, backing_fd, offset, &control);
     if (error) { out->error = error; goto done; }
     if (ps <= 0 || (uintptr_t)address / (uintptr_t)ps ==
-                   (uintptr_t)reference / (uintptr_t)ps) {
+                   (uintptr_t)reference / (uintptr_t)ps ||
+        (execute && (((uintptr_t)address | (uintptr_t)reference) & 7U))) {
         out->error = EINVAL; goto done;
+    }
+    if (execute) {
+        error = check_canary(address, reference, backing_fd, offset);
+        if (error) { out->error = error; goto done; }
     }
     /* Warm both addresses and the exclusive code, outside the measured window. */
     for (unsigned i = 0; i < 8; ++i) {
         unsigned a, b;
-        (void)exclusive_once(reference, scratch, &a);
-        (void)exclusive_once(address, scratch, &b);
+        (void)sample(reference, scratch, &a);
+        (void)sample(address, scratch, &b);
         if (a != b || (i && a != baseline_byte)) { out->error = EAGAIN; goto done; }
         baseline_byte = a;
     }
@@ -111,9 +155,9 @@ void ud_observe_exclusive(const void *address, const void *reference,
         for (unsigned attempt = 0; attempt < UD_OBSERVE_TRIALS * 2U &&
                                    accepted < UD_OBSERVE_TRIALS; ++attempt) {
             unsigned a, b, c;
-            unsigned before = exclusive_once(reference, scratch, &a);
-            unsigned tested = exclusive_once(address, scratch, &b);
-            unsigned after_control = exclusive_once(reference, scratch, &c);
+            unsigned before = sample(reference, scratch, &a);
+            unsigned tested = sample(address, scratch, &b);
+            unsigned after_control = sample(reference, scratch, &c);
             if (a != baseline_byte || b != a || c != a) { out->error = EAGAIN; goto done; }
             if (before || after_control) { ++out->control_failed; continue; }
             ++accepted;
@@ -127,10 +171,14 @@ void ud_observe_exclusive(const void *address, const void *reference,
         ++out->epochs;
     }
     if (out->control_failed > 8U) { out->error = EAGAIN; goto done; }
-    error = identity(address, 1, backing_fd, offset, &after);
+    error = identity(address, size, backing_fd, offset, &after);
     if (error || !unchanged(&target, &after)) { out->error = error ? error : EAGAIN; goto done; }
-    error = identity(reference, 1, backing_fd, offset, &after);
+    error = identity(reference, size, backing_fd, offset, &after);
     if (error || !unchanged(&control, &after)) { out->error = error ? error : EAGAIN; goto done; }
+    if (execute) {
+        error = check_canary(address, reference, backing_fd, offset);
+        if (error) { out->error = error; goto done; }
+    }
     if (out->target_failed == UD_OBSERVE_EPOCHS * UD_OBSERVE_TRIALS)
         out->reservation_loss = UD_MATCH;
     else if (out->target_failed == 0) out->reservation_loss = UD_NO_MATCH;
@@ -140,11 +188,18 @@ done:
     errno = saved;
 }
 
-static uint64_t scalar_word(const void *address)
+void ud_observe_exclusive(const void *address, const void *reference,
+                          int backing_fd, off_t offset,
+                          struct ud_exclusive_observation *out)
 {
-    uint64_t value;
-    __asm__ volatile("ldr %0, [%1]" : "=r"(value) : "r"(address) : "memory");
-    return value;
+    observe_reservation(address, reference, backing_fd, offset, 0, out);
+}
+
+void ud_observe_execution(const void *address, const void *reference,
+                          int backing_fd, off_t offset,
+                          struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, 1, out);
 }
 
 void ud_observe_reader(const void *address, int backing_fd, off_t offset,

@@ -41,6 +41,21 @@ void ud_observe_exclusive(const void *address, const void *reference,
                           int backing_fd, off_t offset,
                           struct ud_exclusive_observation *out);
 
+/* Observe instruction fetch on an app-owned canary. Both addresses must be
+ * 8-byte aligned, callable immutable RX entries for the same file bytes in
+ * different virtual pages. The entry must contain exactly BTI C; RET (x30).
+ * Supply a known entry on the reader page and a normal alias of that entry.
+ * The code is checked against the file before either address is called.
+ *
+ * The same paired trials and lifetime contract apply as above. MATCH
+ * identifies repeatable execution-associated reservation loss. The canary
+ * accesses no data, so the finding is independent of the overlay's value or
+ * caller window. Do not use this API to branch to arbitrary code addresses.
+ */
+void ud_observe_execution(const void *address, const void *reference,
+                          int backing_fd, off_t offset,
+                          struct ud_exclusive_observation *out);
+
 /* reader MUST be a caller-owned, side-effect-free plain 64-bit load routine
  * from the actual business read site; address must be 8-byte aligned. Caller
  * must know this routine's normal semantics and retain its code. This API does

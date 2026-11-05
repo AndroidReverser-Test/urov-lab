@@ -15,6 +15,15 @@
 仍读到伪值 `0x8877665544332211`。应用持有活动会话时卸载模块，两种模式都能在运行中
 的 App 里恢复，App 未收信号。**
 
+> 2026-11-05 第三轮：上一轮 §9 留下的"读取点页不在 EL0 原生取指"已被
+> `ud_observe_execution()` 实测为 255/255 可复现。新增 `PAGE_AP` 模式（ABI v6，
+> `mode=3`）：只清目标页 `AP[1]`，站点页取指保持原生；数据 permission abort
+> 由相邻 `LDXR/load/STXR` 桥接消除独占监视器信号。正式矩阵
+> [results/eliminate-20261105-213741](results/eliminate-20261105-213741)：
+> 14 次 App 运行、225 次观测，独占 MATCH **0**、reader MATCH **0**，
+> AP 两次运行各 48 次 execution 观测、24 个 per-CPU canary 全部 `match=0`，
+> 业务伪值保留。详细数据与残余见 §10。
+
 ## 1. 设备与产物
 
 | 项目 | 实测值 |
@@ -186,6 +195,7 @@ stub + NOP 填充，业务包装在 `0x9060`）。
 ```powershell
 .\kpms\urov-lab\build.ps1
 .\kpms\urov-lab\apps\urov-detect\build.ps1
+.\kpms\urov-lab\apps\urov-detect\build.ps1 -Observer
 python .\kpms\urov-lab\tools\run_elimination_device.py `
   --serial 25091FDF60063J --key <KP-SUPERKEY> --repeats 6 --cycles 2
 ```
@@ -204,3 +214,104 @@ kpatch <KEY> kpm unload urov-y
 `y-clean` 不带密钥运行（模块在场/不在场都可）；`y-hold`/`z-hold` 用于活动期卸载；
 `y-active` 是 BRK 模式的代码页特征阳性对照，`z-active` 是被测的页陷阱模式；
 `observe-active`/`x-*` 仍用于 `urov-x` 对照。
+
+## 10. 第三轮：PAGE_AP 与相邻 LL/SC 桥
+
+### 10.1 触发点与设备
+
+2026-11-05 的取指复核在 `PAGE_UXN` 活动页上用 `ud_observe_execution()` 执行
+`BTI C; RET` canary，255/255 命中；同一 canary 在 669 次普通页对照中 668 次阴性、
+1 次 UNKNOWN。这个信号由 `ERET` 清本地独占监视器产生，与伪值和调用窗口无关。
+本轮因此需要一种"取指原生、数据仍可伪造"的模式。
+
+设备与上一轮相同：Pixel 6 / `25091FDF60063J`、Android 16 / SDK 36、
+`6.1.134-android14-11-g66e758f7d0c0-ab13748739`、4 KiB 页、KernelPatch `c00`。
+检测 App 仍是 `com.example.urovdetect`（uid 10284），`untrusted_app`、
+`CapEff=0`、`Seccomp=2`。
+
+正式结果目录：[results/eliminate-20261105-213741](results/eliminate-20261105-213741)。
+产物 SHA256：
+
+```text
+fbe8dc8409351696f0f17ecaf2da77818a8df2cfdcb4e8fd6d0b81d02d38a87b  urov-y.kpm
+53dcd774e2a9550df0d76a22287b58cea1dc857dfd5be22da438ae7d46b9420c  urov_y_test
+04d55b42371b95337a0cd9a31376cbdd1691a44e0208ba042d2c4016a44334f8  urovdetect.apk
+1d4ada4d0e61bbf37d96129adfef5f1a5e1367012be560121dd47c394b600942  urovobserver.apk
+```
+
+### 10.2 正式矩阵
+
+运行器：`tools/run_elimination_device.py --serial … --key Test6666 --repeats 6
+--cycles 2`。14 次 App 运行、39 组用例、225 次完整 API 观测、21,536 个被接受三元组。
+
+| # | 用例 | 结果 | 关键数据 |
+|---|---|---|---|
+| 01 | 无模块，`y-clean` | PASS | 独占/reader 0；无密钥通道 `EINVAL` |
+| 02 | `urov-x` 阳性对照，`observe-active` | PASS | `active_changed` 独占与 reader 均阳性；8 CPU 均阳性 |
+| 03 | 装载 `urov-y`、无会话 | PASS | 空闲模块不产生观测 |
+| 04-1/2 | `y-active`（BRK）两轮 | PASS | 代码页 `differs=1`、私有页，作为第一轮特征对照 |
+| 05-1/2 | `z-active`（UXN）两轮 | PASS | 代码页干净；active/equal/per-CPU 取指 canary 全部命中（本轮要消除的特征；上一轮取指复核为 255/255） |
+| 06-1/2 | `w-active`（PAGE_AP）两轮 | PASS | 独占 0、reader 0；execution **48/48 `match=0`**，含 24 个 per-CPU canary |
+| 07 | `y-hold` 活动期卸载 | PASS | 模块列表空；App 存活并恢复 |
+| 08 | `z-hold` + 其他 UID 观察 | PASS | 观察者看不到 owner 的取指异常；卸载恢复 |
+| 09 | `w-hold` 活动期卸载 | PASS | `ELIM_HOLD_RESTORED opcode=f9400000`，目标页恢复，App 存活 |
+| 10 | 卸载后 `y-clean` | PASS | 独占/reader 0 |
+
+总计：`exclusive_matches=0`、`exclusive_clean=224`、`exclusive_unknown=1`、
+`failed_target_stores=1`、`reader_matches=0`、`reader_clean=225`、
+`feature_business_reads=6`。唯一一次 `UNKNOWN` 出现在无模块的
+`10-final-clean / idle_unregistered`（目标 STXR 瞬时失败 1 次），不是 MATCH；
+`04-active-2` 另有 1 次对照失败，均按 UNKNOWN 处理，不计阳性。
+
+### 10.3 AP 模式逐项数据
+
+`w-active` 每轮：
+
+- 6 个 `ELIM_CASE`（baseline/active_page/outside/after_set/equal_value/deactivated），
+  每个 `exclusive_match=0`、`reader_match=0`；活动页 `accepted=576`、
+  `failed=0`、`control_failed=0`。
+- `ELIM_EXEC`：baseline、active_changed、8 个 `active_cpu_*`、equal_value、
+  deactivated，每轮 12 项 / 48 次观测，`expected=0`、`match=0`；两轮共 24 项 /
+  96 次观测、9,216 个三元组。
+- `ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1
+  reader=0x8877665544332211 file=0xf2c66881f2aaacc1`。
+- `ELIM_RESIDUAL mode=ap site_file_word=f9400000 site_live_word=f9400000
+  differs=0 site_cow_private=0 private_dirty_kb=0 anonymous_kb=0`
+  （与基线相同）。
+- `ELIM_TIMING mode=ap site_call_ns=273..281`。
+- `ELIM_EXEC_STATE` 中 `failures=0`、`hits=2`、`replays=1457`（每轮）。
+
+### 10.4 LL/SC 桥的直接证据
+
+`w-active repeats=30` 的单独运行中，在 App 活动期间轮询
+`kpatch ctl0 urov-y status`，观察到 `llsc` 从 0 增长到 **11,960**；同一次运行的
+`active_page exclusive_match=0`、`ELIM_EXEC active_changed match=0`、
+`DETECT_RESULT PASS cases=19 assertions=1314 failures=0`。原始轮询序列见
+[llsc-poll.txt](results/eliminate-20261105-213741/llsc-poll.txt)。
+如果桥没有生效，`LDRB` 的同步异常会让随后 `STXR` 失败，检测器应得到
+`exclusive_match>0`；同一检测核心在 `urov-x` 阳性对照上正是如此。
+
+### 10.5 root 验收与生命周期
+
+`tests/urov_y_test --mode ap`（33 项断言）通过：
+
+```text
+TRAP mode=ap site_word=f9400000 dirty_kb=0 base_dirty_kb=0 anon_kb=0 base_anon_kb=0
+TRAP_CALL mode=ap active_ns=756
+TRAP_CALL mode=ap restored_ns=5
+PASS cases=1 assertions=33 failures=0
+```
+
+覆盖：多字节/字节读取点、窗口外地址、未映射地址的 SIGSEGV 语义、fork 窗口、
+`mprotect` 门控、注销恢复、活动期卸载。`w-hold` 在 App 仍执行读取点时卸载模块，
+App 记录 `ELIM_HOLD_RESTORED opcode=f9400000 direct=f2c66881f2aaacc1
+private_dirty_kb=0 anonymous_kb=0`，进程未收信号；模块列表为空。
+
+### 10.6 残余
+
+见 [ELIMINATION_DESIGN.md](ELIMINATION_DESIGN.md) §10.7。最关键的三条：
+
+1. 每次读取仍有一次同步数据异常（~273–281 ns）。
+2. 桥只覆盖紧邻的 `LDXR/load/STXR`；换一种 LL/SC 排布仍可看到监视器失效。
+3. AP[1] 是页级数据权限，SIMD/原子/独占 load 仍 fail-closed；PTE 重新装回有
+   微秒级窗口。该模式消除的是**当前检测集的取指 canary**，不是"任意检测面"。

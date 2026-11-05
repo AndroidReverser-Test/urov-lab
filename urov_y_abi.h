@@ -11,10 +11,16 @@
  *   - the fake value is delivered by trapping the *reader instruction*: the
  *     registered site's machine instruction is replaced by BRK for the
  *     session and emulated in EL1, so the page itself keeps a single
- *     consistent data view;  the second, default mode instead makes the
- *     site page EL0 execute-never in the leaf PTE (UXN) and emulates the
- *     instruction from an instruction abort, so the code bytes themselves
- *     are never modified and no page is ever private-dirty;
+ *     consistent data view;  the second mode instead makes the site page
+ *     EL0 execute-never in the leaf PTE (UXN) and emulates the instruction
+ *     from an instruction abort, so the code bytes themselves are never
+ *     modified and no page is ever private-dirty;  the third mode leaves
+ *     the site instruction and the instruction-fetch path completely alone,
+ *     clears only EL0 data permission (AP[1]) on the target page, and
+ *     emulates the resulting data abort.  It additionally bridges the
+ *     immediate LDXR/load/STXR pattern so an ordinary local exclusive
+ *     monitor sequence still observes a successful store, matching native
+ *     execution for the one side effect a synchronous read trap has;
  *   - the trap honours an optional business-caller window (return address
  *     PC range).  A plain call of the same site routine from unrelated code
  *     is emulated with the original bytes, i.e. it returns exactly what the
@@ -29,7 +35,7 @@
 #include "urov_x_abi.h"
 
 #define UROV_Y_NAME "urov-y"
-#define UROV_Y_ABI_VERSION 5U
+#define UROV_Y_ABI_VERSION 6U
 #define UROV_Y_PAGE 4096U
 #define UROV_Y_FAKE_MAX 32U
 #define UROV_Y_MAX_SITES 4U
@@ -43,9 +49,18 @@
  * emulates the instruction, and the page keeps one pristine data view (clean,
  * file-backed, no COW).  PAGE_UXN requires the site instruction to sit in a
  * page whose executed instruction stream is limited to the site load plus
- * RET/BR/BL/NOP/BTI. */
+ * RET/BR/BL/NOP/BTI.
+ *
+ * PAGE_AP touches neither the code page nor instruction fetch.  It clears
+ * EL0 data permission (AP[1]) on the *target* page in the leaf PTE only, so
+ * every EL0 data read of that page takes a permission abort while fetch of
+ * the same or any other page stays native.  The data abort is emulated with
+ * the same fake/caller-window rules; a directly adjacent LDXR/STXR pair is
+ * completed by the handler so the local exclusive monitor sequence that
+ * noticed the older data-page trap no longer reports a failed store. */
 #define UROV_Y_MODE_SITE_BRK 1U
 #define UROV_Y_MODE_PAGE_UXN 2U
+#define UROV_Y_MODE_PAGE_AP 3U
 
 enum urov_y_op {
     UROV_Y_QUERY = 1,

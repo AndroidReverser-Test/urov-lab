@@ -1,25 +1,19 @@
 #!/usr/bin/env python3
-"""urov-y elimination matrix: the delivered keyless detectors must stay negative.
+"""UROV-Y device matrix, including keyless instruction-fetch detection.
 
 Runs on one device; root only loads/unloads modules and collects kernel truth:
 
-  1. app without the module                   -> y-clean
-  2. urov-x control, same app/detector core   -> observe-active must MATCH
-  3. urov-y loaded, no session                -> y-clean (idle module)
-  4. urov-y active cycles, BRK site mode      -> y-active: A and B must be
-                                                 NO_MATCH, the registered
-                                                 business call must see the fake,
-                                                 and the code-page probe must
-                                                 fire (differs=1, COW page)
-  5. urov-y active cycles, page-trap mode     -> z-active: same detector
-                                                 results, but the code-page
-                                                 probe must be clean
-                                                 (differs=0, private_dirty=0)
-  6. unload while a BRK session is live       -> site restored in the running app
-  7. unload while a page-trap session is live -> same, page stays clean
-  8. final clean run                          -> y-clean
+  - No module, idle and post-unload: clean canary.
+  - UROV-X: the older data-read detectors match on an active raw-XOM page.
+  - UROV-Y BRK: the site word changes, but the canary executes natively.
+  - UROV-Y PAGE_UXN: the site word is unchanged and canary fetches trap.
+  - UROV-Y PAGE_AP: site word and canary are native; a data read is trapped,
+    and the adjacent LDXR/STXR bridge keeps the exclusive probe negative.
+  - All UROV-Y modes: the business reader receives the fake value.
+  - A separate UID sees a clean canary while the owner's PAGE_UXN is live.
+  - The owner sees a clean canary after deactivation or active-session unload.
 
-The detector core (native/urov_observe.c, native/urov_detect.c) is unmodified.
+Build the two APKs with apps/urov-detect/build.ps1 (second time with -Observer).
 """
 import argparse
 from datetime import datetime, timedelta, timezone
@@ -35,6 +29,7 @@ from pathlib import Path
 
 LAB = Path(__file__).resolve().parents[1]
 PACKAGE = "com.example.urovdetect"
+OBSERVER = "com.example.urovobserver"
 
 KV = re.compile(r"(\w+)=([^ ]+)")
 
@@ -62,6 +57,7 @@ def main():
               "cycles": args.cycles, "runs": [], "passed": False}
     loaded = None
     safe_cleanup = False
+    staged = None
     before = ""
 
     def redact(text):
@@ -90,14 +86,30 @@ def main():
         return shell("logcat", "-d", f"--pid={pid}", "-v", "threadtime", "-s",
                      "urovdetect:I", "AndroidRuntime:E", "libc:F", "DEBUG:F")
 
-    def start_app(mode, key):
-        shell("am", "force-stop", PACKAGE)
-        argv = ["am", "start", "-W", "-n", f"{PACKAGE}/com.example.urovdetect.MainActivity",
+    def start_app(mode, key, package=PACKAGE):
+        activity = "MainActivity" if package == PACKAGE else "ObserverActivity"
+        shell("am", "force-stop", package)
+        argv = ["am", "start", "-W", "-n", f"{package}/com.example.urovdetect.{activity}",
                 "--es", "mode", mode, "--ei", "repeats", str(args.repeats)]
         if key:
             argv += ["--es", "key", key]
         shell(*argv)
-        return shell("pidof", PACKAGE).split()[0]
+        return shell("pidof", package).split()[0]
+
+    def app_uid(logs):
+        if not re.search(r"CapEff:\s*0{16}\b", logs):
+            raise RuntimeError("CapEff is not zero")
+        if not re.search(r"Seccomp:\s*2\b", logs):
+            raise RuntimeError("Seccomp is not 2")
+        if "selinux=u:r:untrusted_app:" not in logs:
+            raise RuntimeError("not untrusted_app")
+        match = re.search(r"CONTEXT pid=\d+ uid=(\d+)", logs)
+        if not match or int(match[1]) < 10000:
+            raise RuntimeError("missing ordinary app UID")
+        return int(match[1])
+
+    def execution_cases(logs):
+        return [kv(line) for line in re.findall(r"ELIM_EXEC [^\n]+", logs)]
 
     def collect(pid, label, mode, wait_for=None):
         until = time.monotonic() + 120
@@ -114,34 +126,30 @@ def main():
             time.sleep(0.25)
         raise RuntimeError(f"{label}: timed out")
 
-    def run_app(label, mode, key=None):
-        pid = start_app(mode, key)
+    def run_app(label, mode, key=None, package=PACKAGE):
+        pid = start_app(mode, key, package)
         logs = collect(pid, label, mode)
         found = re.search(rf"DETECT_RESULT (PASS|FAIL) mode={re.escape(mode)}\b[^\n]*", logs)
         if not found:
             raise RuntimeError(f"{label}: no DETECT_RESULT")
-        if not re.search(r"CapEff:\s*0{16}\b", logs):
-            raise RuntimeError(f"{label}: CapEff is not zero")
-        if not re.search(r"Seccomp:\s*2\b", logs):
-            raise RuntimeError(f"{label}: Seccomp is not 2")
-        if "selinux=u:r:untrusted_app:" not in logs:
-            raise RuntimeError(f"{label}: not untrusted_app")
         cases = [kv(line) for line in re.findall(r"ELIM_CASE [^\n]+", logs)]
         run = {"label": label, "mode": mode, "pid": pid, "result": found[0],
                "app_pass": found[1] == "PASS", "cases": cases,
+               "execution": execution_cases(logs),
+               "execution_state": re.findall(r"ELIM_EXEC_STATE [^\n]+", logs),
                "features": re.findall(r"ELIM_FEATURE [^\n]+", logs),
                "business": re.findall(r"ELIM_BUSINESS [^\n]+", logs),
                "residuals": re.findall(r"ELIM_RESIDUAL [^\n]+", logs),
                "timing": re.findall(r"ELIM_TIMING [^\n]+", logs),
                "log": f"{label}-{pid}.log",
-               "uid": int(re.search(r"CONTEXT pid=\d+ uid=(\d+)", logs)[1])}
+               "uid": app_uid(logs)}
         report["runs"].append(run)
         print(f"{label}: {found[0]}", flush=True)
         for line in re.findall(r"ELIM_CASE [^\n]+", logs):
             print("  " + line, flush=True)
         for line in run["features"] + run["residuals"] + run["timing"]:
             print("  " + line, flush=True)
-        if found[1] != "PASS":
+        if found[1] != "PASS" or (mode.startswith(("y-", "z-", "w-")) and not run["execution"]):
             raise RuntimeError(f"{label}: app assertions failed")
         return run, logs
 
@@ -159,20 +167,25 @@ def main():
         save("kernel-before.log", before)
         artifacts = {"y_kpm": LAB / "out/urov-y.kpm",
                      "x_kpm": LAB / "out/urov-x.kpm",
-                     "apk": LAB / "apps/urov-detect/out/urovdetect.apk"}
+                     "apk": LAB / "apps/urov-detect/out/urovdetect.apk",
+                     "observer_apk": LAB / "apps/urov-detect/out/urovobserver.apk"}
         report["artifacts"] = {k: {"path": str(v),
                                    "sha256": hashlib.sha256(v.read_bytes()).hexdigest()}
                                for k, v in artifacts.items()}
         adb(["install", "--no-incremental", "-r", str(artifacts["apk"])], timeout=180)
-        adb(["push", str(artifacts["y_kpm"]), "/data/local/tmp/urov-y.kpm"])
-        adb(["push", str(artifacts["x_kpm"]), "/data/local/tmp/urov-x.kpm"])
+        adb(["install", "--no-incremental", "-r", str(artifacts["observer_apk"])], timeout=180)
+        remote = f"/data/local/tmp/urov-eliminate-{stamp}"
+        shell("mkdir", remote)
+        staged = [f"{remote}/urov-{variant}.kpm" for variant in ("x", "y")]
+        for kind, path in zip(("x_kpm", "y_kpm"), staged):
+            adb(["push", str(artifacts[kind]), path])
 
         run_app("01-no-module", "y-clean")
 
         # Positive control: the same detector core and the same fixture page do
         # fire on urov-x, so a negative urov-y result cannot be blamed on a
         # broken detector.
-        kp("kpm", "load", "/data/local/tmp/urov-x.kpm", f"key={control_key}")
+        kp("kpm", "load", staged[0], f"key={control_key}")
         loaded = "urov-x"
         report["control_status"] = kp("kpm", "ctl0", "urov-x", "status")
         if "hooks=0x1f" not in report["control_status"]:
@@ -196,7 +209,7 @@ def main():
         kp("kpm", "unload", "urov-x")
         loaded = None
 
-        kp("kpm", "load", "/data/local/tmp/urov-y.kpm", f"key={module_key}")
+        kp("kpm", "load", staged[1], f"key={module_key}")
         loaded = "urov-y"
         report["loaded_status"] = kp("kpm", "ctl0", "urov-y", "status")
         if "hooks=0x7f" not in report["loaded_status"]:
@@ -243,9 +256,37 @@ def main():
                         fields.get("anonymous_kb") != fields.get("base_anonymous_kb")):
                     raise RuntimeError("page-mode page accounting changed")
 
+        for cycle in range(args.cycles):
+            run, _ = run_app(f"06-ap-{cycle + 1}", "w-active", key=module_key)
+            if not run["cases"]:
+                raise RuntimeError("w-active produced no observation cases")
+            for case in run["cases"]:
+                if case["name"].startswith("active") and (
+                        int(case["exclusive_match"]) != 0 or int(case["reader_match"]) != 0):
+                    raise RuntimeError(f"detector positive on {case['name']}")
+            if "state=inactive" not in kp("kpm", "ctl0", "urov-y", "status"):
+                raise RuntimeError("AP fixture leaked a session")
+            # The 2026-11-05 execution canary is the feature this mode removes:
+            # the site page is not execute-never, so every canary trial must
+            # execute natively and leave the exclusive monitor alone.
+            if any(int(e["expected"]) != 0 or int(e["match"]) != 0
+                   for e in run["execution"]):
+                raise RuntimeError("AP mode still traps instruction fetch")
+            active = [r for r in run["residuals"] if "mode=ap" in r and "site_live_word" in r]
+            if not active or any("differs=0" not in r for r in active):
+                raise RuntimeError("AP-mode site word differs from the file")
+            if any("site_cow_private=0" not in r for r in active):
+                raise RuntimeError("AP-mode site page is private")
+            for r in active:
+                fields = kv(r)
+                if (fields.get("private_dirty_kb") != fields.get("base_dirty_kb") or
+                        fields.get("anonymous_kb") != fields.get("base_anonymous_kb")):
+                    raise RuntimeError("AP-mode page accounting changed")
+
         # Unload while a session is live: the module must restore the site in
         # the running app, which keeps executing the same reader routine.
-        for hold_mode, label in (("y-hold", "06-hold"), ("z-hold", "07-hold-page")):
+        for hold_mode, label in (("y-hold", "07-hold"), ("z-hold", "08-hold-page"),
+                                 ("w-hold", "09-hold-ap")):
             pid = start_app(hold_mode, module_key)
             hold_logs = collect(pid, label, hold_mode, wait_for="ELIM_HOLD_READY")
             if "ELIM_HOLD_READY" not in hold_logs:
@@ -254,6 +295,15 @@ def main():
             report[f"{label}_status"] = status
             if "state=active" not in status:
                 raise RuntimeError(f"{label} session is not active")
+            uid = app_uid(hold_logs)
+            if hold_mode == "z-hold":
+                observer, _ = run_app("08-other-uid", "z-observer", package=OBSERVER)
+                if observer["uid"] == uid:
+                    raise RuntimeError("observer has the owner's UID")
+                status = kp("kpm", "ctl0", "urov-y", "status")
+                report["other_uid_owner_status"] = status
+                if "state=active" not in status:
+                    raise RuntimeError("owner session ended during observation")
             report[f"{label}_unload"] = kp("kpm", "unload", "urov-y", check=False)
             if kp("kpm", "list").strip():
                 raise RuntimeError("unload with a live session did not remove the module")
@@ -269,22 +319,22 @@ def main():
             if not shell("pidof", PACKAGE, check=False):
                 raise RuntimeError("app died during the unload")
             report["runs"].append({"label": f"{label}-after-unload", "mode": hold_mode,
-                                   "pid": pid, "result": result[0], "restored": restored,
+                                   "pid": pid, "uid": uid, "result": result[0],
+                                   "execution": execution_cases(hold_logs), "restored": restored,
                                    "log": f"{label}-after-unload-{pid}.log"})
             print(f"{label}-after-unload: {result[0]}", flush=True)
             for line in restored:
                 print("  " + line, flush=True)
-            if hold_mode == "z-hold":
+            if hold_mode in ("z-hold", "w-hold"):
                 fields = kv(restored[0])
                 if fields.get("private_dirty_kb") != fields.get("base_dirty_kb") or \
                         fields.get("anonymous_kb") != fields.get("base_anonymous_kb"):
                     raise RuntimeError("page-mode site page changed after unload")
-            kp("kpm", "load", "/data/local/tmp/urov-y.kpm", f"key={module_key}")
-            loaded = "urov-y"
+            if hold_mode in ("y-hold", "z-hold"):
+                kp("kpm", "load", staged[1], f"key={module_key}")
+                loaded = "urov-y"
 
-        run_app("08-final-clean", "y-clean")
-        kp("kpm", "unload", "urov-y")
-        loaded = None
+        run_app("10-final-clean", "y-clean")
         report["passed"] = True
     except Exception as exc:
         report["error"] = redact(str(exc))
@@ -297,10 +347,12 @@ def main():
                 report["cleanup_error"] = redact(str(exc))
                 report["passed"] = False
         if safe_cleanup:
-            for _ in range(5):
-                shell("am", "force-stop", PACKAGE, check=False)
-                time.sleep(0.2)
             try:
+                for package in (PACKAGE, OBSERVER):
+                    shell("am", "force-stop", package)
+                if staged:
+                    shell("rm", "-f", *staged)
+                    shell("rmdir", remote)
                 report["final_modules"] = kp("kpm", "list")
                 after = kp("su", "-c", "dmesg")
                 save("kernel-after.log", after)
@@ -322,6 +374,10 @@ def main():
                   "accepted_triplets": 0, "failed_target_stores": 0,
                   "control_failed_stores": 0, "reader_matches": 0, "reader_clean": 0,
                   "reader_unknown": 0, "feature_business_reads": 0}
+        execution_fields = ("n", "match", "clean", "unknown", "accepted", "failed",
+                            "control_failed")
+        execution = {scope: dict.fromkeys(execution_fields, 0)
+                     for scope in ("active_page", "controls")}
         for run in report["runs"]:
             for case in run.get("cases", []):
                 totals["elim_cases"] += 1
@@ -338,7 +394,12 @@ def main():
                     totals[dest] += int(case[source])
             totals["feature_business_reads"] += sum(
                 1 for f in run.get("features", []) if "business_reader=1" in f)
+            for case in run.get("execution", []):
+                scope = "active_page" if case["expected"] == "1" else "controls"
+                for field in execution_fields:
+                    execution[scope][field] += int(case[field])
         report["totals"] = totals
+        report["execution_totals"] = execution
         save("summary.json", json.dumps(report, ensure_ascii=False, indent=2))
         print(f"RESULT {'PASS' if report['passed'] else 'FAIL'} {output}", flush=True)
     return 0 if report["passed"] else 1

@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * UROV-Y resident backend: BRK-bound reader sites, no data-page permission
- * change.
+ * UROV-Y resident backend: three ways to bind the overlay to a reader site.
  *
  * The two detector classes that remained against UROV-X (see
  * KEYLESS_DETECTION_RESULTS.md) are:
@@ -12,23 +11,20 @@
  *   B. the registered reader PC observes different bytes than a direct load
  *      of the same immutable RX address.
  *
- * This backend removes the data abort entirely: vm_page_prot, the VMA and the
- * leaf PTE of the target page are left untouched, so every load of it is a
- * native EL0 access with a single consistent data view (A is structurally
- * impossible and a file-vs-memory scan stays clean).  The overlay is instead
- * attached to the reader instruction: the 4-byte site instruction is replaced
- * by BRK for the lifetime of the session (private COW page, never the file
- * page) and emulated by the BRK trap.  The trap additionally honours an
- * optional business-caller PC window; a call of the same site routine from any
- * other return address is emulated with the original bytes, so an independent
- * caller observes exactly the mapping contents (B no longer reports a
- * PC-dependent content difference for foreign callers).
+ * SITE_BRK removes the data abort entirely by replacing the 4-byte site
+ * instruction with BRK on a private COW page (A impossible, B handled by the
+ * caller window).  PAGE_UXN removes the code-page feature by making the site
+ * page EL0 execute-never and emulating the fetch.  PAGE_AP instead clears
+ * only AP[1] on the target page: fetch (including a BTI/RET canary) stays
+ * native, while every data read is emulated with the same caller-window rules.
+ * Because a synchronous abort still returns through ERET, PAGE_AP also
+ * bridges the immediately adjacent LDXR/LDAXR; load; STXR/STLXR shape and
+ * performs the store/status itself.
  *
- * Honest residuals are documented in ELIMINATION_DESIGN.md: the BRK mode makes
- * the site's code page private-dirty and its instruction differs from the file
- * while the session is live; the PAGE_UXN mode removes exactly that feature by
- * never touching the code bytes, at the cost of requiring a self-contained
- * site page and one instruction abort per site call.
+ * Honest residuals are documented in ELIMINATION_DESIGN.md: BRK dirties the
+ * site code page; PAGE_UXN makes the site page unexecutable at EL0; PAGE_AP
+ * keeps a data abort, so the monitor bridge only covers the adjacent shape
+ * and the read still costs one synchronous exception.
  */
 #include <compiler.h>
 #include <kallsyms.h>
@@ -98,6 +94,10 @@ static inline void uy_flush_icache_all(void)
 /* EL0 instruction abort taken to EL1: EC 0x20, and the FSC field of a
  * permission fault is 0b0011LL (0x0c..0x0f). */
 #define UY_EC_IABT_LOW 0x20UL
+/* EL0 data abort taken to EL1: EC 0x24.  ESR.WnR distinguishes a read from a
+ * write; only read permission faults are ours. */
+#define UY_EC_DABT_LOW 0x24UL
+#define UY_ESR_WNR (1UL << 6)
 #define UY_FSC_PERM_MASK 0x3cUL
 #define UY_FSC_PERM 0x0cUL
 
@@ -166,6 +166,7 @@ struct uy_session {
     uint64_t hits;
     uint64_t replays;
     uint64_t failures;
+    uint64_t llsc;
     uint64_t caller_start[UROV_Y_MAX_CALLERS];
     uint64_t caller_end[UROV_Y_MAX_CALLERS];
     uint32_t overlay_offset;
@@ -174,6 +175,8 @@ struct uy_session {
     uint32_t caller_count;
     uint32_t mode;
     uint32_t fake_seq;
+    uint32_t ap_armed;
+    uint32_t pad;
     struct uy_site sites[UROV_Y_MAX_SITES];
     uint8_t original[UROV_Y_PAGE];
 } __attribute__((aligned(64)));
@@ -299,6 +302,11 @@ static int overlay_live(void)
 static int page_mode_live(void)
 {
     return overlay_live() && g_sess.mode == UROV_Y_MODE_PAGE_UXN;
+}
+
+static int ap_mode_live(void)
+{
+    return overlay_live() && g_sess.mode == UROV_Y_MODE_PAGE_AP;
 }
 
 static int session_owned(void)
@@ -474,10 +482,10 @@ static void site_set_prot(void *mm, uint64_t page, int writable)
 
 /* ------------------------------------------------------ page (UXN) arming */
 
-/* A present, user, non-contiguous 4K leaf PTE. A contiguous run shares one
+/* A present, non-contiguous 4K leaf PTE. A contiguous run shares one
  * permission check, so changing a single entry would be wrong; such pages are
  * rejected instead of silently breaking the neighbouring entries. */
-static int page_pte_present(void *mm, uint64_t page, uint64_t **slot, uint64_t *out)
+static int page_pte_leaf(void *mm, uint64_t page, uint64_t **slot, uint64_t *out)
 {
     uint64_t *ptep = pte_of(mm, page);
     uint64_t pte;
@@ -486,11 +494,19 @@ static int page_pte_present(void *mm, uint64_t page, uint64_t **slot, uint64_t *
     pte = __atomic_load_n(ptep, __ATOMIC_ACQUIRE);
     if ((pte & (PTE_VALID | PTE_TYPE_MASK)) != (PTE_VALID | PTE_TYPE_PAGE))
         return -EAGAIN;
-    if (!(pte & PTE_USER)) return -EOPNOTSUPP;
     if (pte & (PTE_CONT | PTE_SPECIAL | PTE_DEVMAP | PTE_PROT_NONE))
         return -EOPNOTSUPP;
     *slot = ptep;
     *out = pte;
+    return 0;
+}
+
+/* A present, user leaf PTE, the only kind a site page may be. */
+static int page_pte_present(void *mm, uint64_t page, uint64_t **slot, uint64_t *out)
+{
+    int ret = page_pte_leaf(mm, page, slot, out);
+    if (ret) return ret;
+    if (!(*out & PTE_USER)) return -EOPNOTSUPP;
     return 0;
 }
 
@@ -514,6 +530,57 @@ static int page_set_uxn(void *mm, uint64_t page, int set)
     }
     __atomic_store_n(ptep, pte, __ATOMIC_RELEASE);
     return 1;
+}
+
+/* Toggle EL0 data permission (AP[1]) on the target page.  With AP[2] (read-
+ * only) held, clearing AP[1] makes every EL0 data read of this page take a
+ * permission abort, while EL0 instruction fetch is governed by UXN alone and
+ * stays native.  The caller holds the mmap write lock, or is completing the
+ * fault that installed this PTE. */
+static int page_set_ap(void *mm, uint64_t page, int set)
+{
+    uint64_t *ptep;
+    uint64_t pte;
+    int ret = page_pte_leaf(mm, page, &ptep, &pte);
+
+    if (ret) return ret;
+    if (set) {
+        if (pte & PTE_USER) return 0;
+        pte |= PTE_USER;
+    } else {
+        if (!(pte & PTE_USER)) return 0;
+        pte &= ~(uint64_t)PTE_USER;
+    }
+    __atomic_store_n(ptep, pte, __ATOMIC_RELEASE);
+    return 1;
+}
+
+/* Registration already faulted the target page in and copied it, so arming
+ * only needs to flip AP[1] under the mmap write lock. */
+static long ap_arm_target(struct uy_session *s, void *mm)
+{
+    int ret;
+
+    f_mmap_write_lock(mm);
+    ret = page_set_ap(mm, s->base, 0);
+    if (ret > 0) flush_tlb_all();
+    f_mmap_write_unlock(mm);
+    if (ret < 0) return ret;
+    s->ap_armed = 1;
+    return 0;
+}
+
+static void ap_disarm_target(struct uy_session *s, void *mm)
+{
+    int ret;
+
+    if (!s->ap_armed) return;
+    s->ap_armed = 0;
+    if (!mm || !mm_has_live_user(mm)) return;
+    f_mmap_write_lock(mm);
+    ret = page_set_ap(mm, s->base, 1);
+    if (ret > 0) flush_tlb_all();
+    f_mmap_write_unlock(mm);
 }
 
 /* Fault the page in if needed, then install the trap bit. No byte of the code
@@ -605,6 +672,16 @@ static long site_arm(struct uy_site *s, void *mm, uint64_t pc, int writable)
     s->trap = g_trap_insn;
     s->armed = 0;
 
+    /* PAGE_AP arms the target page once; the site instruction and its page
+     * are not touched at all.  Keep the per-site bookkeeping so status and
+     * the clone window report the same shape as the other modes. */
+    if (g_sess.mode == UROV_Y_MODE_PAGE_AP) {
+        s->trap = 0;
+        s->armed = 1;
+        __atomic_fetch_add(&g_armed, 1, __ATOMIC_ACQ_REL);
+        return 0;
+    }
+
     if (g_sess.mode == UROV_Y_MODE_PAGE_UXN) return site_arm_page(s, mm);
 
     if (!trap_install(pc, insn)) return -ENOSPC;
@@ -634,6 +711,12 @@ static void site_disarm(struct uy_site *s, void *mm)
     int have_user_va;
 
     if (!s->armed) return;
+    if (g_sess.mode == UROV_Y_MODE_PAGE_AP) {
+        s->armed = 0;
+        if (__atomic_load_n(&g_armed, __ATOMIC_ACQUIRE) > 0)
+            __atomic_fetch_sub(&g_armed, 1, __ATOMIC_ACQ_REL);
+        return;
+    }
     if (g_sess.mode == UROV_Y_MODE_PAGE_UXN) {
         site_disarm_page(s, mm);
         return;
@@ -727,6 +810,9 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
         load.address >= UY_USER_LIMIT ||
         (load.writeback && (load.wb < UROV_Y_PAGE || load.wb >= UY_USER_LIMIT)))
         return -3;
+    if (overlay_live() && load.address >= g_sess.base &&
+        load.address - g_sess.base > UROV_Y_PAGE - total)
+        return -3;
 
     if (overlay_live() && mm_of_task(current) == g_sess.mm &&
         !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) &&
@@ -749,7 +835,16 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
         }
     }
     if (!use_fake) {
-        if (f_copy_in(bytes, (const void *)load.address, (unsigned long)total)) {
+        if (g_sess.mode == UROV_Y_MODE_PAGE_AP && overlay_live() &&
+            load.address >= g_sess.base &&
+            load.address - g_sess.base <= UROV_Y_PAGE - total) {
+            /* The target page is the only page AP[1] removed; read its
+             * immutable registration snapshot instead of asking uaccess to
+             * walk the very permission we cleared. */
+            uint64_t off = load.address - g_sess.base;
+            unsigned i;
+            for (i = 0; i < (unsigned)total; ++i) bytes[i] = g_sess.original[off + i];
+        } else if (f_copy_in(bytes, (const void *)load.address, (unsigned long)total)) {
             /* The site instruction would have taken a normal data abort here
              * (unmapped or unreadable address). Forward that as SIGSEGV; it is
              * not an overlay failure. */
@@ -766,6 +861,103 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
         __atomic_fetch_add(&g_sess.replays, 1, __ATOMIC_RELAXED);
     *fake = use_fake;
     return 0;
+}
+
+/* ------------------------------------------------------- exclusive bridge */
+
+/* A synchronous permission abort returns through ERET, and ERET returns the
+ * local exclusive monitor to Open Access.  A native load would not.  The one
+ * shape that a same-thread detector can use without touching the protected
+ * page with an exclusive instruction is an immediate
+ *
+ *     ldaxr/ldxr  Xt, [Xn]
+ *     ldr/ldrb    ..., [target]     <- our permission abort
+ *     stlxr/stxr  Ws, Xt, [Xn]
+ *
+ * If that exact neighbour pair is present, the handler performs the store and
+ * retires the STXR itself, so the caller observes the success it would have
+ * observed without the trap.  This is deliberately a neighbour-pair bridge,
+ * not a general LL/SC emulator: a detector that moves the store across a
+ * branch is outside this contract and remains a documented residual. */
+struct uy_llsc {
+    int valid;
+    int wide;
+    unsigned status;
+    unsigned base_reg;
+    unsigned value_reg;
+    uint64_t address;
+};
+
+static int uy_is_ldxr(uint32_t insn, unsigned *rn, unsigned *rt)
+{
+    uint32_t base = insn & 0xfffffc00U;
+
+    if (base != 0xc85f7c00U && base != 0x885f7c00U &&
+        base != 0xc85ffc00U && base != 0x885ffc00U)
+        return 0;
+    *rn = (insn >> 5) & 31U;
+    *rt = insn & 31U;
+    return 1;
+}
+
+static int uy_is_stxr(uint32_t insn, unsigned *rn, unsigned *rt, unsigned *status, int *wide)
+{
+    uint32_t base = insn & 0xffe0fc00U;
+
+    if (base != 0x88007c00U && base != 0xc8007c00U &&
+        base != 0x8800fc00U && base != 0xc800fc00U)
+        return 0;
+    *rn = (insn >> 5) & 31U;
+    *rt = insn & 31U;
+    *status = (insn >> 16) & 31U;
+    *wide = (base & 0x40000000U) != 0;
+    return 1;
+}
+
+static void uy_llsc_prepare(struct pt_regs *regs, uint64_t pc, struct uy_llsc *out)
+{
+    uint32_t prev, next;
+    unsigned lrn, lrt, srn, srt, srs;
+    int wide;
+
+    memset(out, 0, sizeof(*out));
+    if (pc < 4U || f_copy_in(&prev, (const void *)(pc - 4U), 4U) ||
+        f_copy_in(&next, (const void *)(pc + 4U), 4U))
+        return;
+    if (!uy_is_ldxr(prev, &lrn, &lrt) || !uy_is_stxr(next, &srn, &srt, &srs, &wide))
+        return;
+    if (lrn != srn || lrt != srt) return;
+    out->address = lrn == 31U ? regs->sp : regs->regs[lrn];
+    out->base_reg = lrn;
+    out->value_reg = lrt;
+    out->status = srs;
+    out->wide = wide;
+    if (out->address < UROV_Y_PAGE || out->address >= UY_USER_LIMIT - 8U) return;
+    out->valid = 1;
+}
+
+/* Run after the faulting load has been committed to `regs`: if that load
+ * overwrote the LDXR value register, the native STXR would store the new
+ * value, and so must we. */
+static void uy_llsc_commit(struct pt_regs *regs, uint64_t pc, const struct uy_llsc *s)
+{
+    uint64_t value, base;
+
+    if (!s->valid) return;
+    /* If the emulated load overwrote the STXR base register, native execution
+     * would use a different address; do not invent a success at the old one. */
+    base = s->base_reg == 31U ? regs->sp : regs->regs[s->base_reg];
+    if (base != s->address) return;
+    value = s->value_reg == 31U ? 0 : regs->regs[s->value_reg];
+    if (s->wide) {
+        if (f_copy_out((void *)(uintptr_t)s->address, &value, 8U)) return;
+    } else {
+        uint32_t value32 = (uint32_t)value;
+        if (f_copy_out((void *)(uintptr_t)s->address, &value32, 4U)) return;
+    }
+    if (s->status != 31U) regs->regs[s->status] = 0;
+    regs->pc = pc + 8U;
+    __atomic_fetch_add(&g_sess.llsc, 1, __ATOMIC_RELAXED);
 }
 
 /* The BRK trap. `unused` is do_debug_exception's addr_if_watchpoint, `esr` is
@@ -902,19 +1094,14 @@ static void page_degrade(uint64_t pc)
 }
 
 /* EL0 instruction abort (EC 0x20), permission fault at the 4K leaf. */
-static void uy_page_before(hook_fargs4_t *args, void *udata)
+static void uy_page_abort(uint64_t far, uint64_t esr, struct pt_regs *regs,
+                          hook_fargs4_t *args)
 {
-    uint64_t far = args->arg0;
-    uint64_t esr = args->arg1;
-    struct pt_regs *regs = (struct pt_regs *)args->arg2;
     struct uy_site *s;
     uint64_t pc, bad = 0;
     uint32_t insn;
     int fake = 0, result;
 
-    (void)udata;
-    if (!g_page_hooked || !page_mode_live()) return;
-    if (!regs || !user_mode(regs) || compat_user_mode(regs)) return;
     if (((esr >> 26) & 0x3fUL) != UY_EC_IABT_LOW) return;
     if ((esr & UY_FSC_PERM_MASK) != UY_FSC_PERM) return;
     if (mm_of_task(current) != g_sess.mm) return;
@@ -960,6 +1147,70 @@ static void uy_page_before(hook_fargs4_t *args, void *udata)
     __atomic_fetch_sub(&g_handlers, 1, __ATOMIC_RELEASE);
 }
 
+/* EL0 data abort (EC 0x24) on the AP[1]-protected target page.  Every load of
+ * that page arrives here; the caller window still selects fake versus the
+ * registration snapshot, and the immediate LDXR/STXR bridge below hides the
+ * one side effect the older data-page detector observed. */
+static void uy_ap_abort(uint64_t far, uint64_t esr, struct pt_regs *regs,
+                        hook_fargs4_t *args)
+{
+    uint64_t pc = regs->pc, bad = 0;
+    struct uy_llsc ll;
+    uint32_t opcode;
+    int fake = 0, result;
+
+    (void)esr;
+    __atomic_fetch_add(&g_handlers, 1, __ATOMIC_ACQ_REL);
+    if (!ap_mode_live() || mm_of_task(current) != g_sess.mm ||
+        far < g_sess.base || far - g_sess.base >= UROV_Y_PAGE) {
+        __atomic_fetch_sub(&g_handlers, 1, __ATOMIC_RELEASE);
+        return;
+    }
+    if (f_copy_in(&opcode, (const void *)(uintptr_t)pc, 4U)) {
+        force_segv(far);
+    } else {
+        uy_llsc_prepare(regs, pc, &ll);
+        result = uy_emulate_load(regs, pc, opcode, &fake, &bad);
+        if (result == -5) {
+            /* The original load would have faulted; forward that. */
+            force_segv(bad);
+        } else if (result) {
+            session_count_failure(pc, result);
+            force_segv(far);
+        } else {
+            uy_llsc_commit(regs, pc, &ll);
+        }
+    }
+    args->ret = 0;
+    args->skip_origin = 1;
+    __atomic_fetch_sub(&g_handlers, 1, __ATOMIC_RELEASE);
+}
+
+/* Single do_mem_abort hook for the two page modes: UXN traps a fetch, AP[1]
+ * traps a data read.  Everything else falls through to the native handler. */
+static void uy_abort_before(hook_fargs4_t *args, void *udata)
+{
+    uint64_t far = args->arg0;
+    uint64_t esr = args->arg1;
+    struct pt_regs *regs = (struct pt_regs *)args->arg2;
+    unsigned ec;
+
+    (void)udata;
+    if (!g_page_hooked || !regs || !user_mode(regs) || compat_user_mode(regs)) return;
+    ec = (unsigned)((esr >> 26) & 0x3fUL);
+
+    if (ap_mode_live()) {
+        if (ec == UY_EC_DABT_LOW && !(esr & UY_ESR_WNR) &&
+            (esr & UY_FSC_PERM_MASK) == UY_FSC_PERM &&
+            mm_of_task(current) == g_sess.mm &&
+            far >= g_sess.base && far - g_sess.base < UROV_Y_PAGE)
+            uy_ap_abort(far, esr, regs, args);
+        return;
+    }
+    if (!page_mode_live()) return;
+    uy_page_abort(far, esr, regs, args);
+}
+
 /* A fault-in just (re)created the site page PTE from the VMA protection, which
  * is executable. Re-apply the execute-never bit so a page that was evicted or
  * dropped does not silently lose its trap. Covers the user fault path and
@@ -971,9 +1222,22 @@ static void uy_mm_fault_after(hook_fargs4_t *args, void *udata)
     int ret;
 
     (void)udata;
-    if (!g_mmf_hooked || !page_mode_live()) return;
+    if (!g_mmf_hooked) return;
     if (mm_of_task(current) != g_sess.mm) return;
     page = page_base(address);
+
+    if (ap_mode_live()) {
+        if (page != g_sess.base) return;
+        __atomic_fetch_add(&g_handlers, 1, __ATOMIC_ACQ_REL);
+        if (ap_mode_live() && mm_of_task(current) == g_sess.mm) {
+            ret = page_set_ap(g_sess.mm, page, 0);
+            if (ret > 0) flush_tlb_all();
+        }
+        __atomic_fetch_sub(&g_handlers, 1, __ATOMIC_RELEASE);
+        return;
+    }
+
+    if (!page_mode_live()) return;
     if (!site_by_page(page)) return;
     __atomic_fetch_add(&g_handlers, 1, __ATOMIC_ACQ_REL);
     if (page_mode_live() && mm_of_task(current) == g_sess.mm) {
@@ -1015,6 +1279,8 @@ static void release_session(void)
     if (mm) {
         for (i = 0; i < g_sess.site_count && i < UROV_Y_MAX_SITES; ++i)
             site_disarm(&g_sess.sites[i], mm);
+        if (g_sess.mode == UROV_Y_MODE_PAGE_AP)
+            ap_disarm_target(&g_sess, mm);
     }
     __atomic_store_n(&g_armed, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&g_suspend, 0, __ATOMIC_RELEASE);
@@ -1043,8 +1309,11 @@ static long do_register(struct urov_y_request *q)
     long ret;
 
     if (q->flags || q->caller_count > UROV_Y_MAX_CALLERS) return -EINVAL;
-    if (mode != UROV_Y_MODE_SITE_BRK && mode != UROV_Y_MODE_PAGE_UXN) return -EINVAL;
+    if (mode != UROV_Y_MODE_SITE_BRK && mode != UROV_Y_MODE_PAGE_UXN &&
+        mode != UROV_Y_MODE_PAGE_AP) return -EINVAL;
     if (mode == UROV_Y_MODE_PAGE_UXN && !g_page_hooked) return -EOPNOTSUPP;
+    if (mode == UROV_Y_MODE_PAGE_AP && (!g_page_hooked || !g_mmf_hooked))
+        return -EOPNOTSUPP;
     if (q->site_count == 0U || q->site_count > UROV_Y_MAX_SITES) return -EINVAL;
     if (q->address & (UROV_Y_PAGE - 1U)) return -EINVAL;
     if (q->address < UROV_Y_PAGE || q->address >= UY_USER_LIMIT) return -EINVAL;
@@ -1095,7 +1364,7 @@ static long do_register(struct urov_y_request *q)
     for (i = 0; !ret && i < q->site_count; ++i) {
         site_writable[i] = 0;
         ret = validate_site_vma(f_find_vma(mm, q->sites[i]), q->sites[i],
-                                mode == UROV_Y_MODE_PAGE_UXN, &site_writable[i]);
+                                mode != UROV_Y_MODE_SITE_BRK, &site_writable[i]);
     }
     if (!ret && f_copy_in(g_sess.original, (const void *)q->address, UROV_Y_PAGE))
         ret = -EFAULT;
@@ -1117,6 +1386,7 @@ static long do_register(struct urov_y_request *q)
     g_sess.site_count = q->site_count;
     g_sess.caller_count = q->caller_count;
     g_sess.mode = mode;
+    g_sess.ap_armed = 0;
     for (i = 0; i < q->site_count; ++i) {
         g_sess.sites[i].pc = q->sites[i];
         g_sess.sites[i].armed = 0;
@@ -1135,11 +1405,17 @@ static long do_register(struct urov_y_request *q)
     g_sess.hits = 0;
     g_sess.replays = 0;
     g_sess.failures = 0;
+    g_sess.llsc = 0;
     __atomic_store_n(&g_failure_logged, 0, __ATOMIC_RELAXED);
 
-    /* Arm every site before the session is published: a trap that arrives in
-     * between is emulated transparently because overlay_live() is still false. */
-    for (i = 0; i < q->site_count; ++i) {
+    /* Arm the AP[1] target first; the sites themselves are untouched in that
+     * mode.  For the other modes each site is armed first.  Registration is a
+     * cooperative transaction: the caller must not read the target from
+     * another thread until REGISTER returns, which is also the existing
+     * PAGE_UXN assumption. */
+    if (mode == UROV_Y_MODE_PAGE_AP)
+        ret = ap_arm_target(&g_sess, mm);
+    for (i = 0; !ret && i < q->site_count; ++i) {
         ret = site_arm(&g_sess.sites[i], mm, q->sites[i], site_writable[i]);
         if (g_verbose)
             pr_info("urov-y: arm[%u] pc=%llx ret=%ld\n", i,
@@ -1149,6 +1425,8 @@ static long do_register(struct urov_y_request *q)
     if (ret) {
         unsigned j;
         for (j = 0; j < i; ++j) site_disarm(&g_sess.sites[j], mm);
+        if (mode == UROV_Y_MODE_PAGE_AP && g_sess.ap_armed)
+            ap_disarm_target(&g_sess, mm);
         memset(&g_sess, 0, sizeof(g_sess));
         f_mmput(mm);
         return ret;
@@ -1334,8 +1612,12 @@ static void uy_clone_before(hook_fargs6_t *args, void *udata)
         !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) {
         unsigned i;
         __atomic_store_n(&g_suspend, 1, __ATOMIC_RELEASE);
-        for (i = 0; i < g_sess.site_count && i < UROV_Y_MAX_SITES; ++i)
-            site_disarm(&g_sess.sites[i], g_sess.mm);
+        if (g_sess.mode == UROV_Y_MODE_PAGE_AP) {
+            ap_disarm_target(&g_sess, g_sess.mm);
+        } else {
+            for (i = 0; i < g_sess.site_count && i < UROV_Y_MAX_SITES; ++i)
+                site_disarm(&g_sess.sites[i], g_sess.mm);
+        }
         args->local.data0 = 1;
     }
     ctrl_unlock();
@@ -1350,10 +1632,14 @@ static void uy_clone_after(hook_fargs6_t *args, void *udata)
     args->local.data0 = 0;
     if (!ctrl_lock_wait()) return;
     if (overlay_live() && __atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) {
-        for (i = 0; i < g_sess.site_count && i < UROV_Y_MAX_SITES; ++i) {
-            struct uy_site *s = &g_sess.sites[i];
-            if (s->armed) continue;
-            (void)site_arm(s, g_sess.mm, s->pc, (int)s->writable);
+        if (g_sess.mode == UROV_Y_MODE_PAGE_AP) {
+            (void)ap_arm_target(&g_sess, g_sess.mm);
+        } else {
+            for (i = 0; i < g_sess.site_count && i < UROV_Y_MAX_SITES; ++i) {
+                struct uy_site *s = &g_sess.sites[i];
+                if (s->armed) continue;
+                (void)site_arm(s, g_sess.mm, s->pc, (int)s->writable);
+            }
         }
         __atomic_store_n(&g_suspend, 0, __ATOMIC_RELEASE);
     }
@@ -1534,7 +1820,7 @@ long urov_y_backend_init(const char *args)
      * fault installer. Both are optional: without them the module still loads
      * and the BRK mode keeps working, only the page mode is refused. */
     if (f_do_mem_abort) {
-        ret = hook_wrap(f_do_mem_abort, 3, uy_page_before, 0, 0);
+        ret = hook_wrap(f_do_mem_abort, 3, uy_abort_before, 0, 0);
         g_page_hooked = ret ? 0 : 1;
         if (ret && g_verbose) pr_info("urov-y: hook do_mem_abort failed: %ld\n", ret);
     }
@@ -1600,7 +1886,7 @@ long urov_y_backend_exit(void)
         g_brk_hooked = 0;
     }
     if (g_page_hooked) {
-        hook_unwrap(f_do_mem_abort, uy_page_before, 0);
+        hook_unwrap(f_do_mem_abort, uy_abort_before, 0);
         g_page_hooked = 0;
     }
     if (g_mmf_hooked) {
@@ -1629,6 +1915,7 @@ void urov_y_status_get(struct uy_status *out)
     out->hits = __atomic_load_n(&g_sess.hits, __ATOMIC_RELAXED);
     out->replays = __atomic_load_n(&g_sess.replays, __ATOMIC_RELAXED);
     out->failures = __atomic_load_n(&g_sess.failures, __ATOMIC_RELAXED);
+    out->llsc = __atomic_load_n(&g_sess.llsc, __ATOMIC_RELAXED);
     out->active = overlay_live() ? 1U : 0U;
     out->sites = overlay_live() ? g_sess.site_count : 0U;
     out->armed = 0;

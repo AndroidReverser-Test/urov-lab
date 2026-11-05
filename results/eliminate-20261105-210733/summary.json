@@ -1,0 +1,1726 @@
+{
+  "host_time_utc8": "20261105-210733",
+  "serial": "25091FDF60063J",
+  "repeats": 30,
+  "cycles": 3,
+  "runs": [
+    {
+      "label": "01-no-module",
+      "mode": "y-clean",
+      "pid": "7615",
+      "result": "DETECT_RESULT PASS mode=y-clean worker_ms=350 ui_ticks=127 ui_max_gap_ms=26 native=PASS cases=3 assertions=98 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "idle_unregistered",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "unregistered",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "117822388",
+          "max_ns": "5143677"
+        }
+      ],
+      "execution_state": [],
+      "features": [],
+      "business": [],
+      "residuals": [],
+      "timing": [],
+      "log": "01-no-module-7615.log",
+      "uid": 10284
+    },
+    {
+      "label": "02-urov-x-control",
+      "mode": "observe-active",
+      "pid": "7740",
+      "result": "DETECT_RESULT PASS mode=observe-active worker_ms=2451 ui_ticks=332 ui_max_gap_ms=24 native=PASS cases=15 assertions=959 failures=0",
+      "app_pass": true,
+      "cases": [],
+      "execution": [],
+      "execution_state": [],
+      "features": [],
+      "business": [],
+      "residuals": [],
+      "timing": [],
+      "log": "02-urov-x-control-7740.log",
+      "uid": 10284
+    },
+    {
+      "label": "03-loaded-idle",
+      "mode": "y-clean",
+      "pid": "7854",
+      "result": "DETECT_RESULT PASS mode=y-clean worker_ms=351 ui_ticks=129 ui_max_gap_ms=23 native=PASS cases=3 assertions=98 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "idle_unregistered",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "unregistered",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "117432048",
+          "max_ns": "5407674"
+        }
+      ],
+      "execution_state": [],
+      "features": [],
+      "business": [],
+      "residuals": [],
+      "timing": [],
+      "log": "03-loaded-idle-7854.log",
+      "uid": 10284
+    },
+    {
+      "label": "04-active-1",
+      "mode": "y-active",
+      "pid": "7928",
+      "result": "DETECT_RESULT PASS mode=y-active worker_ms=1866 ui_ticks=276 ui_max_gap_ms=22 native=PASS cases=11 assertions=1240 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_page",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "29",
+          "exclusive_unknown": "1",
+          "accepted": "2816",
+          "failed": "1",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_outside_window",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0x0",
+          "file": "0x0"
+        },
+        {
+          "name": "active_after_set",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_equal_value",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "deactivated",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "baseline",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "112474652",
+          "max_ns": "3819173"
+        },
+        {
+          "name": "active_changed",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "112116372",
+          "max_ns": "3823689"
+        },
+        {
+          "name": "active_equal_value",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "112342936",
+          "max_ns": "3889445"
+        },
+        {
+          "name": "deactivated",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "112918413",
+          "max_ns": "3887776"
+        }
+      ],
+      "execution_state": [
+        "ELIM_EXEC_STATE unchanged=1 generation=1 hits=2 replays=361 failures=0"
+      ],
+      "features": [
+        "ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1"
+      ],
+      "business": [
+        "ELIM_BUSINESS ops=370560 errors=0 execution=original"
+      ],
+      "residuals": [
+        "ELIM_RESIDUAL mode=brk site_file_word=f9400000 site_live_word=d42a85a0 differs=1 site_cow_private=1 private_dirty_kb=4 anonymous_kb=4 base_dirty_kb=0 base_anonymous_kb=0",
+        "ELIM_RESIDUAL restored_site_file_word=f9400000 live_word=f9400000 equal=1 private_dirty_kb=4 anonymous_kb=4 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "timing": [
+        "ELIM_TIMING mode=brk site_call_ns=240"
+      ],
+      "log": "04-active-1-7928.log",
+      "uid": 10284
+    },
+    {
+      "label": "04-active-2",
+      "mode": "y-active",
+      "pid": "8031",
+      "result": "DETECT_RESULT PASS mode=y-active worker_ms=1890 ui_ticks=278 ui_max_gap_ms=22 native=PASS cases=11 assertions=1240 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_page",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_outside_window",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0x0",
+          "file": "0x0"
+        },
+        {
+          "name": "active_after_set",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_equal_value",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "deactivated",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "baseline",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "111693071",
+          "max_ns": "3795899"
+        },
+        {
+          "name": "active_changed",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "112234372",
+          "max_ns": "3875000"
+        },
+        {
+          "name": "active_equal_value",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "115380940",
+          "max_ns": "3931763"
+        },
+        {
+          "name": "deactivated",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "115394778",
+          "max_ns": "3974976"
+        }
+      ],
+      "execution_state": [
+        "ELIM_EXEC_STATE unchanged=1 generation=1 hits=2 replays=361 failures=0"
+      ],
+      "features": [
+        "ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1"
+      ],
+      "business": [
+        "ELIM_BUSINESS ops=371712 errors=0 execution=original"
+      ],
+      "residuals": [
+        "ELIM_RESIDUAL mode=brk site_file_word=f9400000 site_live_word=d42a85a0 differs=1 site_cow_private=1 private_dirty_kb=4 anonymous_kb=4 base_dirty_kb=0 base_anonymous_kb=0",
+        "ELIM_RESIDUAL restored_site_file_word=f9400000 live_word=f9400000 equal=1 private_dirty_kb=4 anonymous_kb=4 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "timing": [
+        "ELIM_TIMING mode=brk site_call_ns=231"
+      ],
+      "log": "04-active-2-8031.log",
+      "uid": 10284
+    },
+    {
+      "label": "04-active-3",
+      "mode": "y-active",
+      "pid": "8124",
+      "result": "DETECT_RESULT PASS mode=y-active worker_ms=1951 ui_ticks=284 ui_max_gap_ms=24 native=PASS cases=11 assertions=1240 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_page",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_outside_window",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0x0",
+          "file": "0x0"
+        },
+        {
+          "name": "active_after_set",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_equal_value",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "deactivated",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "baseline",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "29",
+          "unknown": "1",
+          "accepted": "2816",
+          "failed": "1",
+          "control_failed": "0",
+          "total_ns": "115256507",
+          "max_ns": "4005940"
+        },
+        {
+          "name": "active_changed",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "117179117",
+          "max_ns": "4078125"
+        },
+        {
+          "name": "active_equal_value",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "119414267",
+          "max_ns": "5712077"
+        },
+        {
+          "name": "deactivated",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "119084267",
+          "max_ns": "4077880"
+        }
+      ],
+      "execution_state": [
+        "ELIM_EXEC_STATE unchanged=1 generation=1 hits=2 replays=361 failures=0"
+      ],
+      "features": [
+        "ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1"
+      ],
+      "business": [
+        "ELIM_BUSINESS ops=386432 errors=0 execution=original"
+      ],
+      "residuals": [
+        "ELIM_RESIDUAL mode=brk site_file_word=f9400000 site_live_word=d42a85a0 differs=1 site_cow_private=1 private_dirty_kb=4 anonymous_kb=4 base_dirty_kb=0 base_anonymous_kb=0",
+        "ELIM_RESIDUAL restored_site_file_word=f9400000 live_word=f9400000 equal=1 private_dirty_kb=4 anonymous_kb=4 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "timing": [
+        "ELIM_TIMING mode=brk site_call_ns=232"
+      ],
+      "log": "04-active-3-8124.log",
+      "uid": 10284
+    },
+    {
+      "label": "05-page-1",
+      "mode": "z-active",
+      "pid": "8216",
+      "result": "DETECT_RESULT PASS mode=z-active worker_ms=2366 ui_ticks=324 ui_max_gap_ms=21 native=PASS cases=19 assertions=1314 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_page",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_outside_window",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0x0",
+          "file": "0x0"
+        },
+        {
+          "name": "active_after_set",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_equal_value",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "deactivated",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "baseline",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "118972049",
+          "max_ns": "4031454"
+        },
+        {
+          "name": "active_changed",
+          "n": "30",
+          "expected": "1",
+          "match": "30",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "2880",
+          "control_failed": "0",
+          "total_ns": "121640420",
+          "max_ns": "5805867"
+        },
+        {
+          "name": "active_cpu_0",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "69409058",
+          "max_ns": "23778768"
+        },
+        {
+          "name": "active_cpu_1",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "68372600",
+          "max_ns": "23051189"
+        },
+        {
+          "name": "active_cpu_2",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "66448893",
+          "max_ns": "22599772"
+        },
+        {
+          "name": "active_cpu_3",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "66993855",
+          "max_ns": "22588297"
+        },
+        {
+          "name": "active_cpu_4",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "22590494",
+          "max_ns": "7592081"
+        },
+        {
+          "name": "active_cpu_5",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "22487224",
+          "max_ns": "7545654"
+        },
+        {
+          "name": "active_cpu_6",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "12317098",
+          "max_ns": "4199097"
+        },
+        {
+          "name": "active_cpu_7",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "12547568",
+          "max_ns": "4405070"
+        },
+        {
+          "name": "active_equal_value",
+          "n": "30",
+          "expected": "1",
+          "match": "30",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "2880",
+          "control_failed": "0",
+          "total_ns": "120963580",
+          "max_ns": "4158691"
+        },
+        {
+          "name": "deactivated",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "121518023",
+          "max_ns": "4275269"
+        }
+      ],
+      "execution_state": [
+        "ELIM_EXEC_STATE unchanged=1 generation=1 hits=2 replays=361 failures=0"
+      ],
+      "features": [
+        "ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1"
+      ],
+      "business": [
+        "ELIM_BUSINESS ops=463360 errors=0 execution=original"
+      ],
+      "residuals": [
+        "ELIM_RESIDUAL mode=page site_file_word=f9400000 site_live_word=f9400000 differs=0 site_cow_private=0 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0",
+        "ELIM_RESIDUAL restored_site_file_word=f9400000 live_word=f9400000 equal=1 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "timing": [
+        "ELIM_TIMING mode=page site_call_ns=231"
+      ],
+      "log": "05-page-1-8216.log",
+      "uid": 10284
+    },
+    {
+      "label": "05-page-2",
+      "mode": "z-active",
+      "pid": "8315",
+      "result": "DETECT_RESULT PASS mode=z-active worker_ms=2358 ui_ticks=324 ui_max_gap_ms=26 native=PASS cases=19 assertions=1314 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "29",
+          "exclusive_unknown": "1",
+          "accepted": "2816",
+          "failed": "1",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_page",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_outside_window",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0x0",
+          "file": "0x0"
+        },
+        {
+          "name": "active_after_set",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_equal_value",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "deactivated",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "baseline",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "117763557",
+          "max_ns": "4008179"
+        },
+        {
+          "name": "active_changed",
+          "n": "30",
+          "expected": "1",
+          "match": "30",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "2880",
+          "control_failed": "0",
+          "total_ns": "122741781",
+          "max_ns": "4168905"
+        },
+        {
+          "name": "active_cpu_0",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "68953328",
+          "max_ns": "23092244"
+        },
+        {
+          "name": "active_cpu_1",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "70033854",
+          "max_ns": "23765218"
+        },
+        {
+          "name": "active_cpu_2",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "68669394",
+          "max_ns": "23114909"
+        },
+        {
+          "name": "active_cpu_3",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "66404908",
+          "max_ns": "22230957"
+        },
+        {
+          "name": "active_cpu_4",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "22444906",
+          "max_ns": "7614217"
+        },
+        {
+          "name": "active_cpu_5",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "24012247",
+          "max_ns": "9146443"
+        },
+        {
+          "name": "active_cpu_6",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "12258178",
+          "max_ns": "4153361"
+        },
+        {
+          "name": "active_cpu_7",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "14897867",
+          "max_ns": "6883911"
+        },
+        {
+          "name": "active_equal_value",
+          "n": "30",
+          "expected": "1",
+          "match": "30",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "2880",
+          "control_failed": "0",
+          "total_ns": "120419515",
+          "max_ns": "4245768"
+        },
+        {
+          "name": "deactivated",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "121472693",
+          "max_ns": "4162638"
+        }
+      ],
+      "execution_state": [
+        "ELIM_EXEC_STATE unchanged=1 generation=1 hits=2 replays=361 failures=0"
+      ],
+      "features": [
+        "ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1"
+      ],
+      "business": [
+        "ELIM_BUSINESS ops=465152 errors=0 execution=original"
+      ],
+      "residuals": [
+        "ELIM_RESIDUAL mode=page site_file_word=f9400000 site_live_word=f9400000 differs=0 site_cow_private=0 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0",
+        "ELIM_RESIDUAL restored_site_file_word=f9400000 live_word=f9400000 equal=1 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "timing": [
+        "ELIM_TIMING mode=page site_call_ns=236"
+      ],
+      "log": "05-page-2-8315.log",
+      "uid": 10284
+    },
+    {
+      "label": "05-page-3",
+      "mode": "z-active",
+      "pid": "8413",
+      "result": "DETECT_RESULT PASS mode=z-active worker_ms=2227 ui_ticks=310 ui_max_gap_ms=22 native=PASS cases=19 assertions=1314 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_page",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_outside_window",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0x0",
+          "file": "0x0"
+        },
+        {
+          "name": "active_after_set",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_equal_value",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "deactivated",
+          "result": "PASS",
+          "n": "30",
+          "exclusive_match": "0",
+          "exclusive_clean": "30",
+          "exclusive_unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "30",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "baseline",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "112011880",
+          "max_ns": "3942668"
+        },
+        {
+          "name": "active_changed",
+          "n": "30",
+          "expected": "1",
+          "match": "30",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "2880",
+          "control_failed": "0",
+          "total_ns": "113230593",
+          "max_ns": "3903157"
+        },
+        {
+          "name": "active_cpu_0",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "66161784",
+          "max_ns": "22513224"
+        },
+        {
+          "name": "active_cpu_1",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "64940186",
+          "max_ns": "22691854"
+        },
+        {
+          "name": "active_cpu_2",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "64688396",
+          "max_ns": "21843588"
+        },
+        {
+          "name": "active_cpu_3",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "63255695",
+          "max_ns": "21146972"
+        },
+        {
+          "name": "active_cpu_4",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "21237182",
+          "max_ns": "7167480"
+        },
+        {
+          "name": "active_cpu_5",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "22441244",
+          "max_ns": "8287191"
+        },
+        {
+          "name": "active_cpu_6",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "11503297",
+          "max_ns": "3897421"
+        },
+        {
+          "name": "active_cpu_7",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "12722208",
+          "max_ns": "5151855"
+        },
+        {
+          "name": "active_equal_value",
+          "n": "30",
+          "expected": "1",
+          "match": "30",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "2880",
+          "control_failed": "0",
+          "total_ns": "116009847",
+          "max_ns": "4792481"
+        },
+        {
+          "name": "deactivated",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "114804402",
+          "max_ns": "4001750"
+        }
+      ],
+      "execution_state": [
+        "ELIM_EXEC_STATE unchanged=1 generation=1 hits=2 replays=361 failures=0"
+      ],
+      "features": [
+        "ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1"
+      ],
+      "business": [
+        "ELIM_BUSINESS ops=438400 errors=0 execution=original"
+      ],
+      "residuals": [
+        "ELIM_RESIDUAL mode=page site_file_word=f9400000 site_live_word=f9400000 differs=0 site_cow_private=0 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0",
+        "ELIM_RESIDUAL restored_site_file_word=f9400000 live_word=f9400000 equal=1 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "timing": [
+        "ELIM_TIMING mode=page site_call_ns=234"
+      ],
+      "log": "05-page-3-8413.log",
+      "uid": 10284
+    },
+    {
+      "label": "06-hold-after-unload",
+      "mode": "y-hold",
+      "pid": "8509",
+      "uid": 10284,
+      "result": "DETECT_RESULT PASS mode=y-hold worker_ms=357 ui_ticks=128 ui_max_gap_ms=21 native=PASS cases=3 assertions=22 failures=0",
+      "execution": [
+        {
+          "name": "hold_active",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "23919270",
+          "max_ns": "8246582"
+        },
+        {
+          "name": "hold_restored",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "28855428",
+          "max_ns": "12242635"
+        }
+      ],
+      "restored": [
+        "ELIM_HOLD_RESTORED pid=8509 opcode=f9400000 direct=f2c66881f2aaacc1 private_dirty_kb=4 anonymous_kb=4 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "log": "06-hold-after-unload-8509.log"
+    },
+    {
+      "label": "07-other-uid",
+      "mode": "z-observer",
+      "pid": "8658",
+      "result": "DETECT_RESULT PASS mode=z-observer worker_ms=351 ui_ticks=127 ui_max_gap_ms=25 native=PASS cases=1 assertions=65 failures=0",
+      "app_pass": true,
+      "cases": [],
+      "execution": [
+        {
+          "name": "unregistered",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "194074014",
+          "max_ns": "32139690"
+        }
+      ],
+      "execution_state": [],
+      "features": [],
+      "business": [],
+      "residuals": [],
+      "timing": [],
+      "log": "07-other-uid-8658.log",
+      "uid": 10287
+    },
+    {
+      "label": "07-hold-page-after-unload",
+      "mode": "z-hold",
+      "pid": "8592",
+      "uid": 10284,
+      "result": "DETECT_RESULT PASS mode=z-hold worker_ms=2457 ui_ticks=326 ui_max_gap_ms=26 native=PASS cases=3 assertions=22 failures=0",
+      "execution": [
+        {
+          "name": "hold_active",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "30102783",
+          "max_ns": "12349365"
+        },
+        {
+          "name": "hold_restored",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "147990641",
+          "max_ns": "51878092"
+        }
+      ],
+      "restored": [
+        "ELIM_HOLD_RESTORED pid=8592 opcode=f9400000 direct=f2c66881f2aaacc1 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "log": "07-hold-page-after-unload-8592.log"
+    },
+    {
+      "label": "08-final-clean",
+      "mode": "y-clean",
+      "pid": "8743",
+      "result": "DETECT_RESULT PASS mode=y-clean worker_ms=350 ui_ticks=128 ui_max_gap_ms=22 native=PASS cases=3 assertions=98 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "idle_unregistered",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "unregistered",
+          "n": "30",
+          "expected": "0",
+          "match": "0",
+          "clean": "30",
+          "unknown": "0",
+          "accepted": "2880",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "122785199",
+          "max_ns": "5338541"
+        }
+      ],
+      "execution_state": [],
+      "features": [],
+      "business": [],
+      "residuals": [],
+      "timing": [],
+      "log": "08-final-clean-8743.log",
+      "uid": 10284
+    }
+  ],
+  "passed": true,
+  "initial_modules": "",
+  "root": "uid=0(root) gid=0(root) groups=0(root) context=u:r:shell:s0",
+  "kernel": "Linux localhost 6.1.134-android14-11-g66e758f7d0c0-ab13748739 #1 SMP PREEMPT Tue Jul  8 09:17:32 UTC 2025 aarch64 Toybox",
+  "fingerprint": "google/oriole_beta/oriole:16/BP31.250610.009/13905196:user/release-keys",
+  "device_time": "2025-10-02T11:41:51+0800",
+  "kpver": "c00",
+  "artifacts": {
+    "y_kpm": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\out\\urov-y.kpm",
+      "sha256": "7d9d77ecbbfcb262e861eba5ea143ae332b997328fd1b37af6c5b3f8ee965e9f"
+    },
+    "x_kpm": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\out\\urov-x.kpm",
+      "sha256": "c2a5c3d3bb272f4bd2db6205f69cd277739f6e32e5c6cd67cecf2b3e7f393575"
+    },
+    "apk": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\apps\\urov-detect\\out\\urovdetect.apk",
+      "sha256": "e8265130b9ee0b56b4aa6f96a2a273920c618210df6c76c2805956df4ec32551"
+    },
+    "observer_apk": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\apps\\urov-detect\\out\\urovobserver.apk",
+      "sha256": "a9fab80bf1072057daf1f3a26d5924c85247191522466b64f75b6704443e2ce8"
+    }
+  },
+  "control_status": "mode=site-bound state=inactive sites=0 hits=0 failures=0 hooks=0x1f core_checks=4139",
+  "control": {
+    "active_changed": {
+      "match": 30,
+      "clean": 0,
+      "reader_match": 30
+    },
+    "cpu_cases": 8,
+    "cpu_exclusive_matches": 24,
+    "cpu_reader_matches": 24
+  },
+  "loaded_status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 degraded=0 imm=542d hooks=0x7f core_checks=4139",
+  "06-hold_status": "mode=site-trap state=active sites=2 armed=2 hits=1 replays=0 failures=0 degraded=0 imm=542d hooks=0x7f core_checks=4139",
+  "06-hold_unload": "",
+  "07-hold-page_status": "mode=page-trap state=active sites=2 armed=2 hits=2 replays=0 failures=0 degraded=0 imm=542d hooks=0x7f core_checks=4139",
+  "other_uid_owner_status": "mode=page-trap state=active sites=2 armed=2 hits=21 replays=0 failures=0 degraded=0 imm=542d hooks=0x7f core_checks=4139",
+  "07-hold-page_unload": "",
+  "final_modules": "",
+  "kernel_issues": [],
+  "totals": {
+    "runs": 13,
+    "elim_cases": 39,
+    "observations": 1089,
+    "exclusive_matches": 0,
+    "exclusive_clean": 1087,
+    "exclusive_unknown": 2,
+    "accepted_triplets": 104416,
+    "failed_target_stores": 2,
+    "control_failed_stores": 0,
+    "reader_matches": 0,
+    "reader_clean": 1089,
+    "reader_unknown": 0,
+    "feature_business_reads": 6
+  },
+  "execution_totals": {
+    "active_page": {
+      "n": 255,
+      "match": 255,
+      "clean": 0,
+      "unknown": 0,
+      "accepted": 24480,
+      "failed": 24480,
+      "control_failed": 0
+    },
+    "controls": {
+      "n": 669,
+      "match": 0,
+      "clean": 668,
+      "unknown": 1,
+      "accepted": 64160,
+      "failed": 1,
+      "control_failed": 0
+    }
+  }
+}

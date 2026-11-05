@@ -129,15 +129,14 @@ static void copy_scalar(uint8_t *out, const uint8_t *p, size_t n)
     }
 }
 
-static int page_open(struct page *p, int flags)
+static int page_open_at(struct page *p, int flags, const void *entry)
 {
     struct ud_mapping map;
     Dl_info info;
     memset(p, 0, sizeof(*p));
     p->fd = -1;
-    if (!dladdr((void *)&ud_payload, &info) ||
-        ud_mapping_at("/proc/self/maps", (void *)&ud_payload, &map)) return -1;
-    uint64_t offset = map.offset + (uintptr_t)&ud_payload - map.start;
+    if (!dladdr(entry, &info) || ud_mapping_at("/proc/self/maps", entry, &map)) return -1;
+    uint64_t offset = map.offset + (uintptr_t)entry - map.start;
     p->entry = offset & 4095U;
     p->file_offset = (off_t)(offset & ~UINT64_C(4095));
     if (p->entry + 192U > 4096U) return -1;
@@ -145,10 +144,15 @@ static int page_open(struct page *p, int flags)
     if (p->fd < 0) return -1;
     p->address = mmap(NULL, 4096, PROT_READ | PROT_EXEC, flags, p->fd, p->file_offset);
     if (p->address == MAP_FAILED) { close(p->fd); p->fd = -1; p->address = NULL; return -1; }
-    if (memcmp(p->address + p->entry, (void *)&ud_payload, 28)) {
+    if (memcmp(p->address + p->entry, entry, 28)) {
         munmap(p->address, 4096); close(p->fd); p->fd = -1; p->address = NULL; return -1;
     }
     return 0;
+}
+
+static int page_open(struct page *p, int flags)
+{
+    return page_open_at(p, flags, (const void *)(uintptr_t)&ud_payload);
 }
 
 static void page_close(struct page *p)
@@ -1193,15 +1197,22 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
                  g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
         goto done;
     }
-    if (!strncmp(mode, "y-", 2) || !strncmp(mode, "z-", 2)) {
-        /* urov-y fixtures: the detector calls stay unmodified and unkeyed.
-         * y-* is the BRK site mode, z-* the page-trap (UXN) mode. */
-        unsigned trap = mode[0] == 'z' ? UROV_Y_MODE_PAGE_UXN : UROV_Y_MODE_SITE_BRK;
-        if (!strcmp(mode, "y-active") || !strcmp(mode, "z-active"))
+    if (!strncmp(mode, "y-", 2) || !strncmp(mode, "z-", 2) || !strncmp(mode, "w-", 2)) {
+        /* urov-y fixtures: the detector calls are unkeyed.
+         * y-* is the BRK site mode, z-* the page-trap (UXN) mode, w-* the
+         * target-page AP[1] data-trap mode. */
+        unsigned trap = mode[0] == 'z' ? UROV_Y_MODE_PAGE_UXN :
+                        mode[0] == 'w' ? UROV_Y_MODE_PAGE_AP : UROV_Y_MODE_SITE_BRK;
+        if (!strcmp(mode, "y-active") || !strcmp(mode, "z-active") ||
+            !strcmp(mode, "w-active"))
             elimination_active(key, (int)repeats, trap);
-        else if (!strcmp(mode, "y-hold") || !strcmp(mode, "z-hold"))
+        else if (!strcmp(mode, "y-hold") || !strcmp(mode, "z-hold") ||
+                 !strcmp(mode, "w-hold"))
             elimination_hold(key, trap);
-        else elimination_clean();
+        else {
+            if (strcmp(mode, "z-observer")) elimination_clean();
+            elimination_exec_passive((int)repeats);
+        }
         snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
                  g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
         goto done;

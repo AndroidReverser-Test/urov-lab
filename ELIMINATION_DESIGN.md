@@ -400,3 +400,142 @@ python .\kpms\urov-lab\tools\run_elimination_device.py `
 
 App 模式：`y-active`/`y-hold` 走 BRK 模式（代码页特征阳性对照），
 `z-active`/`z-hold` 走 PAGE_UXN 模式。root 程序：`--mode page|brk`。
+
+## 10. 第三轮：目标页 AP[1] 数据陷阱与相邻 LL/SC 桥
+
+### 10.1 触发本轮的特征
+
+2026-11-05 的取指复核在 `PAGE_UXN` 活动页上新增了
+[`ud_observe_execution()`](native/urov_observe.c)：在同一页执行
+`BTI C; RET` canary，前后各做一次 `LDXR/STXR`。活动页 255/255 全部命中，
+669 次对照中 668 次阴性、1 次 UNKNOWN。原因不是代码字节，而是 EL0 取指进入
+EL1 处理，`ERET` 把本地独占监视器恢复为 Open Access；canary 本身不读数据，
+所以这个信号独立于伪值和调用窗口。上一轮 §9 的结论"读取点页不在 EL0 原生
+取指"因此从纸面残余变成了可复现的检测点。
+
+### 10.2 三种模式的硬件边界
+
+要让普通 `LDR` 返回伪值，必须在这条 load 上截获它。EL0 可用的页级硬件分离只有：
+
+| 控制位 | 影响的访问 | 不影响 |
+|---|---|---|
+| `AP[1]`（PTE_USER） | EL0 数据读写 | EL0 取指 |
+| `UXN` | EL0 取指 | EL0 数据读写 |
+
+AXI 上没有"按 PC 决定数据权限"的位；任何同步异常进入 EL1 后再 `ERET`，都会清
+本地独占监视器。因此三种已知模式是一个三角形，不能同时把三个角都消掉：
+
+| 模式 | 代码页字节 | 目标页数据读 | 取指 canary | 独占监视器 |
+|---|---|---|---|---|
+| BRK | 改 4 字节、私有 COW | 原生 | 原生（NO_MATCH） | 原生（NO_MATCH） |
+| PAGE_UXN | 不改、干净文件页 | 原生 | **命中（指令异常）** | 原生（NO_MATCH） |
+| PAGE_AP | 不改、干净文件页 | **陷阱（数据异常）** | 原生（NO_MATCH） | 需桥接 |
+
+本轮选择 `PAGE_AP`：当前检测集中，取指 canary 是确定性的、每次调用都成立的
+阳性；独占监视器只在特定 `LDXR/load/STXR` 形状上成立，可以用相邻桥接把该形状
+恢复成原生结果。代价是保留一个"数据读进 EL1"的机制，残留在 §10.7 明说。
+
+### 10.3 机制
+
+`UROV_Y_MODE_PAGE_AP`（ABI v6，`mode = 3`）：
+
+1. **目标页只清 `PTE_USER`（AP[1]）**。VMA、`vm_flags`、`vm_page_prot`、文件页、
+   code page 全都不动；`UXN=0`，因此目标页和读取点页的 EL0 取指都是原生。
+2. **数据异常由已有的 `do_mem_abort` hook 接管**：EC `0x24`、`WnR=0`、
+   FSC permission、`mm` 属于会话、`FAR` 落在目标页。命中后仍走
+   `uy_emulate_load()`：调用者窗口内合并伪值，窗口外从注册快照逐字节透明模拟。
+   目标页的读不再经 `copy_from_user_nofault()`，避免去走刚刚清掉的权限。
+3. **相邻 LL/SC 桥**。数据异常返回前检查故障 PC 的紧邻指令：
+
+   ```text
+   LDXR/LDAXR  Xt, [Xn]        ; PC-4
+   LDR/LDRB    ..., [target]   ; PC，发生 permission abort
+   STXR/STLXR  Ws, Xt, [Xn]    ; PC+4
+   ```
+
+   若 `Xn`、`Xt` 一致，handler 先保存 `Xn` 的地址和 store 宽度；模拟 load 后再用
+   内核 nofault 写完成这次 store，把 `Ws` 置 0，并把 PC 直接推进到 `PC+8`。
+   于是调用者看到 `STXR` 成功，和没有陷阱时一样。`ctl0 status` 的 `llsc` 计数
+   每次桥接加一。桥只处理**紧邻**的三条指令，不是通用 LL/SC 模拟器。
+4. **生命周期**：注册时在 `mmap_write_lock` 下清目标页 AP[1] 并 `flush_tlb_all`；
+   `handle_mm_fault` 的 after-hook 在目标页重新装回后再次清 AP[1]；clone 前恢复、
+   clone 后重装；注销/卸载恢复 AP[1]。`mprotect/munmap/mremap/mmap(MAP_FIXED)/
+   madvise/execve` 门控与 §9 相同。站点表在 AP 模式只做状态记账，不改站点页。
+5. **hook 集合不变**：仍是 `brk_handler`、`prctl`、六个门控、`clone/clone3`、
+   `do_mem_abort`、`handle_mm_fault`，`hooks=0x7f`；没有新增 hook 或 syscall 表项。
+
+### 10.4 为什么当前三类检测都归零
+
+- **取指 canary**：站点页 `UXN=0`、目标页 `UXN=0`，`BTI C; RET` 在 EL0 原生执行，
+  不产生任何异常，独占监视器保持；`ELIM_EXEC` 的 `expected` 从 `1` 改为 `0`。
+- **独占监视器**：检测的 `LDXR scratch / LDRB target / STXR scratch` 正好是 10.3
+  的紧邻形状；`LDRB` 的 permission abort 被透明模拟，`STXR` 由桥完成并返回 0。
+  实测 `llsc` 非零（`w-active repeats=30` 的一次轮询最大 12,480），同时
+  `exclusive_match=0`。若桥不生效，`urov-x` 阳性对照会立即给出 `match>0`。
+- **跨 PC 内容差异**：检测器从 `ud_observe_reader()` 调用裸站点函数时，`x30`
+  不在注册业务窗口，handler 从注册快照返回原字节；直接标量读也走同一路径。
+  `direct == reader == file`，`reader_diff=NO_MATCH`。
+- **代码页/映射/文件**：不改字节、不 COW、不改 VMA；`ELIM_RESIDUAL` 的
+  `site_file_word == site_live_word`、`site_cow_private=0`、`Private_Dirty/Anonymous`
+  与基线相同。
+- **业务功能**：窗口内的 `uy_business_ldr/ldrb` 仍返回伪值，`hits>0`，
+  `failures=0`，worker 持续执行业务函数。
+
+### 10.5 ABI 与状态
+
+`struct urov_y_request` 布局不变，`UROV_Y_ABI_VERSION = 6`，新增
+`UROV_Y_MODE_PAGE_AP = 3`。`ctl0 status` 增加 `llsc=` 并把模式名扩展为
+`site-trap|page-trap|data-ap`；`mode=3` 的 `mode`/`flags` 回显与 v5 一致。
+
+### 10.6 为什么不是其他方案
+
+| 方案 | 否决原因 |
+|---|---|
+| 业务入口 trampoline / 影子站点页 | 需要额外 RX 映射或改业务页，检测器换个采样页就能看见；比目标页的既有合作面更大 |
+| 硬件观察点/断点 | 调试寄存器要跨上下文切换维护，且同样产生同步异常，仍要 LL/SC 桥；新增 root 可见的调试状态 |
+| 影子物理页 / I-D cache 不一致 | 取指会跑到伪字节，或任何 cache 维护就失效（§6 已否决） |
+| 数据页 AP[1] + 改 `vm_page_prot` 全局生效 | 目标 VMA 只有一页时可行，但会扩大 VMA 级影响面，且不能消除同步异常本身；本轮保留 after-hook 方案 |
+| 把 STXR 指令改成 BRK | 又回到代码页差异；且需要按线程恢复，窗口不可避免 |
+| 只让业务调用触发异常、检测读原生 | 无法按 PC 给数据权限；除非在业务入口再 trap，仍是新页面特征 |
+
+### 10.7 残余特征与限制（诚实清单）
+
+1. **时间**：每次业务/检测读一次数据异常，实测 `site_call_ns=273..281`；未注册时
+   2–6 ns。与 BRK/UXN 同一量级，不作为零开销承诺。
+2. **LL/SC 形状**：桥只覆盖 `LDXR/LDAXR`、load、`STXR/STLXR` 三条紧邻指令。
+   `LDXR; NOP; LDRB; STXR`、中间有函数调用/分支、或 `LDXR` 与 `STXR` 不在同一
+   基本块时，STXR 仍会失败，检测器可据此得到 MATCH。这是数据陷阱的固有代价，
+   不是桥能普遍消除的。
+3. **桥的语义**：store 由内核 nofault 写完成，不是真正的独占 store；多线程争用
+   同一 scratch、`STLXR` 的 release 顺序、以及 store 的原子性都不完全等价原生。
+   当前检测的 scratch 是线程私有栈，未触发这些边界。
+4. **不支持的数据访问**：SIMD/FP、原子/独占 load、跨页、未知编码仍 fail-closed
+   （SIGSEGV）。检测器若故意在目标页做这类访问，会得到信号；本轮检测核心不使用。
+5. **PTE 重新装回窗口**：目标页被回收后，内核先按 VMA 装一个 user PTE，
+   after-hook 再清 AP[1]；几微秒内另一 CPU 上的读可能原生返回原值。触发需要
+   内存压力或 GUP 路径，本轮未观测到。
+6. **业务路径复现即功能本身**：把注册的业务包装当 reader 仍会看到伪值；这是
+   合作模型的边界。
+7. **映射门控**：与目标页相交的 `mprotect/munmap/mremap/mmap(MAP_FIXED)/madvise`
+   会结束会话；`execve` 结束会话。与 §9 相同。
+8. **root 可观察性**：模块清单、`ctl0 status`、`do_mem_abort`/`handle_mm_fault`
+   的 inline hook 仍对 root 可见。
+9. **控制 UNKNOWN**：本轮在无模块的 clean 页上出现过 1 次目标 STXR 瞬时失败
+   （UNKNOWN，不是 MATCH）；这与 §3 的对照设计一致，不能计作阳性，也不能据此
+   声称零误报。
+10. **注册事务窗口**：目标页 AP[1] 已清、`g_state` 尚未发布时，同 mm 的并发读
+    可能走原生 permission fault。`REGISTER` 是合作事务，调用方必须在返回后再
+    开始业务读取；`PAGE_UXN` 的站点页也有同一形状的窗口。
+
+### 10.8 构建与验证入口
+
+```powershell
+.\kpms\urov-lab\build.ps1              # urov-y.kpm + urov_y_test（三种模式）
+.\kpms\urov-lab\apps\urov-detect\build.ps1
+.\kpms\urov-lab\apps\urov-detect\build.ps1 -Observer
+python .\kpms\urov-lab\tools\run_elimination_device.py `
+  --serial <SERIAL> --key <KP-SUPERKEY> --repeats 6 --cycles 2
+```
+
+App 模式新增 `w-active`/`w-hold`（`mode=3`），root 程序新增 `--mode ap`。
+`y-*` 仍是 BRK 阳性对照，`z-*` 仍是 UXN 取指特征阳性对照。

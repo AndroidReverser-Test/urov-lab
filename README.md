@@ -1,5 +1,25 @@
 # UROV-LAB
 
+2026-11-05 第三轮消除：`PAGE_UXN` 那次复核本身证明了当前检测集的最后一个确定性
+特征——读取点页不在 EL0 原生取指。`urov-y` 新增 `PAGE_AP` 模式（ABI v6，`mode=3`）：只清**目标页**
+叶子 PTE 的 `AP[1]`，读取点页和取指路径完全不动；EL0 数据读触发 permission abort，
+由 `do_mem_abort` 按同一调用窗口/快照规则模拟。为消掉旧数据陷阱的独占监视器信号，
+handler 对紧邻的 `LDXR/LDAXR; load; STXR/STLXR` 完成 store 并推进 PC，`ctl0 status`
+的 `llsc` 记录次数。真机正式矩阵 14 次运行、225 次观测：独占 MATCH 0、reader MATCH 0；
+AP 两轮各 48 次 execution 观测（含 8 CPU canary）`match=0`，代码页与 smaps 不变，
+业务伪值保留；单独 30 次 `w-active` 轮询到 `llsc=11,960`（最终产物）。设计见
+[ELIMINATION_DESIGN.md](ELIMINATION_DESIGN.md) §10，数据见
+[ELIMINATION_RESULTS.md](ELIMINATION_RESULTS.md) §10 与
+[本次矩阵](results/eliminate-20261105-213741/summary.json)。残余（仅相邻 LL/SC 形状、
+时间、SIMD/原子 fail-closed、PTE 重装窗口）在该节明列。
+
+2026-11-05 无密钥取指复核覆盖了 `urov-y` 的 `PAGE_UXN` 模式。
+[`ud_observe_execution`](native/urov_observe.h) 在已知读取点所在页执行 `BTI C` 和 `RET`，
+用同一文件的另一份 RX 映射作对照。活动页 255/255 命中，669 次对照中 668 次阴性、1 次
+不确定。适用范围是当前进程持有的已知探针页。真机矩阵和复跑方式见
+[取指复核数据](results/eliminate-20261105-210733/summary.json)与
+[设备运行器](tools/run_elimination_device.py)。
+
 2026-11-05 第二轮消除：`urov-y` 新增 `PAGE_UXN` 读取点陷阱模式（ABI v5，`mode=2`）。
 目标页仍不改任何权限；读取点页也不改一个字节、不改 VMA、不产生 COW，只清叶子 PTE
 的 EL0 执行许可（UXN），由 `do_mem_abort` 接管 EL0 instruction abort 并模拟读取点。
@@ -180,11 +200,11 @@ fake 字节按小端排列：`value` 是字节 0..7，`value_hi[0]` 是 8..15，
 | `tools/run_app_device.ps1` | 普通 app 设备自动化脚本 |
 | `APP_OVERLAY.md` / `RESULTS_APP.md` | 普通 app 方案、检测面、限制与真机证据 |
 | `urov_x_backend.c` / `.h` / `urov_x.c` / `urov_x_abi.h` | covert 变体 `urov-x`：密钥化控制通道、读取点绑定、透明生命周期 |
-| `urov_y_backend.c` / `.h` / `urov_y.c` / `urov_y_abi.h` | 读取点陷阱变体 `urov-y`：目标页不改权限；`mode=1` BRK 读取点，`mode=2` EL0 execute-never 页陷阱；业务调用窗口 |
-| `tests/urov_y_test.c` | `urov-y` root 验收程序（两种模式；功能/fork/门控/活动期卸载/代码页探针） |
-| `apps/urov-detect/uy_fixture.inc` | `urov-y` App 夹具（`y-*` BRK 模式、`z-*` 页陷阱模式） |
-| `tools/run_elimination_device.py` | `urov-y` 设备矩阵（含 `urov-x` 阳性对照与两种模式对照） |
-| `ELIMINATION_DESIGN.md` / `ELIMINATION_RESULTS.md` | 读取点陷阱方案（含 §9 页陷阱）、代码页特征消除与真机对照结果 |
+| `urov_y_backend.c` / `.h` / `urov_y.c` / `urov_y_abi.h` | 读取点陷阱变体 `urov-y`：`mode=1` BRK 读取点、`mode=2` EL0 execute-never 页陷阱、`mode=3` 目标页 AP[1] 数据陷阱 + 相邻 LL/SC 桥；业务调用窗口 |
+| `tests/urov_y_test.c` | `urov-y` root 验收程序（三种模式；功能/fork/门控/活动期卸载/代码页探针） |
+| `apps/urov-detect/uy_fixture.inc` | `urov-y` App 夹具（`y-*` BRK、`z-*` UXN 页陷阱、`w-*` AP 数据陷阱） |
+| `tools/run_elimination_device.py` | `urov-y` 设备矩阵（含 `urov-x` 阳性对照与三种模式对照） |
+| `ELIMINATION_DESIGN.md` / `ELIMINATION_RESULTS.md` | 读取点陷阱方案（§9 UXN、§10 AP+LL/SC 桥）、代码页/取指特征消除与真机对照结果 |
 | `tools/run_stealth_device.py` | `urov-x` 设备矩阵（无密钥/活动/观察者/卸载/SIMD/fork） |
 | `STEALTH_DESIGN.md` / `STEALTH_RESULTS.md` | 检测特征点消除设计与真机对照结果 |
 | `results/` | 构建、设备与覆盖运行记录 |
