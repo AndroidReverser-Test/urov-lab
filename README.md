@@ -159,16 +159,15 @@ ABI v8 进一步覆盖多结构 load（`LD1`/`LD2`/`LD3`/`LD4`，含 post-index 
 没有这两个内核 helper 或 BTF 布局时 `PAGE_AP` 的向量 load 仍 fail-closed，
 `ctl0 status` 的 `fpsimd=` 字段报告是否可用。
 
-2.1.1 加载时从运行内核的 BTF 获取 `task_struct`、`mm_struct`、VMA 和寄存器帧布局。小米 13 的 Android 5.15 使用 `__find_vma`、`down_write/up_write` 和五参数 `do_handle_mm_fault`。Pixel 6 的 Android 6.1 使用 `find_vma`、原生 `mmap_write_lock/unlock` 和四参数 `handle_mm_fault`。模块根据符号和 BTF 选择入口，并在注册时用 `get_task_mm()` 复核 `task_struct.mm`。[BTF 布局与签名校验](urov_y_compat.h)
+2.3.0 在加载时适配 Android ARM64 的 5.4 及之后的 5.x/6.x 内核接口。
+默认从运行内核读取 BTF；没有内置 BTF 时可用 `btf=/path` 提供同一内核构建的
+外置 BTF 包，模块会核对 GNU Build ID。异常、远程内存和映射锁接口根据实际符号与
+BTF 选择。ABI 仍为 v8；`QUERY` 和 `ctl0 status` 只报告可用的能力。
 
-BRK 入口支持 `brk_handler` 和较新内核的 `do_el0_brk64`。COW 写入和恢复优先从 BTF 取 `FOLL_FORCE`，回退值按 Linux 6.3 的编号切换。页面模式只在缺页调用成功并仍持有映射保护时重新设置 PTE。[ARM64 BRK 入口](https://raw.githubusercontent.com/torvalds/linux/v6.18/arch/arm64/kernel/debug-monitors.c) · [Linux 6.2 GUP 标志](https://raw.githubusercontent.com/torvalds/linux/v6.2/include/linux/mm.h) · [Linux 6.3 GUP 标志](https://raw.githubusercontent.com/torvalds/linux/v6.3/include/linux/mm_types.h)
-
-当前范围为具备可读 BTF、nofault 用户拷贝及 KernelPatch hook 能力的 ARM64 4 KiB 内核。布局或基础符号校验失败时，模块返回 `-EOPNOTSUPP`。缺少异常或缺页重装 hook 时，页面模式的注册返回同一错误。
-
-- **5.15.74 真机**　小米 13，Android 13，KernelPatch `0xc00`，SELinux Enforcing。两套 App 矩阵各通过 14 次运行，覆盖三种模式、AP 全调用者 CRC、`SET`、不同 UID 和三种模式的活动卸载恢复。内核日志增量未出现 BUG、Oops、挂起或调用栈告警，最终 KPM 数量为 0。[CRC 结果](results/crc-20261105-233042/summary.json) · [功能与装卸结果](results/eliminate-20261105-233109/summary.json)
-- **6.1.134 离线复核**　新版布局解析器和缺页签名校验通过 Pixel 6 保存的 BTF；本次真机回归覆盖 5.15.74。此前的 6.1.134 App 结果记录了旧版模块的行为。[历史 6.1.134 真机结果](results/eliminate-20261105-224534/summary.json)
-
-`tools/run_elimination_device.py` 在 5.15 上使用 `--skip-x-control`，跳过仍依赖旧布局的 `urov-x` 对照。两个运行器均可用 `--skip-install` 测试已安装且与本地构建匹配的 APK；本次 MIUI 设备通过 KPatch root 调用 `pm install -r -t` 安装测试和观察者 APK。
+2.3.0 在 Pixel 6（6.1.134，4 KiB）通过 CRC、多页、跨页、向量读取与活动卸载的 App
+测试；保存的小米 13 5.15.74 BTF 通过本版主机验证。完整实现分析、兼容边界和复跑命令见
+[UROV-Y 兼容性与验收](COMPATIBILITY_Y.md)。[历史 5.15.74 App 实测](results/eliminate-20261105-233109/summary.json)
+使用的是较早版本。
 
 ## 构建
 

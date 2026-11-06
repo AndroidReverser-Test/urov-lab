@@ -26,6 +26,10 @@ def main():
     parser.add_argument("--serial", required=True)
     parser.add_argument("--key", required=True, help="KernelPatch superkey")
     parser.add_argument("--skip-install", action="store_true")
+    parser.add_argument("--kpm", type=Path, default=LAB / "out/urov-y.kpm",
+                        help="urov-y build to test (defaults to the lab output)")
+    parser.add_argument("--btf", type=Path, help="exact-build BTF package made by package_y_btf.py")
+    parser.add_argument("--verbose", action="store_true", help="record module compatibility decisions in dmesg")
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--cycles", type=int, default=1)
     args = parser.parse_args()
@@ -37,9 +41,10 @@ def main():
     output.mkdir(parents=True)
     module_key = secrets.token_hex(16)
     remote = f"/data/local/tmp/urov-mp-{stamp}.kpm"
+    remote_btf = remote + ".btf"
     report = {"serial": args.serial, "repeats": args.repeats, "cycles": args.cycles,
               "runs": [], "passed": False}
-    clean_start = loaded = staged = False
+    clean_start = loaded = staged = staged_btf = False
     before = None
 
     def redact(value):
@@ -122,15 +127,26 @@ def main():
         report["selinux"] = shell("getenforce")
         before = kp("su", "-c", "dmesg")
         apk = LAB / "apps/urov-detect/out/urovdetect.apk"
-        kpm = LAB / "out/urov-y.kpm"
+        kpm = args.kpm
+        artifacts = [apk, kpm]
+        if args.btf:
+            artifacts.append(args.btf)
         report["artifacts"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                               for p in (apk, kpm)}
+                               for p in artifacts}
+        report["layout_source"] = "detached" if args.btf else "live"
         if not args.skip_install:
             adb("install", "--no-incremental", "-r", str(apk), timeout=120)
 
         staged = True
         adb("push", str(kpm), remote)
-        kp("kpm", "load", remote, f"key={module_key}")
+        load_args = [f"key={module_key}"]
+        if args.btf:
+            staged_btf = True
+            adb("push", str(args.btf), remote_btf)
+            load_args.append(f"btf={remote_btf}")
+        if args.verbose:
+            load_args.append("verbose")
+        kp("kpm", "load", remote, " ".join(load_args))
         loaded = True
         report["loaded_status"] = kp("kpm", "ctl0", MODULE, "status")
         if "hooks=0x7f" not in report["loaded_status"] or "abi=8" not in report["loaded_status"]:
@@ -150,6 +166,8 @@ def main():
                     kp("kpm", "unload", MODULE)
                 if staged:
                     shell("rm", "-f", remote)
+                if staged_btf:
+                    shell("rm", "-f", remote_btf)
                 report["final_modules"] = kp("kpm", "list")
                 if before is not None:
                     timestamps = STAMP.findall(before)

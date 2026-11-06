@@ -121,7 +121,7 @@ enum urov_y_state {
  * the one-page site modes and for v7 compatibility requests. */
 #define UROV_Y_F_REPLAY_SNAPSHOT UINT64_C(1)
 
-/* QUERY reports these in `session_flags`; STATUS mirrors them. */
+/* QUERY reports the supported subset in `session_flags`; STATUS mirrors it. */
 #define UROV_Y_CAP_MULTI 0x00000001U
 #define UROV_Y_CAP_LD1 0x00000002U
 #define UROV_Y_CAP_LD2 0x00000004U
@@ -164,10 +164,10 @@ _Static_assert(sizeof(struct uy_page_desc) == UROV_Y_PAGE_DESC_SIZE,
  *
  * Response conventions (the request side must leave these zero):
  *   QUERY:    page_count = max_pages, page_stride = page_shift,
- *             session_flags = UROV_Y_CAPS, reserved = 0.
+ *             session_flags = supported UROV_Y_CAP_* bits, reserved = 0.
  *   STATUS:   page_count = armed pages, page_stride = page_shift,
  *             reserved low 32 bits = number of pages still ARMED,
- *             session_flags = UROV_Y_CAPS.
+ *             session_flags = supported UROV_Y_CAP_* bits.
  *   SET_PAGE: reserved low 32 bits = target page index. */
 struct urov_y_request {
     uint32_t size;

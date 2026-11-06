@@ -21,7 +21,7 @@ foreach ($tool in @("$bin\clang.exe", "$tools\aapt2.exe", "$tools\d8.bat", $jar,
     if (!(Test-Path -LiteralPath $tool)) { throw "Missing tool: $tool" }
 }
 New-Item -ItemType Directory -Force -Path $out, $classes, $dex | Out-Null
-& "$bin\clang.exe" --target=aarch64-linux-android31 -std=gnu11 -shared -fPIC -O2 -g0 `
+& "$bin\clang.exe" --target=aarch64-linux-android30 -std=gnu11 -shared -fPIC -O2 -g0 `
     -Wall -Wextra -Werror -Wformat=2 -Wshadow -fno-omit-frame-pointer -pthread `
     '-Wl,--build-id=sha1' '-Wl,-z,noexecstack' '-Wl,-z,max-page-size=16384' `
     -I (Join-Path $lab 'native') (Join-Path $here 'app.c') `
@@ -29,7 +29,7 @@ New-Item -ItemType Directory -Force -Path $out, $classes, $dex | Out-Null
     -o (Join-Path $out 'liburovdetect.so') -llog -ldl -lz
 if ($LASTEXITCODE -ne 0) { throw 'Native build failed' }
 if (!$Observer) {
-    & "$bin\clang.exe" --target=aarch64-linux-android31 -std=gnu11 -shared -fPIC -O2 -g0 `
+    & "$bin\clang.exe" --target=aarch64-linux-android30 -std=gnu11 -shared -fPIC -O2 -g0 `
         -Wall -Wextra -Werror -Wformat=2 -Wshadow `
         '-Wl,--build-id=sha1' '-Wl,-z,noexecstack' '-Wl,-z,max-page-size=16384' `
         (Join-Path $here 'crc_patch_fixture.c') -o (Join-Path $out 'liburov_crc_patch.so')
@@ -40,7 +40,7 @@ if (!$Observer) {
     (Join-Path $here 'MainActivity.java') (Join-Path $here 'ObserverActivity.java')
 if ($LASTEXITCODE -ne 0) { throw 'Java build failed' }
 $classFiles = @(Get-ChildItem -LiteralPath $classes -Recurse -Filter '*.class' | ForEach-Object FullName)
-& "$tools\d8.bat" --lib $jar --min-api 31 --output $dex @classFiles
+& "$tools\d8.bat" --lib $jar --min-api 30 --output $dex @classFiles
 if ($LASTEXITCODE -ne 0) { throw 'D8 failed' }
 $base = Join-Path $out 'base.apk'
 & "$tools\aapt2.exe" link -o $base -I $jar --manifest (Join-Path $here $manifest)

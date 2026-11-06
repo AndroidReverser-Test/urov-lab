@@ -18,6 +18,8 @@ host_flags=(-std=gnu11 -O1 -g -Wall -Wextra -Werror -fno-strict-aliasing
 "$host_cc" "${host_flags[@]}" -pthread "$lab_dir/decode.c" "$lab_dir/emulate.c" \
     "$lab_dir/core_selftest.c" "$lab_dir/tests/emulate_test.c" -o "$test_out/emulate-test"
 "$test_out/emulate-test"
+"$host_cc" "${host_flags[@]}" "$lab_dir/tests/urov_y_compat_test.c" -o "$test_out/urov-y-compat-test"
+"$test_out/urov-y-compat-test" "$@"
 if [[ "${UROV_TEST_LEGACY_LOADER:-0}" != 1 ]]; then exit 0; fi
 "$host_cc" "${host_flags[@]}" -Wno-unused-parameter -Wno-sign-compare -pthread \
     -I"$lab_dir/tests" -I"$lab_dir/tests/loader_stubs" -I"$repo_dir/kernel/patch/include" \

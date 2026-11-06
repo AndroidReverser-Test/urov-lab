@@ -146,12 +146,16 @@ typedef int (*force_sig_fault_t)(int sig, int code, void *addr);
 typedef long (*copy_nofault_t)(void *dst, const void *src, unsigned long n);
 typedef int (*access_remote_vm_t)(void *mm, unsigned long addr, void *buf,
                                   int len, unsigned int gup_flags);
+typedef int (*access_remote_vm_task_t)(void *task, void *mm, unsigned long addr, void *buf,
+                                       int len, unsigned int gup_flags);
 typedef void *(*kvmalloc_node_t)(uint64_t size, unsigned int flags, int node);
 typedef void (*kvfree_t)(const void *addr);
 typedef void *(*vmalloc_t)(unsigned long size);
 typedef void (*vfree_t)(const void *addr);
 typedef long (*kernel_read_t)(void *file, void *buf, unsigned long count,
                               int64_t *pos);
+typedef void *(*filp_open_t)(const char *path, int flags, unsigned short mode);
+typedef int (*filp_close_t)(void *file, void *owner);
 
 extern uint64_t *pgtable_entry(uint64_t pgd, uint64_t va);
 
@@ -174,8 +178,6 @@ struct uy_site {
  * old or the new whole-page view, never a torn one. */
 struct uy_page {
     uint64_t base;
-    uint64_t file_off;   /* SRC_FILE: kernel_read position */
-    void *file;          /* SRC_FILE: borrowed vm_file */
     uint8_t *image;
     uint8_t *snapshot;
     uint8_t *retired;    /* previous image, freed after the handlers drain */
@@ -243,6 +245,7 @@ static unsigned g_write_gup_flags;
 static int g_use_rwsem;
 static uint32_t g_max_pages = UROV_Y_MAX_PAGES;
 static uint64_t g_max_image_bytes = UINT64_C(8) << 20;
+static uint32_t g_caps;
 
 static void *f_brk_handler;
 static void *f_do_mem_abort;
@@ -256,6 +259,7 @@ static flush_tlb_mm_t f_flush_tlb_mm;
 static force_sig_fault_t f_force_sig_fault;
 static copy_nofault_t f_copy_in, f_copy_out;
 static access_remote_vm_t f_access_vm;
+static access_remote_vm_task_t f_access_vm_task;
 static fpsimd_preserve_t f_fp_preserve;
 static fpsimd_update_t f_fp_update;
 static kvmalloc_node_t f_kvmalloc_node;
@@ -306,6 +310,34 @@ static int mm_has_live_user(void *mm)
     if (!mm) return 0;
     users = __atomic_load_n((int *)((char *)mm + g_layout.mm_users), __ATOMIC_ACQUIRE);
     return users > 1;
+}
+
+static int uy_access_vm(void *mm, unsigned long addr, void *buf,
+                        int len, unsigned int flags)
+{
+    if (f_access_vm) return f_access_vm(mm, addr, buf, len, flags);
+    /* Old public access_remote_vm() supplies a NULL task to this variant.
+     * Passing current here would associate a foreign mm with the unload task. */
+    return f_access_vm_task(0, mm, addr, buf, len, flags);
+}
+
+/* For sleepable control only. Early 5.x has probe_user_read() but may lack a
+ * nofault write helper. Use ordinary writable GUP, never FOLL_FORCE, for a
+ * reply to the caller; the exception path must never use this fallback. */
+static long uy_copy_control_reply(void *dst, const void *src, unsigned long len)
+{
+    uint64_t addr = (uintptr_t)dst;
+    void *mm;
+    int copied;
+
+    if (f_copy_out) return f_copy_out(dst, src, len);
+    if (!addr || addr >= UY_USER_LIMIT || len > UY_USER_LIMIT - addr || len > 0x7fffffffU)
+        return -EFAULT;
+    mm = f_get_task_mm(current);
+    if (!mm) return -EFAULT;
+    copied = uy_access_vm(mm, addr, (void *)src, (int)len, UY_FOLL_WRITE);
+    f_mmput(mm);
+    return copied == (int)len ? 0 : -EFAULT;
 }
 
 static void uy_mmap_write_lock(void *mm)
@@ -523,7 +555,7 @@ static long fake_stage_request(const struct urov_y_request *q, void *mm, unsigne
 
     if (q->fake_addr) {
         if (!mm) return -EINVAL;
-        if (f_access_vm(mm, q->fake_addr, g_fake_stage, (int)len, 0) != (int)len)
+        if (uy_access_vm(mm, q->fake_addr, g_fake_stage, (int)len, 0) != (int)len)
             return -EFAULT;
         return 0;
     }
@@ -727,26 +759,6 @@ static int validate_target_vma(void *vma, uint64_t address)
     return 0;
 }
 
-/* Align the site PTE with the VMA's own protection: a normal RX code page stays
- * read-only, so a user store faults exactly as it did before the session. The
- * COW fault used to install the private page leaves the PTE writable, hence the
- * restore after every write. */
-static void site_set_prot(void *mm, uint64_t page, int writable)
-{
-    uint64_t *ptep = pte_of(mm, page);
-    uint64_t pte;
-    if (!ptep) return;
-    pte = __atomic_load_n(ptep, __ATOMIC_ACQUIRE);
-    if (!(pte & 1ULL)) return;
-    if (writable)
-        pte = (pte | PTE_DBM | PTE_AF) & ~(uint64_t)PTE_RDONLY;
-    else
-        pte = (pte | PTE_RDONLY | PTE_AF) & ~(uint64_t)PTE_DBM;
-    __atomic_store_n(ptep, pte, __ATOMIC_RELEASE);
-    if (f_flush_tlb_mm) f_flush_tlb_mm(mm);
-    else flush_tlb_all();
-}
-
 /* ------------------------------------------------------ page (UXN) arming */
 
 /* A present, non-contiguous 4K leaf PTE. A contiguous run shares one
@@ -768,13 +780,40 @@ static int page_pte_leaf(void *mm, uint64_t page, uint64_t **slot, uint64_t *out
     return 0;
 }
 
-/* A present, user leaf PTE, the only kind a site page may be. */
-static int page_pte_present(void *mm, uint64_t page, uint64_t **slot, uint64_t *out)
+static int page_update_bits(void *mm, uint64_t page, uint64_t set, uint64_t clear,
+                            uint64_t required, uint64_t forbidden)
 {
-    int ret = page_pte_leaf(mm, page, slot, out);
-    if (ret) return ret;
-    if (!(*out & PTE_USER)) return -EOPNOTSUPP;
-    return 0;
+    unsigned attempt;
+
+    for (attempt = 0; attempt < 4; ++attempt) {
+        uint64_t *ptep, old, next;
+        int ret = page_pte_leaf(mm, page, &ptep, &old);
+
+        if (ret) return ret;
+        if ((old & required) != required || (old & forbidden)) return -EOPNOTSUPP;
+        next = (old | set) & ~clear;
+        if (old == next) return 0;
+        /* Reclaim, hardware AF and per-VMA fault paths can update a leaf
+         * independently of the mmap lock. Don't overwrite a newer PTE. */
+        if (__atomic_compare_exchange_n(ptep, &old, next, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            return 1;
+    }
+    return -EAGAIN;
+}
+
+/* Some kernels leave a writable leaf after forced COW of an RX mapping. */
+static void site_set_prot(void *mm, uint64_t page, int writable)
+{
+    int ret;
+
+    uy_mmap_write_lock(mm);
+    ret = page_update_bits(mm, page, PTE_AF | (writable ? PTE_DBM : PTE_RDONLY),
+                           writable ? PTE_RDONLY : PTE_DBM, PTE_USER, 0);
+    if (ret > 0) {
+        if (f_flush_tlb_mm) f_flush_tlb_mm(mm);
+        else flush_tlb_all();
+    }
+    uy_mmap_write_unlock(mm);
 }
 
 /* Toggle EL0 execute-never on a site page. The caller either holds the mmap
@@ -783,20 +822,7 @@ static int page_pte_present(void *mm, uint64_t page, uint64_t **slot, uint64_t *
  * requested state, negative on a page that cannot be trapped. */
 static int page_set_uxn(void *mm, uint64_t page, int set)
 {
-    uint64_t *ptep;
-    uint64_t pte;
-    int ret = page_pte_present(mm, page, &ptep, &pte);
-
-    if (ret) return ret;
-    if (set) {
-        if (pte & PTE_UXN) return 0;
-        pte |= PTE_UXN;
-    } else {
-        if (!(pte & PTE_UXN)) return 0;
-        pte &= ~(uint64_t)PTE_UXN;
-    }
-    __atomic_store_n(ptep, pte, __ATOMIC_RELEASE);
-    return 1;
+    return page_update_bits(mm, page, set ? PTE_UXN : 0, set ? 0 : PTE_UXN, PTE_USER, 0);
 }
 
 /* Toggle EL0 data permission (AP[1]) on the target page.  With AP[2] (read-
@@ -806,20 +832,7 @@ static int page_set_uxn(void *mm, uint64_t page, int set)
  * fault that installed this PTE. */
 static int page_set_ap(void *mm, uint64_t page, int set)
 {
-    uint64_t *ptep;
-    uint64_t pte;
-    int ret = page_pte_leaf(mm, page, &ptep, &pte);
-
-    if (ret) return ret;
-    if (set) {
-        if (pte & PTE_USER) return 0;
-        pte |= PTE_USER;
-    } else {
-        if (!(pte & PTE_USER)) return 0;
-        pte &= ~(uint64_t)PTE_USER;
-    }
-    __atomic_store_n(ptep, pte, __ATOMIC_RELEASE);
-    return 1;
+    return page_update_bits(mm, page, set ? PTE_USER : 0, set ? 0 : PTE_USER, PTE_RDONLY, PTE_UXN);
 }
 
 static int page_pte_ok(void *mm, uint64_t base);
@@ -841,7 +854,8 @@ static long ap_arm_pages(struct uy_session *s, void *mm)
         uy_mmap_write_lock(mm);
         for (i = 0; i < s->page_count; ++i) {
             struct uy_page *p = &s->pages[i];
-            ret = page_pte_ok(mm, p->base);
+            ret = validate_target_vma(f_find_vma(mm, p->base), p->base);
+            if (!ret) ret = page_pte_ok(mm, p->base);
             if (!ret) ret = page_set_ap(mm, p->base, 0);
             if (ret < 0) {
                 failed = 1;
@@ -868,7 +882,7 @@ static long ap_arm_pages(struct uy_session *s, void *mm)
         if (ret != -EAGAIN && ret != -EFAULT) return ret;
         for (i = 0; i < s->page_count; ++i) {
             uint32_t word;
-            if (f_access_vm(mm, s->pages[i].base, &word, 4, 0) != 4) return -EFAULT;
+            if (uy_access_vm(mm, s->pages[i].base, &word, 4, 0) != 4) return -EFAULT;
         }
     }
     return ret < 0 ? ret : -EAGAIN;
@@ -902,7 +916,7 @@ static long site_arm_page(struct uy_site *s, void *mm)
     uint32_t word;
     int ret = -EAGAIN, tries;
 
-    if (f_access_vm(mm, s->pc, &word, 4, 0) != 4) {
+    if (uy_access_vm(mm, s->pc, &word, 4, 0) != 4) {
         if (g_verbose)
             pr_info("urov-y: page arm could not read site pc=%llx\n",
                     (unsigned long long)s->pc);
@@ -919,7 +933,7 @@ static long site_arm_page(struct uy_site *s, void *mm)
         /* Evicted between the read and the lock: fault it in again with the
          * write lock dropped, then retry. */
         uy_mmap_write_unlock(mm);
-        if (f_access_vm(mm, s->pc, &word, 4, 0) != 4) return -EFAULT;
+        if (uy_access_vm(mm, s->pc, &word, 4, 0) != 4) return -EFAULT;
         uy_mmap_write_lock(mm);
     }
     if (ret >= 0) {
@@ -986,7 +1000,7 @@ static long site_arm(struct uy_site *s, void *mm, uint64_t pc, int writable)
     /* FOLL_FORCE turns a write fault on the read-only private mapping into the
      * normal COW path (the same mechanism ptrace uses to plant breakpoints), so
      * neither the file page nor the shared page cache is ever modified. */
-    wrote = f_access_vm(mm, pc, &s->trap, 4, g_write_gup_flags);
+    wrote = uy_access_vm(mm, pc, &s->trap, 4, g_write_gup_flags);
     if (g_verbose)
         pr_info("urov-y: arm pc=%llx wrote=%d writable=%u\n",
                 (unsigned long long)pc, wrote, s->writable);
@@ -1019,7 +1033,7 @@ static void site_disarm(struct uy_site *s, void *mm)
         site_disarm_page(s, mm);
         return;
     }
-    if (f_access_vm(mm, s->pc, &s->original, 4, g_write_gup_flags) == 4)
+    if (uy_access_vm(mm, s->pc, &s->original, 4, g_write_gup_flags) == 4)
         uy_flush_icache_all();
     site_set_prot(mm, s->page, (int)s->writable);
     s->armed = 0;
@@ -1333,7 +1347,7 @@ static void uy_llsc_prepare(struct pt_regs *regs, uint64_t pc, struct uy_llsc *o
     int wide, lwide;
 
     memset(out, 0, sizeof(*out));
-    if (pc < 4U || f_copy_in(&prev, (const void *)(pc - 4U), 4U) ||
+    if (!f_copy_out || pc < 4U || f_copy_in(&prev, (const void *)(pc - 4U), 4U) ||
         f_copy_in(&next, (const void *)(pc + 4U), 4U))
         return;
     if (!uy_is_ldxr(prev, &lrn, &lrt, &lwide) ||
@@ -1637,28 +1651,39 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
     uy_page_abort(far, esr, regs, args);
 }
 
+static void uy_mm_fault_before(hook_fargs4_t *args, void *udata)
+{
+    const char *vma = (const char *)args->arg0;
+
+    (void)udata;
+    /* Newer handle_mm_fault() can drop the VMA lock and invalidate the
+     * pointer. Capture its mm while the caller's protection still holds. */
+    args->local.data0 = vma && overlay_live() ?
+        (uintptr_t)__atomic_load_n((void *const *)(vma + g_layout.vma_mm), __ATOMIC_RELAXED) : 0;
+}
+
 /* A fault-in just (re)created the site page PTE from the VMA protection, which
  * is executable. Re-apply the execute-never bit so a page that was evicted or
  * dropped does not silently lose its trap. Covers the user fault path and
  * get_user_pages based readers such as /proc/self/mem. */
 static void uy_mm_fault_after(hook_fargs4_t *args, void *udata)
 {
-    /* The four- and five-argument wrappers share this prefix. */
-    void *vma = (void *)args->arg0;
+    /* The three-, four-, five- and eight-register wrappers share this prefix. */
+    void *mm = (void *)args->local.data0;
     uint64_t page = page_base(args->arg1);
     int ret = 0;
 
     (void)udata;
-    if (!g_mmf_hooked || (args->ret & UY_FAULT_INCOMPLETE) || !overlay_live() || !vma) return;
-    if (mm_of_task(current) != g_sess.mm) return;
-    if (__atomic_load_n((void **)((char *)vma + g_layout.vma_mm), __ATOMIC_RELAXED) != g_sess.mm) return;
+    if (!g_mmf_hooked || (args->ret & UY_FAULT_INCOMPLETE) || !mm ||
+        !overlay_live() || mm != mm_of_task(current))
+        return;
 
     __atomic_fetch_add(&g_handlers, 1, __ATOMIC_ACQ_REL);
-    if (mm_of_task(current) == g_sess.mm) {
+    if (mm == g_sess.mm) {
         if (ap_mode_live() && page_find(page))
-            ret = page_set_ap(g_sess.mm, page, 0);
+            ret = page_set_ap(mm, page, 0);
         else if (page_mode_live() && site_by_page(page))
-            ret = page_set_uxn(g_sess.mm, page, 1);
+            ret = page_set_uxn(mm, page, 1);
     }
     if (ret > 0) flush_tlb_all();
     __atomic_fetch_sub(&g_handlers, 1, __ATOMIC_RELEASE);
@@ -1765,10 +1790,36 @@ static int page_pte_ok(void *mm, uint64_t base)
     return 0;
 }
 
-/* Build one page image from the descriptor.  The page's current bytes are
- * read first (this also faults it in), then either the whole file page
- * (SRC_FILE), the caller's window/image (SRC_USER) or the v7 staging bytes
- * (fake_addr == 0) is laid over them. */
+/* Look up and use vm_file while its VMA is protected. The access_remote_vm
+ * snapshot must run separately since GUP takes the mmap lock itself. */
+static long page_read_file(void *mm, uint64_t base, void *image)
+{
+    const uint64_t max_pos = UINT64_C(0x7fffffffffffffff);
+    void *vma, *file;
+    uint64_t pgoff, delta;
+    int64_t pos;
+    long ret;
+
+    if (!f_kernel_read || !g_layout.vma_pgoff_ok) return -EOPNOTSUPP;
+    uy_mmap_write_lock(mm);
+    vma = f_find_vma(mm, base);
+    ret = validate_target_vma(vma, base);
+    if (ret) goto out;
+    file = *(void **)((char *)vma + g_layout.vma_file);
+    pgoff = *(unsigned long *)((char *)vma + g_layout.vma_pgoff);
+    delta = base - *(unsigned long *)((char *)vma + g_layout.vma_start);
+    if (!file || pgoff > ((max_pos - delta - UROV_Y_PAGE) >> UROV_Y_PAGE_SHIFT)) {
+        ret = -EINVAL;
+        goto out;
+    }
+    pos = (int64_t)((pgoff << UROV_Y_PAGE_SHIFT) + delta);
+    ret = f_kernel_read(file, image, UROV_Y_PAGE, &pos) == (long)UROV_Y_PAGE ? 0 : -EIO;
+out:
+    uy_mmap_write_unlock(mm);
+    return ret;
+}
+
+/* Snapshot the mapped bytes, then overlay the file, user buffer or v7 words. */
 static long page_build_image(struct uy_page *p, const struct uy_page_desc *d,
                              void *mm, int legacy_inline)
 {
@@ -1776,7 +1827,7 @@ static long page_build_image(struct uy_page *p, const struct uy_page_desc *d,
     uint32_t len = d->fake_len ? d->fake_len : UROV_Y_PAGE;
     uint32_t i;
 
-    if (f_access_vm(mm, p->base, p->image, UROV_Y_PAGE, 0) != (int)UROV_Y_PAGE) {
+    if (uy_access_vm(mm, p->base, p->image, UROV_Y_PAGE, 0) != (int)UROV_Y_PAGE) {
         if (g_verbose) pr_info("urov-y: image snapshot base=%llx failed\n", (unsigned long long)p->base);
         return -EFAULT;
     }
@@ -1790,16 +1841,14 @@ static long page_build_image(struct uy_page *p, const struct uy_page_desc *d,
         return 0;
     }
     if (d->flags & UROV_Y_PAGE_SRC_FILE) {
-        int64_t pos = (int64_t)p->file_off;
+        long ret = page_read_file(mm, p->base, p->image);
 
-        if (!f_kernel_read || !p->file) return -EOPNOTSUPP;
-        if (f_kernel_read(p->file, p->image, UROV_Y_PAGE, &pos) != (long)UROV_Y_PAGE)
-            return -EIO;
+        if (ret) return ret;
         p->fake_off = 0;
         p->fake_len = UROV_Y_PAGE;
         return 0;
     }
-    if (f_access_vm(mm, d->fake_addr, g_fake_stage, (int)len, 0) != (int)len) {
+    if (uy_access_vm(mm, d->fake_addr, g_fake_stage, (int)len, 0) != (int)len) {
         if (g_verbose) pr_info("urov-y: fake read addr=%llx len=%u failed\n",
                 (unsigned long long)d->fake_addr, len);
         return -EFAULT;
@@ -1814,7 +1863,6 @@ static long do_register(struct urov_y_request *q)
 {
     void *task = current;
     void *mm;
-    void *vma;
     struct uy_page_desc *descs = 0;
     uint64_t desc_bytes = 0;
     uint8_t *arena = 0, *snapshots = 0;
@@ -1829,6 +1877,7 @@ static long do_register(struct urov_y_request *q)
     if (mode != UROV_Y_MODE_SITE_BRK && mode != UROV_Y_MODE_PAGE_UXN &&
         mode != UROV_Y_MODE_PAGE_AP)
         return -EINVAL;
+    if (mode == UROV_Y_MODE_SITE_BRK && !g_brk_hooked) return -EOPNOTSUPP;
     if (mode != UROV_Y_MODE_SITE_BRK && (!g_page_hooked || !g_mmf_hooked))
         return -EOPNOTSUPP;
     if (q->site_count > UROV_Y_MAX_SITES) return -EINVAL;
@@ -1927,7 +1976,7 @@ static long do_register(struct urov_y_request *q)
         uint64_t done = 0;
         while (done < desc_bytes) {
             unsigned chunk = desc_bytes - done > 4096U ? 4096U : (unsigned)(desc_bytes - done);
-            if (f_access_vm(mm, q->pages_addr + done, (uint8_t *)descs + done,
+            if (uy_access_vm(mm, q->pages_addr + done, (uint8_t *)descs + done,
                             (int)chunk, 0) != (int)chunk) {
                 ret = -EFAULT;
                 goto fail;
@@ -2018,15 +2067,10 @@ static long do_register(struct urov_y_request *q)
         p->image = arena + (uint64_t)i * UROV_Y_PAGE;
         if (snapshots) p->snapshot = snapshots + (uint64_t)i * UROV_Y_PAGE;
         p->seq = 0;
-        vma = f_find_vma(mm, p->base);
-        ret = validate_target_vma(vma, p->base);
+        uy_mmap_write_lock(mm);
+        ret = validate_target_vma(f_find_vma(mm, p->base), p->base);
+        uy_mmap_write_unlock(mm);
         if (ret) goto fail_armed;
-        if (d->flags & UROV_Y_PAGE_SRC_FILE) {
-            unsigned long start = *(unsigned long *)((char *)vma + g_layout.vma_start);
-            p->file = *(void **)((char *)vma + g_layout.vma_file);
-            p->file_off = ((uint64_t)*(unsigned long *)((char *)vma + g_layout.vma_pgoff) << 12) +
-                          (p->base - start);
-        }
         ret = page_build_image(p, d, mm, legacy_inline);
         if (ret) goto fail_armed;
     }
@@ -2043,8 +2087,10 @@ static long do_register(struct urov_y_request *q)
         }
         for (i = 0; i < q->site_count; ++i) {
             site_writable[i] = 0;
+            uy_mmap_write_lock(mm);
             ret = validate_site_vma(f_find_vma(mm, q->sites[i]), q->sites[i],
                                     mode != UROV_Y_MODE_SITE_BRK, &site_writable[i]);
+            uy_mmap_write_unlock(mm);
             if (ret) goto fail_armed;
             g_sess.sites[i].pc = q->sites[i];
             g_sess.sites[i].armed = 0;
@@ -2070,7 +2116,7 @@ static long do_register(struct urov_y_request *q)
     q->flags = 0;
     q->page_count = n;
     q->page_stride = UROV_Y_PAGE_DESC_SIZE;
-    q->session_flags = UROV_Y_CAPS;
+    q->session_flags = g_caps;
     page_status_words(q, &g_sess.pages[0]);
     q->offset = g_sess.pages[0].fake_off;
     q->length = g_sess.pages[0].fake_len;
@@ -2163,14 +2209,14 @@ static long do_set_page(struct urov_y_request *q)
     if (q->expected_generation != g_sess.generation) return -EAGAIN;
 
     if (p->flags & UROV_Y_PAGE_SRC_FILE) {
-        int64_t pos;
-        if (!f_kernel_read || !p->file) return -EOPNOTSUPP;
+        long ret;
+
         image = uy_alloc(UROV_Y_PAGE);
         if (!image) return -ENOMEM;
-        pos = (int64_t)p->file_off;
-        if (f_kernel_read(p->file, image, UROV_Y_PAGE, &pos) != (long)UROV_Y_PAGE) {
+        ret = page_read_file(g_sess.mm, p->base, image);
+        if (ret) {
             uy_free(image);
-            return -EIO;
+            return ret;
         }
         page_swap_image(p, image, 0, UROV_Y_PAGE);
     } else {
@@ -2179,7 +2225,7 @@ static long do_set_page(struct urov_y_request *q)
         if (len < 8U || len > UROV_Y_PAGE || (len & 7U) || off > UROV_Y_PAGE - len)
             return -EINVAL;
         if (!q->fake_addr || q->fake_addr >= UY_USER_LIMIT) return -EINVAL;
-        if (f_access_vm(g_sess.mm, q->fake_addr, g_fake_stage, (int)len, 0) != (int)len)
+        if (uy_access_vm(g_sess.mm, q->fake_addr, g_fake_stage, (int)len, 0) != (int)len)
             return -EFAULT;
         image = uy_alloc(UROV_Y_PAGE);
         if (!image) {
@@ -2207,7 +2253,7 @@ static long do_set_page(struct urov_y_request *q)
     q->state = UROV_Y_ACTIVE;
     q->page_count = g_sess.page_count;
     q->page_stride = UROV_Y_PAGE_DESC_SIZE;
-    q->session_flags = UROV_Y_CAPS;
+    q->session_flags = g_caps;
     page_status_words(q, &g_sess.pages[0]);
     q->offset = g_sess.pages[0].fake_off;
     q->length = g_sess.pages[0].fake_len;
@@ -2245,7 +2291,7 @@ static void status_inactive(struct urov_y_request *q)
     q->flags = 0;
     q->page_count = 0;
     q->page_stride = UROV_Y_PAGE_SHIFT;
-    q->session_flags = UROV_Y_CAPS;
+    q->session_flags = g_caps;
     q->reserved = 0;
     q->reserved2 = 0;
     q->state = UROV_Y_INACTIVE;
@@ -2265,7 +2311,7 @@ static long do_status(struct urov_y_request *q, int with_counters)
     q->flags = 0;
     q->page_count = g_sess.page_count;
     q->page_stride = UROV_Y_PAGE_DESC_SIZE;
-    q->session_flags = UROV_Y_CAPS;
+    q->session_flags = g_caps;
     q->reserved = armed_pages();
     q->reserved2 = 0;
     page_status_words(q, p0);
@@ -2288,7 +2334,7 @@ static long do_query(struct urov_y_request *q)
     /* Capacity report: max page quota and the base page shift. */
     q->page_count = g_max_pages;
     q->page_stride = UROV_Y_PAGE_SHIFT;
-    q->session_flags = UROV_Y_CAPS;
+    q->session_flags = g_caps;
     q->reserved = 0;
     return 0;
 }
@@ -2315,7 +2361,7 @@ static long do_deactivate(struct urov_y_request *q)
     q->flags = 0;
     q->page_count = 0;
     q->page_stride = UROV_Y_PAGE_SHIFT;
-    q->session_flags = UROV_Y_CAPS;
+    q->session_flags = g_caps;
     q->reserved = 0;
     q->reserved2 = 0;
     q->state = UROV_Y_INACTIVE;
@@ -2373,7 +2419,7 @@ static void uy_prctl_before(hook_fargs6_t *args, void *udata)
         q.op != (uint16_t)cmd) return;
     if (q.mac != urov_y_request_mac(g_keys.mac, &q)) return;
     ret = dispatch(&q, cmd);
-    if (f_copy_out(user, &q, sizeof(q))) ret = -EFAULT;
+    if (uy_copy_control_reply(user, &q, sizeof(q))) ret = -EFAULT;
     args->ret = (uint64_t)ret;
     args->skip_origin = 1;
 }
@@ -2536,105 +2582,210 @@ static int supported_pagetables(void)
            t0sz <= 39U && t1sz <= 39U && (60U - t0sz) / 9U == (60U - t1sz) / 9U;
 }
 
-static long resolve_kernel(int *brk_argc, int *mmf_argc)
+static void resolve_allocators(void)
 {
-    const char *vma_name = "find_vma", *fault_name = "handle_mm_fault";
-    uintptr_t start = (uintptr_t)lookup("__start_BTF");
-    uintptr_t end = (uintptr_t)lookup("__stop_BTF");
-    struct kclf_btf btf;
+    f_kvmalloc_node = (kvmalloc_node_t)lookup("kvmalloc_node");
+    if (!f_kvmalloc_node) f_kvmalloc_node = (kvmalloc_node_t)lookup("kvmalloc_node_noprof");
+    f_kvfree = (kvfree_t)lookup("kvfree");
+    if (!f_kvfree) f_kvmalloc_node = 0;
+    f_vmalloc = (vmalloc_t)lookup("vmalloc");
+    if (!f_vmalloc) f_vmalloc = (vmalloc_t)lookup("vmalloc_noprof");
+    f_vfree = (vfree_t)lookup("vfree");
+    if (!f_vfree) f_vmalloc = 0;
+}
+
+static int uy_read_exact(void *file, void *buf, size_t bytes, int64_t *pos)
+{
+    uint8_t *dst = buf;
+
+    while (bytes) {
+        long n = f_kernel_read(file, dst, bytes, pos);
+
+        if (n <= 0 || (size_t)n > bytes) return -EIO;
+        dst += n;
+        bytes -= (size_t)n;
+    }
+    return 0;
+}
+
+static long open_detached_btf(struct kclf_btf *btf, const char *path, void **storage)
+{
+    filp_open_t open = (filp_open_t)lookup("filp_open");
+    filp_close_t close = (filp_close_t)lookup("filp_close");
+    uintptr_t start = (uintptr_t)lookup("__start_notes");
+    uintptr_t end = (uintptr_t)lookup("__stop_notes");
+    struct uy_btf_pack pack;
+    int64_t pos = 0;
+    void *file;
+    long ret;
+
+    if (!open || !close || !f_kernel_read || !start || end <= start || end - start > 65536U)
+        return -EOPNOTSUPP;
+    file = open(path, 0 /* O_RDONLY */, 0);
+    if ((uintptr_t)file >= (uintptr_t)-4095L) return (long)file;
+    ret = uy_read_exact(file, &pack, sizeof(pack), &pos);
+    if (ret) goto out;
+    if (!uy_btf_pack_matches(&pack, (const void *)start, end - start)) {
+        pr_info("urov-y: detached BTF header or kernel build ID mismatch\n");
+        ret = -EINVAL;
+        goto out;
+    }
+    *storage = uy_alloc(pack.bytes);
+    if (!*storage) {
+        ret = -ENOMEM;
+        goto out;
+    }
+    ret = uy_read_exact(file, *storage, pack.bytes, &pos);
+    if (!ret && uy_btf_open(btf, *storage, pack.bytes)) ret = -EINVAL;
+out:
+    close(file, 0);
+    return ret;
+}
+
+static long resolve_symbols(const struct kclf_btf *btf, int *brk_argc, int *mmf_argc)
+{
+    const char *brk_name = "do_el0_brk64", *vma_name = "find_vma";
+    const char *fault_name = "handle_mm_fault", *access_name = "access_remote_vm";
+    const char *read_name = "copy_from_user_nofault", *write_name = "copy_to_user_nofault";
+    void *access;
+    int access_argc;
     unsigned foll_force;
 
-    if (kver < VERSION(5, 4, 0) || kver >= VERSION(7, 0, 0) || !supported_pagetables()) {
-        pr_info("urov-y: unsupported kernel or page tables (kver=%x)\n", kver);
-        return -EOPNOTSUPP;
+    foll_force = uy_foll_force(btf, kver >= VERSION(6, 3, 0) ? 0x08U : 0x10U);
+    g_write_gup_flags = foll_force ? UY_FOLL_WRITE | foll_force : 0;
+    f_brk_handler = lookup(brk_name);
+    *brk_argc = f_brk_handler && uy_symbol_abi(btf, brk_name, "vsr") ? 2 : 0;
+    if (!*brk_argc) {
+        brk_name = "brk_handler";
+        f_brk_handler = lookup(brk_name);
+        *brk_argc = f_brk_handler && uy_symbol_abi(btf, brk_name, "ilsr") ? 3 : 0;
     }
-    if (!start || end <= start || end - start > 64UL * 1024 * 1024 ||
-        kclf_btf_open(&btf, (const void *)start, end - start) || uy_layout_from_btf(&g_layout, &btf)) {
-        pr_info("urov-y: live BTF missing or incompatible MM/register layout\n");
-        return -EOPNOTSUPP;
-    }
+    if (!g_write_gup_flags) *brk_argc = 0;
 
-    foll_force = uy_foll_force(&btf, kver >= VERSION(6, 3, 0) ? 0x08U : 0x10U);
-    g_write_gup_flags = UY_FOLL_WRITE | foll_force;
-    f_brk_handler = lookup("do_el0_brk64");
-    *brk_argc = f_brk_handler ? 2 : 3;
-    if (!f_brk_handler) f_brk_handler = lookup("brk_handler");
-
-    f_do_mem_abort = lookup("do_mem_abort");
+    if (uy_symbol_abi(btf, "do_mem_abort", "vlsr"))
+        f_do_mem_abort = lookup("do_mem_abort");
     f_handle_mm_fault = lookup(fault_name);
-    *mmf_argc = f_handle_mm_fault ? uy_mm_fault_argc(&btf, fault_name, 4) : 0;
+    *mmf_argc = f_handle_mm_fault ? uy_mm_fault_argc(btf, fault_name, 1) : 0;
     if (!*mmf_argc) {
         fault_name = "do_handle_mm_fault";
         f_handle_mm_fault = lookup(fault_name);
-        *mmf_argc = f_handle_mm_fault ? uy_mm_fault_argc(&btf, fault_name, 0) : 0;
+        *mmf_argc = f_handle_mm_fault ? uy_mm_fault_argc(btf, fault_name, 0) : 0;
     }
 
     f_get_task_mm = (get_task_mm_t)lookup("get_task_mm");
     f_mmput = (mmput_t)lookup("mmput");
     f_find_vma = (find_vma_t)lookup(vma_name);
-    if (!f_find_vma) {
+    if (!f_find_vma || !uy_symbol_abi(btf, vma_name, "aml")) {
         vma_name = "__find_vma";
         f_find_vma = (find_vma_t)lookup(vma_name);
     }
+    if (!f_find_vma || !uy_symbol_abi(btf, vma_name, "aml")) {
+        vma_name = "vma_lookup";
+        f_find_vma = (find_vma_t)lookup(vma_name);
+    }
+    if (f_find_vma && !uy_symbol_abi(btf, vma_name, "aml")) f_find_vma = 0;
+
     f_mmap_write_lock = (mmap_write_fn)lookup("mmap_write_lock");
     f_mmap_write_unlock = (mmap_write_fn)lookup("mmap_write_unlock");
-    g_use_rwsem = !f_mmap_write_lock || !f_mmap_write_unlock;
-    if (g_use_rwsem && g_layout.mmap_lock >= 0) {
-        f_mmap_write_lock = (mmap_write_fn)lookup("down_write");
-        f_mmap_write_unlock = (mmap_write_fn)lookup("up_write");
+    g_use_rwsem = !f_mmap_write_lock || !f_mmap_write_unlock ||
+                  !uy_symbol_abi(btf, "mmap_write_lock", "vm") ||
+                  !uy_symbol_abi(btf, "mmap_write_unlock", "vm");
+    if (g_use_rwsem) {
+        f_mmap_write_lock = g_layout.mmap_lock < 0 ? 0 : (mmap_write_fn)lookup("down_write");
+        f_mmap_write_unlock = g_layout.mmap_lock < 0 ? 0 : (mmap_write_fn)lookup("up_write");
     }
 
     f_flush_tlb_mm = (flush_tlb_mm_t)lookup("flush_tlb_mm");
-    f_force_sig_fault = (force_sig_fault_t)lookup("force_sig_fault");
-    f_copy_in = (copy_nofault_t)lookup("copy_from_user_nofault");
-    if (!f_copy_in) f_copy_in = (copy_nofault_t)lookup("probe_user_read");
-    f_copy_out = (copy_nofault_t)lookup("copy_to_user_nofault");
-    f_access_vm = (access_remote_vm_t)lookup("access_remote_vm");
-    if (!f_access_vm) f_access_vm = (access_remote_vm_t)lookup("__access_remote_vm");
+    if (uy_symbol_abi(btf, "force_sig_fault", "iiip"))
+        f_force_sig_fault = (force_sig_fault_t)lookup("force_sig_fault");
 
-    /* Page images may reach a few MiB, so the 2 MiB KPM RW pool is not a
-     * usable backing store.  Prefer kvmalloc_node/kvfree and fall back to
-     * vmalloc/vfree; both are sleepable and only used from control paths. */
-    f_kvmalloc_node = (kvmalloc_node_t)lookup("kvmalloc_node");
-    f_kvfree = (kvfree_t)lookup("kvfree");
-    if (!f_kvmalloc_node || !f_kvfree) {
-        f_kvmalloc_node = 0;
-        f_kvfree = 0;
+    f_copy_in = (copy_nofault_t)lookup(read_name);
+    if (!f_copy_in || !uy_symbol_abi(btf, read_name, "lppl")) {
+        read_name = "probe_user_read";
+        f_copy_in = (copy_nofault_t)lookup(read_name);
     }
-    f_vmalloc = (vmalloc_t)lookup("vmalloc");
-    f_vfree = (vfree_t)lookup("vfree");
-    if (!f_vmalloc) {
-        f_vmalloc = (vmalloc_t)lookup("vmalloc_noprof");
-        f_vfree = (vfree_t)lookup("vfree_noprof");
+    if (f_copy_in && !uy_symbol_abi(btf, read_name, "lppl")) f_copy_in = 0;
+    f_copy_out = (copy_nofault_t)lookup(write_name);
+    if (!f_copy_out || !uy_symbol_abi(btf, write_name, "lppl")) {
+        write_name = "probe_user_write";
+        f_copy_out = (copy_nofault_t)lookup(write_name);
     }
-    f_kernel_read = (kernel_read_t)lookup("kernel_read");
+    if (f_copy_out && !uy_symbol_abi(btf, write_name, "lppl")) f_copy_out = 0;
 
-    /* The large-transfer path needs the kernel's own FPSIMD state handling:
-     * fpsimd_signal_preserve_current_state() saves the live vector registers
-     * (and syncs an SVE task's state down to FPSIMD), and
-     * fpsimd_update_current_state() adopts the patched image and reloads it.
-     * Without both, or without the BTF layout of thread.uw.fpsimd_state, a
-     * SIMD&FP load keeps failing closed instead of returning original bytes. */
+    access = lookup(access_name);
+    access_argc = access ? uy_access_vm_argc(btf, access_name, 1) : 0;
+    if (!access_argc) {
+        access_name = "__access_remote_vm";
+        access = lookup(access_name);
+        access_argc = access ? uy_access_vm_argc(btf, access_name, 0) : 0;
+    }
+    if (access_argc == 5) f_access_vm = (access_remote_vm_t)access;
+    if (access_argc == 6) f_access_vm_task = (access_remote_vm_task_t)access;
+
+    /* Without both FPSIMD helpers and the saved-state layout, vector loads
+     * fail closed. In particular, don't substitute a raw register save. */
     f_fp_preserve = (fpsimd_preserve_t)lookup("fpsimd_signal_preserve_current_state");
     f_fp_update = (fpsimd_update_t)lookup("fpsimd_update_current_state");
-    g_fp_ready = f_fp_preserve && f_fp_update && g_layout.task_fpsimd >= 0;
+    g_fp_ready = f_fp_preserve && f_fp_update && g_layout.task_fpsimd >= 0 &&
+                 uy_symbol_abi(btf, "fpsimd_signal_preserve_current_state", "v") &&
+                 uy_symbol_abi(btf, "fpsimd_update_current_state", "vf");
 
-    if (!f_brk_handler || !f_get_task_mm || !f_mmput || !f_find_vma ||
+    if (!f_get_task_mm || !f_mmput || !f_find_vma ||
         !f_mmap_write_lock || !f_mmap_write_unlock || !f_force_sig_fault ||
-        !f_copy_in || !f_copy_out || !f_access_vm || !foll_force ||
-        (!f_kvmalloc_node && (!f_vmalloc || !f_vfree))) {
-        pr_info("urov-y: required BRK/MM/uaccess/allocation ABI unavailable\n");
+        !f_copy_in || !access_argc || (!*brk_argc && !(f_do_mem_abort && *mmf_argc))) {
+        pr_info("urov-y: required MM/uaccess/signal or trap ABI unavailable\n");
         return -EOPNOTSUPP;
     }
     if (g_verbose)
-        pr_info("urov-y: kver=%x BTF task.mm=%d mm.pgd=%d mm.users=%d vma.flags=%d vma.file=%d "
-                "task.fpsimd=%d fpsimd=%d lookup=%s lock=%s mm_fault=%s/%d brk_args=%d "
-                "foll_force=0x%x\n",
-                kver, g_layout.task_mm, g_layout.mm_pgd, g_layout.mm_users,
-                g_layout.vma_flags, g_layout.vma_file, g_layout.task_fpsimd,
-                g_fp_ready, vma_name, g_use_rwsem ? "rwsem" : "mmap",
-                *mmf_argc ? fault_name : "none", *mmf_argc, *brk_argc, foll_force);
+        pr_info("urov-y: kver=%x vma=%s lock=%s mm_fault=%s/%d brk=%s/%d "
+                "access=%s/%d read=%s write=%s fpsimd=%d foll_force=0x%x\n",
+                kver, vma_name, g_use_rwsem ? "rwsem" : "mmap",
+                *mmf_argc ? fault_name : "none", *mmf_argc,
+                *brk_argc ? brk_name : "none", *brk_argc, access_name, access_argc,
+                read_name, f_copy_out ? write_name : "control-gup", g_fp_ready, foll_force);
     return 0;
+}
+
+static long resolve_kernel(const char *btf_path, int *brk_argc, int *mmf_argc)
+{
+    struct kclf_btf btf;
+    void *storage = 0;
+    long ret = 0;
+
+    if (kver < VERSION(5, 4, 0) || kver >= VERSION(7, 0, 0) || !supported_pagetables()) {
+        pr_info("urov-y: unsupported kernel or page tables (kver=%x)\n", kver);
+        return -EOPNOTSUPP;
+    }
+    resolve_allocators();
+    if (!f_kvmalloc_node && !f_vmalloc) return -EOPNOTSUPP;
+    f_kernel_read = (kernel_read_t)lookup("kernel_read");
+    if (btf_path[0]) {
+        ret = open_detached_btf(&btf, btf_path, &storage);
+    } else {
+        uintptr_t start = (uintptr_t)lookup("__start_BTF");
+        uintptr_t end = (uintptr_t)lookup("__stop_BTF");
+
+        if (!start || end <= start || end - start > UY_BTF_MAX ||
+            uy_btf_open(&btf, (const void *)start, end - start))
+            ret = -EOPNOTSUPP;
+    }
+    if (ret) {
+        pr_info("urov-y: cannot open %s BTF (%ld); matching layout is required\n",
+                btf_path[0] ? "detached" : "live", ret);
+    } else if (uy_layout_from_btf(&g_layout, &btf)) {
+        pr_info("urov-y: incompatible MM/register layout in %s BTF\n",
+                btf_path[0] ? "detached" : "live");
+        ret = -EOPNOTSUPP;
+    } else {
+        if (g_verbose)
+            pr_info("urov-y: btf=%s task.mm=%d mm.pgd=%d mm.users=%d mmap_lock=%d "
+                    "vma.flags=%d task.fpsimd=%d\n", btf_path[0] ? "detached" : "live",
+                    g_layout.task_mm, g_layout.mm_pgd, g_layout.mm_users, g_layout.mmap_lock,
+                    g_layout.vma_flags, g_layout.task_fpsimd);
+        ret = resolve_symbols(&btf, brk_argc, mmf_argc);
+    }
+    uy_free(storage);
+    return ret;
 }
 
 static int parse_u32(const char *v, unsigned n, uint32_t *out)
@@ -2652,7 +2803,10 @@ static int parse_u32(const char *v, unsigned n, uint32_t *out)
     return 0;
 }
 
-static long parse_args(const char *args, uint8_t key[16], int *have_key)
+#define UY_BTF_PATH_MAX 192U
+
+static long parse_args(const char *args, uint8_t key[16], int *have_key,
+                       char btf_path[UY_BTF_PATH_MAX])
 {
     const char *p = args;
 
@@ -2668,6 +2822,13 @@ static long parse_args(const char *args, uint8_t key[16], int *have_key)
             *have_key = 1;
         } else if (prefix(p, "verbose", 7) && (p[7] == 0 || p[7] == ' ')) {
             g_verbose = 1;
+        } else if (prefix(p, "btf=", 4)) {
+            v = p + 4;
+            while (v[n] && v[n] != ' ') ++n;
+            if (btf_path[0] || v[0] != '/' || n < 2 || n >= UY_BTF_PATH_MAX)
+                return -EINVAL;
+            memcpy(btf_path, v, n);
+            btf_path[n] = 0;
         } else if (prefix(p, "max_pages=", 10)) {
             uint32_t value;
             v = p + 10;
@@ -2693,6 +2854,7 @@ static long parse_args(const char *args, uint8_t key[16], int *have_key)
 long urov_y_backend_init(const char *args)
 {
     uint8_t key[16];
+    char btf_path[UY_BTF_PATH_MAX] = {0};
     uint64_t kdf_key[2];
     int have_key = 0;
     unsigned int checks = 0;
@@ -2700,7 +2862,7 @@ long urov_y_backend_init(const char *args)
     int i, brk_argc, mmf_argc;
 
     memset(key, 0, sizeof(key));
-    ret = parse_args(args, key, &have_key);
+    ret = parse_args(args, key, &have_key, btf_path);
     if (ret) return ret;
     if (!have_key) return -EINVAL;
     kdf_key[0] = urov_x_load64(key);
@@ -2715,17 +2877,16 @@ long urov_y_backend_init(const char *args)
     if (!kallsyms_lookup_name) return -ENOSYS;
     if (uro_core_selftest(g_selftest_ws, &checks) || checks != URO_CORE_CHECKS) return -EINVAL;
 
-    ret = resolve_kernel(&brk_argc, &mmf_argc);
+    ret = resolve_kernel(btf_path, &brk_argc, &mmf_argc);
     if (ret) return ret;
     g_wrapper_mode = has_syscall_wrapper ? 1 : 0;
 
-    ret = hook_wrap(f_brk_handler, brk_argc, uy_brk_before, 0,
-                    (void *)(uintptr_t)(brk_argc == 2));
-    if (ret) {
-        if (g_verbose) pr_info("urov-y: hook brk_handler failed: %ld\n", ret);
-        return -EOPNOTSUPP;
+    if (brk_argc) {
+        ret = hook_wrap(f_brk_handler, brk_argc, uy_brk_before, 0,
+                        (void *)(uintptr_t)(brk_argc == 2));
+        g_brk_hooked = ret ? 0 : 1;
+        if (ret && g_verbose) pr_info("urov-y: hook BRK handler failed: %ld\n", ret);
     }
-    g_brk_hooked = 1;
 
     ret = fp_hook_syscalln(__NR_prctl, 6, uy_prctl_before, 0, 0);
     if (ret) {
@@ -2764,13 +2925,23 @@ long urov_y_backend_init(const char *args)
         if (ret && g_verbose) pr_info("urov-y: hook do_mem_abort failed: %ld\n", ret);
     }
     if (g_page_hooked) {
-        ret = hook_wrap(f_handle_mm_fault, mmf_argc, 0, uy_mm_fault_after, 0);
+        ret = hook_wrap(f_handle_mm_fault, mmf_argc, uy_mm_fault_before, uy_mm_fault_after, 0);
         g_mmf_hooked = ret ? 0 : 1;
         if (ret) {
             if (g_verbose) pr_info("urov-y: hook MM fault handler failed: %ld\n", ret);
             hook_unwrap(f_do_mem_abort, uy_abort_before, 0);
             g_page_hooked = 0;
         }
+    }
+    if (!g_clone_hooked || (!g_brk_hooked && !g_page_hooked)) {
+        urov_y_backend_exit();
+        return -EOPNOTSUPP;
+    }
+    if (g_page_hooked) {
+        g_caps = UROV_Y_CAP_MULTI | UROV_Y_CAP_CROSS;
+        if (g_fp_ready)
+            g_caps |= UROV_Y_CAP_LD1 | UROV_Y_CAP_LD2 | UROV_Y_CAP_LD3 | UROV_Y_CAP_LD4;
+        if (f_kernel_read && g_layout.vma_pgoff_ok) g_caps |= UROV_Y_CAP_SRC_FILE;
     }
     g_ready = 1;
 
@@ -2794,7 +2965,7 @@ unwind_brk:
 
 long urov_y_copy_to_user(void *dst, const void *src, unsigned long len)
 {
-    return f_copy_out(dst, src, len);
+    return uy_copy_control_reply(dst, src, len);
 }
 
 long urov_y_backend_exit(void)
@@ -2839,7 +3010,7 @@ long urov_y_backend_exit(void)
         g_page_hooked = 0;
     }
     if (g_mmf_hooked) {
-        hook_unwrap(f_handle_mm_fault, 0, uy_mm_fault_after);
+        hook_unwrap(f_handle_mm_fault, uy_mm_fault_before, uy_mm_fault_after);
         g_mmf_hooked = 0;
     }
     memset(g_traps, 0, sizeof(g_traps));
@@ -2881,5 +3052,5 @@ void urov_y_status_get(struct uy_status *out)
     out->abi = UROV_Y_ABI_VERSION;
     out->page_count = overlay_live() ? g_sess.page_count : 0U;
     out->page_shift = UROV_Y_PAGE_SHIFT;
-    out->caps = UROV_Y_CAPS;
+    out->caps = g_caps;
 }

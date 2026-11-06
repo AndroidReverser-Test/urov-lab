@@ -28,7 +28,8 @@ struct uy_status {
 /* Installs the reader-site traps (BRK, PAGE_UXN and/or PAGE_AP mode), the
  * authenticated prctl channel and the mapping lifecycle gates. The argument
  * string must contain key=<32 hex digits>; "verbose" enables printk,
- * "max_pages=N" and "max_kb=N" lower the runtime quota. */
+ * "max_pages=N" and "max_kb=N" lower the runtime quota.
+ * "btf=/path" supplies detached layout data for the running build. */
 long urov_y_backend_init(const char *args);
 long urov_y_backend_exit(void);
 void urov_y_status_get(struct uy_status *out);

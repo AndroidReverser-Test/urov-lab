@@ -18,7 +18,7 @@
 #include "urov_y_backend.h"
 
 KPM_NAME("urov-y");
-KPM_VERSION("2.2.0");
+KPM_VERSION("2.3.0");
 KPM_LICENSE("GPL v2");
 KPM_AUTHOR("UROV-Y");
 KPM_DESCRIPTION("Reader-site trap ARM64 user read overlay: BRK, UXN page trap or AP[1] data trap");

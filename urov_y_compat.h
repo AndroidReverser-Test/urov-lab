@@ -4,6 +4,11 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#if __STDC_HOSTED__
+#include <string.h>
+#else
+#include <linux/string.h>
+#endif
 
 /* Use the raw reader so the same KPM also loads on hosts without KP BTF exports. */
 #include "../kclf/kclf_btf.h"
@@ -40,7 +45,9 @@ static int uy_btf_member(const struct kclf_btf *btf, const struct kclf_btf_type 
     for (i = 0; i < n; i++) {
         uint32_t bitoff = (type->info >> 31) ? (member[i].offset & 0xffffff)
                                              : member[i].offset;
-        if ((bitoff & 7) || bitoff / 8 >= type->size) continue;
+        if ((bitoff & 7) || ((type->info >> 31) && (member[i].offset >> 24)) ||
+            bitoff / 8 >= type->size)
+            continue;
         if (member[i].name && !strcmp(kclf_btf_name(btf, member[i].name), name)) {
             if (type_id) *type_id = member[i].type;
             return (int)(bitoff / 8);
@@ -52,19 +59,34 @@ static int uy_btf_member(const struct kclf_btf *btf, const struct kclf_btf_type 
 /* uapi struct user_fpsimd_state: 32 16-byte vregs, then fpsr/fpcr.  The
  * register file update helper takes a pointer to it, so its layout has to be
  * verified rather than assumed. */
-static int uy_fpsimd_layout(const struct kclf_btf *btf)
+static int uy_fpsimd_layout(const struct kclf_btf *btf,
+                            const struct kclf_btf_type *state)
 {
-    if (kclf_btf_member_range(btf, "user_fpsimd_state", "vregs", 512, 16) != 0 ||
-        kclf_btf_member_range(btf, "user_fpsimd_state", "fpsr", 4, 4) != 512 ||
-        kclf_btf_member_range(btf, "user_fpsimd_state", "fpcr", 4, 4) != 516)
-        return -1;
-    return 0;
+    return uy_btf_member(btf, state, "vregs", 0) == 0 &&
+           uy_btf_member(btf, state, "fpsr", 0) == 512 &&
+           uy_btf_member(btf, state, "fpcr", 0) == 516;
 }
 
 /* Size of uapi struct user_fpsimd_state as mirrored by struct uy_fpstate. */
 #define UY_FPSIMD_BYTES 528U
 
-/* walk task_struct.thread -> (<=2 named levels) -> user_fpsimd_state */
+/* Only follow aggregates and verify each containment boundary. */
+static int uy_fpsimd_member(const struct kclf_btf *btf,
+                            const struct kclf_btf_type *container)
+{
+    const struct kclf_btf_type *state;
+    uint32_t id;
+    int off = uy_btf_member(btf, container, "fpsimd_state", &id);
+
+    if (off < 0) return -1;
+    state = kclf_btf_resolve(btf, id);
+    if (!state || ((state->info >> 24) & 31) != 4 || state->size != UY_FPSIMD_BYTES ||
+        strcmp(kclf_btf_name(btf, state->name), "user_fpsimd_state") ||
+        UY_FPSIMD_BYTES > container->size - (unsigned)off || !uy_fpsimd_layout(btf, state))
+        return -1;
+    return off;
+}
+
 static int uy_fpsimd_offset(const struct kclf_btf *btf)
 {
     const struct kclf_btf_type *task = kclf_btf_find(btf, "task_struct", 0);
@@ -76,38 +98,37 @@ static int uy_fpsimd_offset(const struct kclf_btf *btf)
     thread_off = uy_btf_member(btf, task, "thread", &thread_type);
     if (thread_off < 0) return -1;
     thread = kclf_btf_resolve(btf, thread_type);
-    if (!thread) return -1;
+    if (!thread || ((thread->info >> 24) & 31) != 4 ||
+        thread->size > task->size - (unsigned)thread_off)
+        return -1;
     uw_off = uy_btf_member(btf, thread, "uw", &uw_type);
     if (uw_off >= 0) {
         uw = kclf_btf_resolve(btf, uw_type);
-        fp_off = uy_btf_member(btf, uw, "fpsimd_state", 0);
-        if (fp_off >= 0) {
-            if ((unsigned)(uw_off + fp_off) + UY_FPSIMD_BYTES > thread->size)
-                return -1;
+        fp_off = uy_fpsimd_member(btf, uw);
+        if (fp_off >= 0 && uw->size <= thread->size - (unsigned)uw_off &&
+            !((thread_off + uw_off + fp_off) & 15))
             return thread_off + uw_off + fp_off;
-        }
     }
     /* Older/renamed layouts: accept a direct member, or any anonymous member
      * one level deep that itself holds user_fpsimd_state. */
-    fp_off = uy_btf_member(btf, thread, "fpsimd_state", 0);
+    fp_off = uy_fpsimd_member(btf, thread);
     if (fp_off >= 0)
-        return (unsigned)fp_off + UY_FPSIMD_BYTES > thread->size ? -1 : thread_off + fp_off;
-    n = (((thread->info >> 24) & 31) == 4 || ((thread->info >> 24) & 31) == 5)
-            ? (thread->info & 0xffff) : 0;
+        return (thread_off + fp_off) & 15 ? -1 : thread_off + fp_off;
+    n = thread->info & 0xffff;
     for (i = 0; i < n; i++) {
         const struct kclf_btf_member *member = (const void *)(thread + 1);
         uint32_t bitoff = (thread->info >> 31) ? (member[i].offset & 0xffffff)
                                                : member[i].offset;
         const struct kclf_btf_type *sub;
         int sub_off;
-        if ((bitoff & 7) || bitoff / 8 >= thread->size) continue;
+        if (member[i].name || (bitoff & 7) ||
+            ((thread->info >> 31) && (member[i].offset >> 24)) || bitoff / 8 >= thread->size)
+            continue;
         sub = kclf_btf_resolve(btf, member[i].type);
-        sub_off = uy_btf_member(btf, sub, "fpsimd_state", 0);
-        if (sub_off >= 0) {
-            if (bitoff / 8 + (unsigned)sub_off + UY_FPSIMD_BYTES > thread->size)
-                return -1;
+        sub_off = uy_fpsimd_member(btf, sub);
+        if (sub_off >= 0 && sub->size <= thread->size - bitoff / 8 &&
+            !((thread_off + (int)(bitoff / 8) + sub_off) & 15))
             return thread_off + (int)(bitoff / 8) + sub_off;
-        }
     }
     return -1;
 }
@@ -123,10 +144,12 @@ static int uy_layout_from_btf(struct uy_layout *layout, const struct kclf_btf *b
     layout->vma_end = kclf_btf_member_range(btf, "vm_area_struct", "vm_end", 8, 8);
     layout->vma_mm = kclf_btf_member_range(btf, "vm_area_struct", "vm_mm", 8, 8);
     layout->vma_flags = kclf_btf_member_range(btf, "vm_area_struct", "vm_flags", 8, 8);
+    if (layout->vma_flags < 0)
+        layout->vma_flags = kclf_btf_member_range(btf, "vm_area_struct", "__vm_flags", 8, 8);
     layout->vma_file = kclf_btf_member_range(btf, "vm_area_struct", "vm_file", 8, 8);
     layout->vma_pgoff = kclf_btf_member_range(btf, "vm_area_struct", "vm_pgoff", 8, 8);
     layout->vma_pgoff_ok = layout->vma_pgoff >= 0;
-    layout->task_fpsimd = uy_fpsimd_layout(btf) ? -1 : uy_fpsimd_offset(btf);
+    layout->task_fpsimd = uy_fpsimd_offset(btf);
     layout->mmap_lock = -1;
     if (sem && sem->size >= 16 && sem->size <= 512) {
         layout->mmap_lock = kclf_btf_member_range(btf, "mm_struct", "mmap_lock", sem->size, 8);
@@ -146,27 +169,131 @@ static int uy_layout_from_btf(struct uy_layout *layout, const struct kclf_btf *b
            layout->vma_flags < 0 || layout->vma_file < 0 ? -1 : 0;
 }
 
-/* 5.15 vendor kernels can pass an extra sequence word before regs. The hook
- * must preserve every argument when it calls the original fault handler. */
-static int uy_mm_fault_argc(const struct kclf_btf *btf, const char *name, int fallback)
+/* Function shapes: v=void, i=32-bit integer/enum, l=64-bit integer,
+ * s=either scalar width (ESR), p=pointer, m=mm, t=task, a=VMA, r=pt_regs.
+ * Check all argument slots before using an internal or backported entry. */
+static int uy_btf_arg_is(const struct kclf_btf *btf, uint32_t id, char shape)
+{
+    const struct kclf_btf_type *type = kclf_btf_resolve(btf, id);
+    unsigned kind = type ? (type->info >> 24) & 31 : 0;
+
+    switch (shape) {
+    case 'v': return !id;
+    case 'i': return (kind == 1 || kind == 6 || kind == 19) && type->size == 4;
+    case 'l': return kind == 1 && type->size == 8;
+    case 's': return kind == 1 && (type->size == 4 || type->size == 8);
+    case 'p': return kind == 2;
+    case 'm': return kclf_btf_points_to(btf, type, "mm_struct");
+    case 't': return kclf_btf_points_to(btf, type, "task_struct");
+    case 'a': return kclf_btf_points_to(btf, type, "vm_area_struct");
+    case 'r': return kclf_btf_points_to(btf, type, "pt_regs");
+    case 'f': return kclf_btf_points_to(btf, type, "user_fpsimd_state");
+    default: return 0;
+    }
+}
+
+static int uy_btf_signature(const struct kclf_btf *btf, const struct kclf_btf_type *proto,
+                            const char *shape)
+{
+    const uint32_t *params;
+    unsigned i, argc;
+
+    if (!proto) return 0;
+    argc = proto->info & 0xffff;
+    if (strlen(shape + 1) != argc || !uy_btf_arg_is(btf, proto->size, shape[0])) return 0;
+    params = (const void *)(proto + 1);
+    for (i = 0; i < argc; ++i)
+        if (!uy_btf_arg_is(btf, params[2 * i + 1], shape[i + 1])) return 0;
+    return 1;
+}
+
+static int uy_symbol_abi(const struct kclf_btf *btf, const char *name, const char *shape)
 {
     const struct kclf_btf_type *proto = kclf_btf_func_proto(btf, name);
-    const struct kclf_btf_type *type;
-    const uint32_t *params;
-    unsigned argc;
 
-    if (!proto) return fallback;
-    argc = proto->info & 0xffff;
-    if (argc != 4 && argc != 5) return 0;
-    params = (const void *)(proto + 1);
-    if (!kclf_btf_points_to(btf, kclf_btf_resolve(btf, params[1]), "vm_area_struct") ||
-        !kclf_btf_points_to(btf, kclf_btf_resolve(btf, params[argc * 2 - 1]), "pt_regs"))
+    /* Stable named interfaces can be present in kallsyms without a FUNC
+     * record (e.g. due to LTO or detached BTF from DWARF). */
+    return !proto || uy_btf_signature(btf, proto, shape);
+}
+
+static int uy_mm_fault_argc(const struct kclf_btf *btf, const char *name, int public)
+{
+    const struct kclf_btf_type *proto = kclf_btf_func_proto(btf, name);
+
+    /* The public entry has a stable (vma, address) prefix. In the absence
+     * of a prototype preserve all eight argument registers, including a
+     * possible vendor sequence word. Never guess the private entry's ABI. */
+    if (!proto) return public ? 8 : 0;
+    if (uy_btf_signature(btf, proto, "iali")) return 3;
+    if (uy_btf_signature(btf, proto, "ialir")) return 4;
+    if (uy_btf_signature(btf, proto, "ialisr")) return 5;
+    return 0;
+}
+
+static int uy_access_vm_argc(const struct kclf_btf *btf, const char *name, int public)
+{
+    const struct kclf_btf_type *proto = kclf_btf_func_proto(btf, name);
+
+    if (!proto) return public ? 5 : 0;
+    if (uy_btf_signature(btf, proto, "imlpii")) return 5;
+    if (!public && uy_btf_signature(btf, proto, "itmlpii")) return 6;
+    return 0;
+}
+
+/* Root can supply detached BTF when CONFIG_DEBUG_INFO_BTF is disabled.
+ * Require an exact GNU build ID match before opening the trusted BTF. */
+#define UY_BTF_MAX (64U * 1024U * 1024U)
+#define UY_BUILD_ID_MAX 64U
+
+struct uy_btf_pack {
+    char magic[8]; /* "UYBTF01" including NUL */
+    uint32_t bytes;
+    uint32_t id_len;
+    uint8_t build_id[UY_BUILD_ID_MAX];
+};
+
+_Static_assert(sizeof(struct uy_btf_pack) == 80, "detached BTF header ABI");
+
+static int uy_btf_pack_matches(const struct uy_btf_pack *pack, const void *notes, size_t len)
+{
+    const uint8_t *p = notes;
+
+    if (memcmp(pack->magic, "UYBTF01", sizeof(pack->magic)) ||
+        pack->bytes < sizeof(struct kclf_btf_header) || pack->bytes > UY_BTF_MAX ||
+        !pack->id_len || pack->id_len > UY_BUILD_ID_MAX || !p)
         return 0;
-    type = kclf_btf_resolve(btf, params[3]);
-    if (!type || ((type->info >> 24) & 31) != 1 || type->size != 8) return 0;
-    type = kclf_btf_resolve(btf, proto->size);
-    if (!type || ((type->info >> 24) & 31) != 1 || type->size != 4) return 0;
-    return (int)argc;
+    /* The arm64 GNU build-ID is a 4-byte aligned ELF note. */
+    while (len >= 12) {
+        uint32_t hdr[3];
+        size_t name_pad, desc_pad;
+
+        memcpy(hdr, p, sizeof(hdr));
+        p += sizeof(hdr);
+        len -= sizeof(hdr);
+        name_pad = ((size_t)hdr[0] + 3U) & ~(size_t)3U;
+        desc_pad = ((size_t)hdr[1] + 3U) & ~(size_t)3U;
+        if (name_pad > len || desc_pad > len - name_pad) return 0;
+        if (hdr[2] == 3 && hdr[0] == 4 && !memcmp(p, "GNU", 4) &&
+            hdr[1] == pack->id_len && !memcmp(p + name_pad, pack->build_id, hdr[1]))
+            return 1;
+        p += name_pad + desc_pad;
+        len -= name_pad + desc_pad;
+    }
+    return 0;
+}
+
+static int uy_btf_open(struct kclf_btf *btf, const void *data, size_t bytes)
+{
+    size_t offset = 0;
+
+    if (kclf_btf_open(btf, data, bytes) || !btf->type_len) return -1;
+    while (offset < btf->type_len) {
+        size_t size = kclf_btf_record((const void *)(btf->types + offset), btf->type_len - offset);
+
+        if (!size) return -1;
+        offset += size;
+    }
+    return 0;
 }
 
 /* FOLL_FORCE was a macro before 6.3 and may still be absent from BTF on newer
@@ -174,6 +301,7 @@ static int uy_mm_fault_argc(const struct kclf_btf *btf, const char *name, int fa
 static unsigned uy_foll_force(const struct kclf_btf *btf, unsigned fallback)
 {
     size_t offset = 0, size;
+    unsigned force = 0;
 
     while (offset < btf->type_len) {
         const struct kclf_btf_type *type = (const void *)(btf->types + offset);
@@ -187,11 +315,13 @@ static unsigned uy_foll_force(const struct kclf_btf *btf, unsigned fallback)
         count = type->info & 0xffff;
         for (i = 0; i < count; ++i) {
             unsigned flag = values[2 * i + 1];
-            if (!strcmp(kclf_btf_name(btf, values[2 * i]), "FOLL_FORCE"))
-                return flag == 0x08U || flag == 0x10U ? flag : 0;
+            if (strcmp(kclf_btf_name(btf, values[2 * i]), "FOLL_FORCE")) continue;
+            if ((flag != 0x08U && flag != 0x10U) || (force && force != flag))
+                return 0;
+            force = flag;
         }
     }
-    return fallback;
+    return force ? force : fallback;
 }
 
 #endif
