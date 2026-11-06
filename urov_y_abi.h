@@ -38,9 +38,17 @@
 #include "urov_x_abi.h"
 
 #define UROV_Y_NAME "urov-y"
-#define UROV_Y_ABI_VERSION 6U
+#define UROV_Y_ABI_VERSION 7U
 #define UROV_Y_PAGE 4096U
 #define UROV_Y_FAKE_MAX 32U
+/* Largest overlay: one whole target page.  A longer function call (memcpy,
+ * memcmp, strlen, a zlib pass ...) reads the registered page in chunks; every
+ * chunk that lands in the window is served from this image, so the function
+ * sees a consistently modified page instead of the 32-byte prefix the older
+ * ABI could carry.  Requests with length > UROV_Y_FAKE_MAX must point
+ * `fake_addr` at that many readable bytes; the shorter legacy form keeps using
+ * value/value_hi. */
+#define UROV_Y_FAKE_PAGE 4096U
 #define UROV_Y_MAX_SITES 4U
 #define UROV_Y_MAX_CALLERS 4U
 
@@ -80,7 +88,9 @@ enum urov_y_state {
     UROV_Y_ACTIVE = 1,
 };
 
-/* 240 bytes, no pointers, no implicit padding, fixed little-endian layout. */
+/* 256 bytes, no implicit padding, fixed little-endian layout.  `fake_addr` is
+ * a plain user virtual address read by the module during REGISTER/SET, never
+ * dereferenced later and never echoed back. */
 struct urov_y_request {
     uint32_t size;
     uint16_t version;
@@ -93,7 +103,7 @@ struct urov_y_request {
     uint64_t expected_generation;
     uint64_t value;
     uint32_t offset;              /* overlay byte offset inside the page */
-    uint32_t length;              /* 8, 16, 24 or 32 (0 means 8) */
+    uint32_t length;              /* 8..UROV_Y_FAKE_PAGE, multiple of 8 */
     uint64_t value_hi[3];
     uint32_t site_count;          /* 1..UROV_Y_MAX_SITES */
     uint32_t caller_count;        /* 0..UROV_Y_MAX_CALLERS */
@@ -108,10 +118,12 @@ struct urov_y_request {
     uint64_t failures;
     uint32_t mode;                /* UROV_Y_MODE_*; 0 means SITE_BRK */
     uint32_t flags;               /* must be zero */
+    uint64_t fake_addr;           /* overlay image, required when length > 32 */
+    uint64_t reserved;            /* must be zero */
     uint64_t mac;
 };
 
-_Static_assert(sizeof(struct urov_y_request) == 240U, "UROV-Y wire ABI");
+_Static_assert(sizeof(struct urov_y_request) == 256U, "UROV-Y wire ABI");
 #define UROV_Y_MAC_BYTES (sizeof(struct urov_y_request) - sizeof(uint64_t))
 
 static inline uint64_t urov_y_request_mac(const uint64_t mack[2],

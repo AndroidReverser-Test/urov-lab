@@ -26,14 +26,22 @@ struct uro_load {
     int writeback;
     unsigned rn;
     uint64_t wb;
+    /* 1 for a SIMD&FP register load.  rt/rt2 then name V registers 0..31 and
+     * there is no sign extension or W-register truncation; a scalar load
+     * (size < 16) zeroes the remaining bytes of the destination V register.
+     * Only the generic GPR emulator in emulate.c rejects this class; the
+     * urov-y target-page backend commits it through the task's FPSIMD state. */
+    unsigned vector;
 };
 
 /* Decode only: no memory access or architectural register changes.
  * Return 0 on success, -1 on unsupported/invalid encoding or address overflow.
  * Failure leaves *out unchanged. size is bytes per element; count is 1 or 2.
- * rn==31 means SP; rt/rt2==31 means discard. address/wb preserve top-byte tags.
+ * rn==31 means SP; rt/rt2==31 means discard for GPR loads, while a SIMD&FP
+ * load always names a real V register. address/wb preserve top-byte tags.
  * Caller must validate mappings, tags, complete access range and fault identity.
- * Caller must perform sign extension then W-register truncation/zero extension.
+ * Caller must perform sign extension then W-register truncation/zero extension
+ * for GPR loads, and the FPSIMD state update for SIMD&FP loads.
  */
 int uro_decode(uint32_t insn, const struct uro_regs *regs, struct uro_load *out);
 

@@ -120,7 +120,22 @@ static inline void uy_flush_icache_all(void)
 #define UY_TRAP_SLOTS 8U
 
 _Static_assert(UROV_Y_FAKE_MAX == URO_FAKE_MAX, "UAPI and core fake widths");
+_Static_assert(UROV_Y_FAKE_PAGE == UROV_Y_PAGE, "overlay is at most one page");
 _Static_assert(UROV_Y_MAX_SITES <= UY_TRAP_SLOTS, "trap table covers one session");
+
+/* struct user_fpsimd_state as consumed by the kernel's FPSIMD helpers:
+ * 32 16-byte vector registers followed by fpsr/fpcr (uapi/asm/sigcontext.h).
+ * Its BTF layout is validated at load time before any vector load is served. */
+struct uy_fpstate {
+    uint8_t vregs[32][16];
+    uint32_t fpsr;
+    uint32_t fpcr;
+    uint32_t reserved[2];
+};
+_Static_assert(sizeof(struct uy_fpstate) == UY_FPSIMD_BYTES, "FPSIMD image size");
+
+typedef void (*fpsimd_preserve_t)(void);
+typedef void (*fpsimd_update_t)(void *state);
 
 typedef void *(*get_task_mm_t)(void *task);
 typedef void (*mmput_t)(void *mm);
@@ -165,6 +180,8 @@ struct uy_session {
     uint32_t pad;
     struct uy_site sites[UROV_Y_MAX_SITES];
     uint8_t original[UROV_Y_PAGE];
+    /* Published overlay image: overlay_len bytes, seqlock-protected. */
+    uint8_t fake_page[UROV_Y_PAGE];
 } __attribute__((aligned(64)));
 
 /* Module-lifetime record of every PC that once carried our BRK. Kept after a
@@ -180,6 +197,10 @@ static struct uy_session g_sess;
 static struct uy_layout g_layout;
 static struct uy_trap g_traps[UY_TRAP_SLOTS];
 static uint8_t g_selftest_ws[UROV_Y_PAGE];
+/* Staging area for a REGISTER/SET overlay image.  The caller's buffer is
+ * copied here first, outside the seqlock, because access_remote_vm() may fault
+ * pages in and must not run while readers spin on the sequence word. */
+static uint8_t g_fake_stage[UROV_Y_PAGE];
 static int g_state;
 static int g_handlers;
 static int g_ctrl_busy;
@@ -206,6 +227,8 @@ static flush_tlb_mm_t f_flush_tlb_mm;
 static force_sig_fault_t f_force_sig_fault;
 static copy_nofault_t f_copy_in, f_copy_out;
 static access_remote_vm_t f_access_vm;
+static fpsimd_preserve_t f_fp_preserve;
+static fpsimd_update_t f_fp_update;
 
 static int g_brk_hooked;
 static int g_prctl_hooked;
@@ -215,6 +238,10 @@ static int g_wrapper_mode;
 static int g_page_hooked;
 static int g_mmf_hooked;
 static int g_degraded;
+/* FPSIMD state can only be driven when both kernel helpers resolved and BTF
+ * described task_struct.thread.uw.fpsimd_state.  Otherwise a vector load from
+ * the target page keeps the historical fail-closed SIGSEGV. */
+static int g_fp_ready;
 
 #define UY_GATE_NUM 6
 static int g_gate_hooked[UY_GATE_NUM];
@@ -318,45 +345,79 @@ static unsigned request_fake_len(const struct urov_y_request *q)
     return q->length ? q->length : 8U;
 }
 
-static void request_fake_words(const struct urov_y_request *q, uint64_t words[4])
+/* Copy the requested overlay image into the staging area.  A request either
+ * carries the legacy inline 8..32-byte value or points at length bytes of user
+ * memory; the pointer is only read here, during the control transaction. */
+static long fake_stage_request(const struct urov_y_request *q, void *mm, unsigned len)
 {
-    words[0] = q->value;
-    words[1] = q->value_hi[0];
-    words[2] = q->value_hi[1];
-    words[3] = q->value_hi[2];
+    unsigned i;
+
+    if (q->fake_addr) {
+        if (!mm) return -EINVAL;
+        if (f_access_vm(mm, q->fake_addr, g_fake_stage, (int)len, 0) != (int)len)
+            return -EFAULT;
+        return 0;
+    }
+    if (len > UROV_Y_FAKE_MAX) return -EINVAL;
+    for (i = 0; i < len; ++i) {
+        uint64_t word = i < 8U ? q->value : q->value_hi[(i - 8U) / 8U];
+        g_fake_stage[i] = (uint8_t)(word >> (8U * (i & 7U)));
+    }
+    return 0;
 }
 
-static void fake_publish(const uint64_t words[4])
+/* Publish the staged image.  The 4 KiB copy and the mirrored status words are
+ * inside the sequence write; readers only ever copy the handful of bytes the
+ * faulting instruction touches, so a concurrent SET stalls them for ~1 us. */
+static void fake_publish(unsigned len)
 {
     uint32_t seq = __atomic_load_n(&g_sess.fake_seq, __ATOMIC_RELAXED);
+    unsigned i;
 
     __atomic_store_n(&g_sess.fake_seq, seq + 1U, __ATOMIC_RELAXED);
     __atomic_thread_fence(__ATOMIC_RELEASE);
-    g_sess.fake[0] = words[0];
-    g_sess.fake[1] = words[1];
-    g_sess.fake[2] = words[2];
-    g_sess.fake[3] = words[3];
+    for (i = 0; i < len; ++i)
+        g_sess.fake_page[i] = g_fake_stage[i];
+    for (i = 0; i < 4U; ++i) {
+        uint64_t value = 0;
+        unsigned b;
+        for (b = 0; b < 8U && 8U * i + b < len; ++b)
+            value |= (uint64_t)g_fake_stage[8U * i + b] << (8U * b);
+        g_sess.fake[i] = value;
+    }
     __atomic_store_n(&g_sess.fake_seq, seq + 2U, __ATOMIC_RELEASE);
 }
 
-static int fake_snapshot(uint64_t words[4], unsigned *len)
+/* Merge the overlay into the bytes of [off, off+total) of the target page,
+ * where off is the page-relative address of the load.  total <= 32 because the
+ * widest single A64 read is an LDP Q pair.  Returns 0 on success and a negative
+ * value when the sequence word never settled (fail closed, never original). */
+static int fake_merge(uint64_t off, unsigned total, uint8_t *out)
 {
     unsigned tries;
     for (tries = 0; tries < UY_FAKE_RETRY; ++tries) {
         uint32_t seq = __atomic_load_n(&g_sess.fake_seq, __ATOMIC_ACQUIRE);
+        uint32_t foff, flen;
+        unsigned i;
         if (seq & 1U) {
             __asm__ volatile("yield" ::: "memory");
             continue;
         }
-        words[0] = __atomic_load_n(&g_sess.fake[0], __ATOMIC_RELAXED);
-        words[1] = __atomic_load_n(&g_sess.fake[1], __ATOMIC_RELAXED);
-        words[2] = __atomic_load_n(&g_sess.fake[2], __ATOMIC_RELAXED);
-        words[3] = __atomic_load_n(&g_sess.fake[3], __ATOMIC_RELAXED);
-        __atomic_thread_fence(__ATOMIC_ACQUIRE);
-        if (__atomic_load_n(&g_sess.fake_seq, __ATOMIC_RELAXED) == seq) {
-            *len = g_sess.overlay_len;
-            return 0;
+        foff = g_sess.overlay_offset;
+        flen = g_sess.overlay_len;
+        if (flen < 8U || flen > UROV_Y_FAKE_PAGE || (flen & 7U) ||
+            foff > UROV_Y_FAKE_PAGE - flen)
+            return -EINVAL;
+        for (i = 0; i < total; ++i) {
+            uint64_t pos = off + i;
+            if (pos >= foff && pos - foff < flen)
+                out[i] = g_sess.fake_page[pos - foff];
+            else
+                out[i] = g_sess.original[pos];
         }
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (__atomic_load_n(&g_sess.fake_seq, __ATOMIC_RELAXED) == seq)
+            return 0;
     }
     return -EAGAIN;
 }
@@ -833,6 +894,34 @@ static void force_segv(uint64_t far)
     if (f_force_sig_fault) f_force_sig_fault(UY_SIGSEGV, UY_SEGV_ACCERR, (void *)far);
 }
 
+/* Install the merged bytes of one SIMD&FP load into the caller's vector
+ * register(s).  The kernel's own FPSIMD preserve/update pair is used instead of
+ * touching the vector registers directly: preserve writes the live register
+ * file (or keeps the authoritative saved copy while the task's state is marked
+ * foreign) into task_struct.thread.uw.fpsimd_state, this function patches only
+ * the destination register there, and update adopts that image, reloads the
+ * registers, rebinds them to this CPU and clears the foreign flag before the
+ * exception returns to EL0.  A scalar load zero-extends the rest of its V
+ * register, as the architecture specifies.  No allocation, no sleeping. */
+static int uy_fp_commit(const struct uro_load *d, const uint8_t *bytes)
+{
+    struct uy_fpstate *state;
+    unsigned i;
+
+    if (!g_fp_ready || !f_fp_preserve || !f_fp_update) return -EOPNOTSUPP;
+    if (d->rt > 31U || (d->count == 2U && d->rt2 > 31U)) return -EOPNOTSUPP;
+    state = (struct uy_fpstate *)((char *)current + g_layout.task_fpsimd);
+    f_fp_preserve();
+    for (i = 0; i < 16U; ++i)
+        state->vregs[d->rt][i] = i < d->size ? bytes[i] : 0;
+    if (d->count == 2U) {
+        for (i = 0; i < 16U; ++i)
+            state->vregs[d->rt2][i] = i < d->size ? bytes[d->size + i] : 0;
+    }
+    f_fp_update(state);
+    return 0;
+}
+
 /* Emulate the registered load at `pc`: either merge the fake bytes or read the
  * real memory (both are the same code path as before). On success the model is
  * committed to `regs`. A negative return is a fail-closed condition; *bad then
@@ -842,10 +931,8 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
 {
     struct uro_regs model;
     struct uro_load load;
-    uint64_t words[4];
-    unsigned fake_len = 0;
     uint64_t total;
-    uint8_t bytes[16];
+    uint8_t bytes[32];
     int use_fake = 0;
 
     *bad = 0;
@@ -858,6 +945,9 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
         (pc & 3U) || pc >= UY_USER_LIMIT - 4U)
         return -1;
     if (uro_decode(opcode, &model, &load)) return -2;
+    /* A vector load has no GPR destination to fall back on, so without the
+     * native FPSIMD helpers the honest answer is the old fail-closed signal. */
+    if (load.vector && !g_fp_ready) return -6;
     total = (uint64_t)load.size * load.count;
     if (total == 0U || total > sizeof(bytes) || load.address < UROV_Y_PAGE ||
         load.address >= UY_USER_LIMIT ||
@@ -872,20 +962,8 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
         caller_allowed_deep(regs) &&
         load.address >= g_sess.base &&
         load.address - g_sess.base <= UROV_Y_PAGE - total) {
-        if (fake_snapshot(words, &fake_len)) return -4;
-        if (fake_len >= 8U && fake_len <= UROV_Y_FAKE_MAX && !(fake_len & 7U)) {
-            unsigned i;
-            uint64_t off = load.address - g_sess.base;
-            for (i = 0; i < (unsigned)total; ++i) {
-                uint64_t pos = off + i;
-                if (pos >= g_sess.overlay_offset &&
-                    pos - g_sess.overlay_offset < fake_len)
-                    bytes[i] = ((const uint8_t *)words)[pos - g_sess.overlay_offset];
-                else
-                    bytes[i] = g_sess.original[pos];
-            }
-            use_fake = 1;
-        }
+        if (fake_merge(load.address - g_sess.base, (unsigned)total, bytes)) return -4;
+        use_fake = 1;
     }
     if (!use_fake) {
         if (g_sess.mode == UROV_Y_MODE_PAGE_AP && overlay_live() &&
@@ -906,7 +984,18 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
         }
     }
 
-    uy_commit(&model, &load, bytes);
+    if (load.vector) {
+        /* Commit the vector state first; a refused helper leaves every GPR and
+         * PC untouched, which is what fail-closed promises. */
+        if (uy_fp_commit(&load, bytes)) return -6;
+        if (load.writeback) {
+            if (load.rn == 31U) model.sp = load.wb;
+            else model.x[load.rn] = load.wb;
+        }
+        model.pc += 4U;
+    } else {
+        uy_commit(&model, &load, bytes);
+    }
     commit_model(regs, &model);
     if (use_fake)
         __atomic_fetch_add(&g_sess.hits, 1, __ATOMIC_RELAXED);
@@ -1333,7 +1422,12 @@ static int site_ok(uint64_t site, uint64_t target)
     if (f_copy_in(&opcode, (const void *)site, sizeof(opcode))) return 0;
     memset(&regs, 0, sizeof(regs));
     regs.pc = site;
-    return uro_decode(opcode, &regs, &load) == 0;
+    /* SITE_BRK/PAGE_UXN emulate the site itself and can only commit a GPR
+     * destination.  Vector sites stay rejected there; the PAGE_AP target-page
+     * trap is selected by the faulting address, not by a site instruction, so
+     * it is the only mode that serves SIMD&FP loads. */
+    if (uro_decode(opcode, &regs, &load) || load.vector) return 0;
+    return 1;
 }
 
 static void release_session(void)
@@ -1374,7 +1468,6 @@ static long do_register(struct urov_y_request *q)
     void *vma;
     uint64_t *ptep;
     uint64_t pte;
-    uint64_t words[4];
     unsigned len = request_fake_len(q);
     unsigned i;
     uint32_t mode = q->mode ? q->mode : UROV_Y_MODE_SITE_BRK;
@@ -1382,7 +1475,7 @@ static long do_register(struct urov_y_request *q)
     unsigned tries;
     long ret;
 
-    if (q->flags || q->caller_count > UROV_Y_MAX_CALLERS) return -EINVAL;
+    if (q->flags || q->reserved || q->caller_count > UROV_Y_MAX_CALLERS) return -EINVAL;
     if (mode != UROV_Y_MODE_SITE_BRK && mode != UROV_Y_MODE_PAGE_UXN &&
         mode != UROV_Y_MODE_PAGE_AP) return -EINVAL;
     if (mode != UROV_Y_MODE_SITE_BRK && (!g_page_hooked || !g_mmf_hooked))
@@ -1390,7 +1483,7 @@ static long do_register(struct urov_y_request *q)
     if (q->site_count == 0U || q->site_count > UROV_Y_MAX_SITES) return -EINVAL;
     if (q->address & (UROV_Y_PAGE - 1U)) return -EINVAL;
     if (q->address < UROV_Y_PAGE || q->address >= UY_USER_LIMIT) return -EINVAL;
-    if (len < 8U || len > UROV_Y_FAKE_MAX || (len & 7U)) return -EINVAL;
+    if (len < 8U || len > UROV_Y_FAKE_PAGE || (len & 7U)) return -EINVAL;
     if (q->offset > UROV_Y_PAGE - len) return -EINVAL;
     for (i = 0; i < q->site_count; ++i)
         if (!site_ok(q->sites[i], q->address)) return -EINVAL;
@@ -1425,6 +1518,14 @@ static long do_register(struct urov_y_request *q)
         memset(g_sess.original, 0, UROV_Y_PAGE);
         f_mmput(mm);
         return -EFAULT;
+    }
+    /* Stage the overlay image while no reader can see the session yet. */
+    ret = fake_stage_request(q, mm, len);
+    if (ret) {
+        memset(g_sess.original, 0, UROV_Y_PAGE);
+        memset(g_fake_stage, 0, len);
+        f_mmput(mm);
+        return ret;
     }
 
     ret = -EAGAIN;
@@ -1489,12 +1590,8 @@ static long do_register(struct urov_y_request *q)
         g_sess.caller_start[i] = q->caller_start[i];
         g_sess.caller_end[i] = q->caller_end[i];
     }
-    request_fake_words(q, words);
-    g_sess.fake[0] = words[0];
-    g_sess.fake[1] = words[1];
-    g_sess.fake[2] = words[2];
-    g_sess.fake[3] = words[3];
     g_sess.fake_seq = 0;
+    fake_publish(len);
     g_sess.generation = 1;
     g_sess.hits = 0;
     g_sess.replays = 0;
@@ -1533,33 +1630,39 @@ static long do_register(struct urov_y_request *q)
     q->length = len;
     q->mode = mode;
     q->flags = 0;
-    q->value = words[0];
-    q->value_hi[0] = words[1];
-    q->value_hi[1] = words[2];
-    q->value_hi[2] = words[3];
+    q->value = g_sess.fake[0];
+    q->value_hi[0] = g_sess.fake[1];
+    q->value_hi[1] = g_sess.fake[2];
+    q->value_hi[2] = g_sess.fake[3];
     q->state = UROV_Y_ACTIVE;
     return 0;
 }
 
 static long do_set(struct urov_y_request *q)
 {
-    uint64_t words[4];
     unsigned len;
+    long ret;
 
     if (!session_owned() || q->session != 1) return -ENOENT;
+    if (q->reserved) return -EINVAL;
     if (q->expected_generation != g_sess.generation) return -EAGAIN;
     len = request_fake_len(q);
     if (len != g_sess.overlay_len) return -EINVAL;
-    request_fake_words(q, words);
-    fake_publish(words);
+    ret = fake_stage_request(q, g_sess.mm, len);
+    if (ret) {
+        memset(g_fake_stage, 0, len);
+        return ret;
+    }
+    fake_publish(len);
+    memset(g_fake_stage, 0, len);
     g_sess.generation++;
     q->generation = g_sess.generation;
     q->offset = g_sess.overlay_offset;
     q->length = len;
-    q->value = words[0];
-    q->value_hi[0] = words[1];
-    q->value_hi[1] = words[2];
-    q->value_hi[2] = words[3];
+    q->value = g_sess.fake[0];
+    q->value_hi[0] = g_sess.fake[1];
+    q->value_hi[1] = g_sess.fake[2];
+    q->value_hi[2] = g_sess.fake[3];
     q->state = UROV_Y_ACTIVE;
     q->hits = __atomic_load_n(&g_sess.hits, __ATOMIC_RELAXED);
     q->replays = __atomic_load_n(&g_sess.replays, __ATOMIC_RELAXED);
@@ -1883,6 +1986,16 @@ static long resolve_kernel(int *brk_argc, int *mmf_argc)
     f_access_vm = (access_remote_vm_t)lookup("access_remote_vm");
     if (!f_access_vm) f_access_vm = (access_remote_vm_t)lookup("__access_remote_vm");
 
+    /* The large-transfer path needs the kernel's own FPSIMD state handling:
+     * fpsimd_signal_preserve_current_state() saves the live vector registers
+     * (and syncs an SVE task's state down to FPSIMD), and
+     * fpsimd_update_current_state() adopts the patched image and reloads it.
+     * Without both, or without the BTF layout of thread.uw.fpsimd_state, a
+     * SIMD&FP load keeps failing closed instead of returning original bytes. */
+    f_fp_preserve = (fpsimd_preserve_t)lookup("fpsimd_signal_preserve_current_state");
+    f_fp_update = (fpsimd_update_t)lookup("fpsimd_update_current_state");
+    g_fp_ready = f_fp_preserve && f_fp_update && g_layout.task_fpsimd >= 0;
+
     if (!f_brk_handler || !f_get_task_mm || !f_mmput || !f_find_vma ||
         !f_mmap_write_lock || !f_mmap_write_unlock || !f_force_sig_fault ||
         !f_copy_in || !f_copy_out || !f_access_vm || !foll_force) {
@@ -1891,9 +2004,11 @@ static long resolve_kernel(int *brk_argc, int *mmf_argc)
     }
     if (g_verbose)
         pr_info("urov-y: kver=%x BTF task.mm=%d mm.pgd=%d mm.users=%d vma.flags=%d vma.file=%d "
-                "lookup=%s lock=%s mm_fault=%s/%d brk_args=%d foll_force=0x%x\n",
+                "task.fpsimd=%d fpsimd=%d lookup=%s lock=%s mm_fault=%s/%d brk_args=%d "
+                "foll_force=0x%x\n",
                 kver, g_layout.task_mm, g_layout.mm_pgd, g_layout.mm_users,
-                g_layout.vma_flags, g_layout.vma_file, vma_name, g_use_rwsem ? "rwsem" : "mmap",
+                g_layout.vma_flags, g_layout.vma_file, g_layout.task_fpsimd,
+                g_fp_ready, vma_name, g_use_rwsem ? "rwsem" : "mmap",
                 *mmf_argc ? fault_name : "none", *mmf_argc, *brk_argc, foll_force);
     return 0;
 }
@@ -2113,4 +2228,7 @@ void urov_y_status_get(struct uy_status *out)
     out->degraded = __atomic_load_n(&g_degraded, __ATOMIC_ACQUIRE) ? 1U : 0U;
     out->core_checks = URO_CORE_CHECKS;
     out->imm = (uint32_t)g_imm;
+    out->fpsimd = g_fp_ready ? 1U : 0U;
+    out->overlay_len = overlay_live() ? g_sess.overlay_len : 0U;
+    out->abi = UROV_Y_ABI_VERSION;
 }

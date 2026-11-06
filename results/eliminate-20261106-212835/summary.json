@@ -1,0 +1,1643 @@
+{
+  "host_time_utc8": "20261106-212835",
+  "serial": "25091FDF60063J",
+  "repeats": 3,
+  "cycles": 1,
+  "runs": [
+    {
+      "label": "01-no-module",
+      "mode": "y-clean",
+      "pid": "14783",
+      "result": "DETECT_RESULT PASS mode=y-clean worker_ms=350 ui_ticks=127 ui_max_gap_ms=21 native=PASS cases=4 assertions=55 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "idle_unregistered",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "unregistered",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "12842204",
+          "max_ns": "4333211"
+        }
+      ],
+      "store_checks": [
+        {
+          "name": "unregistered",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "12356486",
+          "max_ns": "4297892"
+        }
+      ],
+      "store_state": [],
+      "execution_state": [],
+      "features": [],
+      "business": [],
+      "residuals": [],
+      "timing": [],
+      "log": "01-no-module-14783.log",
+      "uid": 10284
+    },
+    {
+      "label": "02-urov-x-control",
+      "mode": "observe-active",
+      "pid": "14858",
+      "result": "DETECT_RESULT PASS mode=observe-active worker_ms=1548 ui_ticks=243 ui_max_gap_ms=18 native=PASS cases=16 assertions=320 failures=0",
+      "app_pass": true,
+      "cases": [],
+      "execution": [],
+      "store_checks": [
+        {
+          "name": "x_active",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11447632",
+          "max_ns": "3888265"
+        }
+      ],
+      "store_state": [],
+      "execution_state": [],
+      "features": [],
+      "business": [],
+      "residuals": [],
+      "timing": [],
+      "log": "02-urov-x-control-14858.log",
+      "uid": 10284
+    },
+    {
+      "label": "03-loaded-idle",
+      "mode": "y-clean",
+      "pid": "14955",
+      "result": "DETECT_RESULT PASS mode=y-clean worker_ms=351 ui_ticks=126 ui_max_gap_ms=20 native=PASS cases=4 assertions=55 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "idle_unregistered",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "unregistered",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "14503134",
+          "max_ns": "5042603"
+        }
+      ],
+      "store_checks": [
+        {
+          "name": "unregistered",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "12333293",
+          "max_ns": "4255737"
+        }
+      ],
+      "store_state": [],
+      "execution_state": [],
+      "features": [],
+      "business": [],
+      "residuals": [],
+      "timing": [],
+      "log": "03-loaded-idle-14955.log",
+      "uid": 10284
+    },
+    {
+      "label": "04-active-1",
+      "mode": "y-active",
+      "pid": "15023",
+      "result": "DETECT_RESULT PASS mode=y-active worker_ms=432 ui_ticks=136 ui_max_gap_ms=18 native=PASS cases=16 assertions=260 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_page",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_outside_window",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0x0",
+          "file": "0x0"
+        },
+        {
+          "name": "active_after_set",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_equal_value",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "deactivated",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "baseline",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "14291300",
+          "max_ns": "5171468"
+        },
+        {
+          "name": "active_changed",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "11095257",
+          "max_ns": "3732992"
+        },
+        {
+          "name": "active_equal_value",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "11070230",
+          "max_ns": "3757568"
+        },
+        {
+          "name": "deactivated",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "11087769",
+          "max_ns": "3767456"
+        }
+      ],
+      "store_checks": [
+        {
+          "name": "baseline",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "12485434",
+          "max_ns": "4321452"
+        },
+        {
+          "name": "active_changed",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11045898",
+          "max_ns": "3709961"
+        },
+        {
+          "name": "active_outside_window",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11017130",
+          "max_ns": "3703206"
+        },
+        {
+          "name": "active_equal_value",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11058553",
+          "max_ns": "3715698"
+        },
+        {
+          "name": "deactivated",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11000772",
+          "max_ns": "3706258"
+        }
+      ],
+      "store_state": [
+        "ELIM_STORE_STATE mode=brk preserved=1 generation=1 hits=2 failures=0 replays_before=37 replays_after=37"
+      ],
+      "execution_state": [
+        "ELIM_EXEC_STATE unchanged=1 generation=1 hits=2 replays=37 failures=0"
+      ],
+      "features": [
+        "ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1"
+      ],
+      "business": [
+        "ELIM_BUSINESS ops=81152 errors=0 execution=original"
+      ],
+      "residuals": [
+        "ELIM_RESIDUAL mode=brk site_file_word=f9400000 site_live_word=d43993a0 differs=1 site_cow_private=1 private_dirty_kb=4 anonymous_kb=4 base_dirty_kb=0 base_anonymous_kb=0",
+        "ELIM_RESIDUAL restored_site_file_word=f9400000 live_word=f9400000 equal=1 private_dirty_kb=4 anonymous_kb=4 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "timing": [
+        "ELIM_TIMING mode=brk site_call_ns=239"
+      ],
+      "log": "04-active-1-15023.log",
+      "uid": 10284
+    },
+    {
+      "label": "05-page-1",
+      "mode": "z-active",
+      "pid": "15094",
+      "result": "DETECT_RESULT PASS mode=z-active worker_ms=848 ui_ticks=175 ui_max_gap_ms=26 native=PASS cases=24 assertions=334 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_page",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_outside_window",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0x0",
+          "file": "0x0"
+        },
+        {
+          "name": "active_after_set",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_equal_value",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "deactivated",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "baseline",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "13916545",
+          "max_ns": "4936035"
+        },
+        {
+          "name": "active_changed",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "11650269",
+          "max_ns": "4016724"
+        },
+        {
+          "name": "active_cpu_0",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "65992227",
+          "max_ns": "22345133"
+        },
+        {
+          "name": "active_cpu_1",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "66226765",
+          "max_ns": "22388346"
+        },
+        {
+          "name": "active_cpu_2",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "66997559",
+          "max_ns": "23244222"
+        },
+        {
+          "name": "active_cpu_3",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "66896687",
+          "max_ns": "22970500"
+        },
+        {
+          "name": "active_cpu_4",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "21162028",
+          "max_ns": "7111613"
+        },
+        {
+          "name": "active_cpu_5",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "21058391",
+          "max_ns": "7147176"
+        },
+        {
+          "name": "active_cpu_6",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "11683065",
+          "max_ns": "3974162"
+        },
+        {
+          "name": "active_cpu_7",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "11701864",
+          "max_ns": "4037353"
+        },
+        {
+          "name": "active_equal_value",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "11557658",
+          "max_ns": "3901204"
+        },
+        {
+          "name": "deactivated",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "11713948",
+          "max_ns": "4103027"
+        }
+      ],
+      "store_checks": [
+        {
+          "name": "baseline",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "12386312",
+          "max_ns": "4297567"
+        },
+        {
+          "name": "active_changed",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11413982",
+          "max_ns": "3838583"
+        },
+        {
+          "name": "active_outside_window",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11379680",
+          "max_ns": "3825236"
+        },
+        {
+          "name": "active_equal_value",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11410604",
+          "max_ns": "3839681"
+        },
+        {
+          "name": "deactivated",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11469727",
+          "max_ns": "3879395"
+        }
+      ],
+      "store_state": [
+        "ELIM_STORE_STATE mode=page preserved=1 generation=1 hits=2 failures=0 replays_before=37 replays_after=37"
+      ],
+      "execution_state": [
+        "ELIM_EXEC_STATE unchanged=1 generation=1 hits=2 replays=37 failures=0"
+      ],
+      "features": [
+        "ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1"
+      ],
+      "business": [
+        "ELIM_BUSINESS ops=151040 errors=0 execution=original"
+      ],
+      "residuals": [
+        "ELIM_RESIDUAL mode=page site_file_word=f9400000 site_live_word=f9400000 differs=0 site_cow_private=0 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0",
+        "ELIM_RESIDUAL restored_site_file_word=f9400000 live_word=f9400000 equal=1 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "timing": [
+        "ELIM_TIMING mode=page site_call_ns=232"
+      ],
+      "log": "05-page-1-15094.log",
+      "uid": 10284
+    },
+    {
+      "label": "06-ap-1",
+      "mode": "w-active",
+      "pid": "15172",
+      "result": "DETECT_RESULT PASS mode=w-active worker_ms=1135 ui_ticks=204 ui_max_gap_ms=20 native=PASS cases=32 assertions=407 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "baseline",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_page",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_outside_window",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0x0",
+          "file": "0x0"
+        },
+        {
+          "name": "active_after_set",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "active_equal_value",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        },
+        {
+          "name": "deactivated",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "baseline",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "2",
+          "unknown": "1",
+          "accepted": "256",
+          "failed": "1",
+          "control_failed": "0",
+          "total_ns": "11737021",
+          "max_ns": "4764242"
+        },
+        {
+          "name": "active_changed",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "11057821",
+          "max_ns": "3747396"
+        },
+        {
+          "name": "active_cpu_0",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "64554566",
+          "max_ns": "22092245"
+        },
+        {
+          "name": "active_cpu_1",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "62391277",
+          "max_ns": "20930868"
+        },
+        {
+          "name": "active_cpu_2",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "61576539",
+          "max_ns": "20683269"
+        },
+        {
+          "name": "active_cpu_3",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "65455607",
+          "max_ns": "22430013"
+        },
+        {
+          "name": "active_cpu_4",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "20520589",
+          "max_ns": "7031779"
+        },
+        {
+          "name": "active_cpu_5",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "20263225",
+          "max_ns": "6783244"
+        },
+        {
+          "name": "active_cpu_6",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "11661295",
+          "max_ns": "4284587"
+        },
+        {
+          "name": "active_cpu_7",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "11224406",
+          "max_ns": "3890015"
+        },
+        {
+          "name": "active_equal_value",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "11002807",
+          "max_ns": "3721761"
+        },
+        {
+          "name": "deactivated",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "11035605",
+          "max_ns": "3722656"
+        }
+      ],
+      "store_checks": [
+        {
+          "name": "baseline",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "12566079",
+          "max_ns": "4346557"
+        },
+        {
+          "name": "active_changed",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11124226",
+          "max_ns": "3762207"
+        },
+        {
+          "name": "active_outside_window",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11107097",
+          "max_ns": "3735026"
+        },
+        {
+          "name": "active_cpu_0",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "63899495",
+          "max_ns": "21694417"
+        },
+        {
+          "name": "active_cpu_1",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "62484457",
+          "max_ns": "21201050"
+        },
+        {
+          "name": "active_cpu_2",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "63309204",
+          "max_ns": "21859863"
+        },
+        {
+          "name": "active_cpu_3",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "64988851",
+          "max_ns": "22533895"
+        },
+        {
+          "name": "active_cpu_4",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "20717244",
+          "max_ns": "7149658"
+        },
+        {
+          "name": "active_cpu_5",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "20375815",
+          "max_ns": "6831910"
+        },
+        {
+          "name": "active_cpu_6",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11163737",
+          "max_ns": "3784830"
+        },
+        {
+          "name": "active_cpu_7",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11280924",
+          "max_ns": "3857055"
+        },
+        {
+          "name": "active_equal_value",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11095379",
+          "max_ns": "3740560"
+        },
+        {
+          "name": "deactivated",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "11075806",
+          "max_ns": "3724324"
+        }
+      ],
+      "store_state": [
+        "ELIM_STORE_STATE mode=ap preserved=1 generation=1 hits=2 failures=0 replays_before=761 replays_after=1721"
+      ],
+      "execution_state": [
+        "ELIM_EXEC_STATE unchanged=1 generation=1 hits=2 replays=761 failures=0"
+      ],
+      "features": [
+        "ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1"
+      ],
+      "business": [
+        "ELIM_BUSINESS ops=213120 errors=0 execution=original"
+      ],
+      "residuals": [
+        "ELIM_RESIDUAL mode=ap site_file_word=f9400000 site_live_word=f9400000 differs=0 site_cow_private=0 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0",
+        "ELIM_RESIDUAL restored_site_file_word=f9400000 live_word=f9400000 equal=1 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "timing": [
+        "ELIM_TIMING mode=ap site_call_ns=285"
+      ],
+      "log": "06-ap-1-15172.log",
+      "uid": 10284
+    },
+    {
+      "label": "07-hold-after-unload",
+      "mode": "y-hold",
+      "pid": "15254",
+      "uid": 10284,
+      "result": "DETECT_RESULT PASS mode=y-hold worker_ms=463 ui_ticks=139 ui_max_gap_ms=17 native=PASS cases=5 assertions=40 failures=0",
+      "execution": [
+        {
+          "name": "hold_active",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "28238526",
+          "max_ns": "12203573"
+        },
+        {
+          "name": "hold_restored",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "22802857",
+          "max_ns": "8807902"
+        }
+      ],
+      "store_checks": [
+        {
+          "name": "hold_active",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "20890136",
+          "max_ns": "7663981"
+        },
+        {
+          "name": "hold_restored",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "18139445",
+          "max_ns": "6113322"
+        }
+      ],
+      "restored": [
+        "ELIM_HOLD_RESTORED pid=15254 opcode=f9400000 direct=f2c66881f2aaacc1 private_dirty_kb=4 anonymous_kb=4 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "log": "07-hold-after-unload-15254.log"
+    },
+    {
+      "label": "08-other-uid",
+      "mode": "z-observer",
+      "pid": "15402",
+      "result": "DETECT_RESULT PASS mode=z-observer worker_ms=351 ui_ticks=127 ui_max_gap_ms=19 native=PASS cases=2 assertions=22 failures=0",
+      "app_pass": true,
+      "cases": [],
+      "execution": [
+        {
+          "name": "unregistered",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "63395264",
+          "max_ns": "29530070"
+        }
+      ],
+      "store_checks": [
+        {
+          "name": "unregistered",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "21097981",
+          "max_ns": "7079101"
+        }
+      ],
+      "store_state": [],
+      "execution_state": [],
+      "features": [],
+      "business": [],
+      "residuals": [],
+      "timing": [],
+      "log": "08-other-uid-15402.log",
+      "uid": 10287
+    },
+    {
+      "label": "08-hold-page-after-unload",
+      "mode": "z-hold",
+      "pid": "15337",
+      "uid": 10284,
+      "result": "DETECT_RESULT PASS mode=z-hold worker_ms=2515 ui_ticks=331 ui_max_gap_ms=23 native=PASS cases=5 assertions=40 failures=0",
+      "execution": [
+        {
+          "name": "hold_active",
+          "n": "3",
+          "expected": "1",
+          "match": "3",
+          "clean": "0",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "288",
+          "control_failed": "0",
+          "total_ns": "30962849",
+          "max_ns": "12820719"
+        },
+        {
+          "name": "hold_restored",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "140993041",
+          "max_ns": "49074910"
+        }
+      ],
+      "store_checks": [
+        {
+          "name": "hold_active",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "19549032",
+          "max_ns": "7337036"
+        },
+        {
+          "name": "hold_restored",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "151515341",
+          "max_ns": "52821167"
+        }
+      ],
+      "restored": [
+        "ELIM_HOLD_RESTORED pid=15337 opcode=f9400000 direct=f2c66881f2aaacc1 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "log": "08-hold-page-after-unload-15337.log"
+    },
+    {
+      "label": "09-other-uid-ap",
+      "mode": "z-observer",
+      "pid": "15559",
+      "result": "DETECT_RESULT PASS mode=z-observer worker_ms=350 ui_ticks=127 ui_max_gap_ms=20 native=PASS cases=2 assertions=22 failures=0",
+      "app_pass": true,
+      "cases": [],
+      "execution": [
+        {
+          "name": "unregistered",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "36774373",
+          "max_ns": "13537557"
+        }
+      ],
+      "store_checks": [
+        {
+          "name": "unregistered",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "23683595",
+          "max_ns": "8471314"
+        }
+      ],
+      "store_state": [],
+      "execution_state": [],
+      "features": [],
+      "business": [],
+      "residuals": [],
+      "timing": [],
+      "log": "09-other-uid-ap-15559.log",
+      "uid": 10287
+    },
+    {
+      "label": "09-hold-ap-after-unload",
+      "mode": "w-hold",
+      "pid": "15493",
+      "uid": 10284,
+      "result": "DETECT_RESULT PASS mode=w-hold worker_ms=2514 ui_ticks=333 ui_max_gap_ms=30 native=PASS cases=5 assertions=40 failures=0",
+      "execution": [
+        {
+          "name": "hold_active",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "23188720",
+          "max_ns": "8232910"
+        },
+        {
+          "name": "hold_restored",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "151254599",
+          "max_ns": "54753622"
+        }
+      ],
+      "store_checks": [
+        {
+          "name": "hold_active",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "16700643",
+          "max_ns": "7454345"
+        },
+        {
+          "name": "hold_restored",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "130948445",
+          "max_ns": "55430175"
+        }
+      ],
+      "restored": [
+        "ELIM_HOLD_RESTORED pid=15493 opcode=f9400000 direct=f2c66881f2aaacc1 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0"
+      ],
+      "log": "09-hold-ap-after-unload-15493.log"
+    },
+    {
+      "label": "10-final-clean",
+      "mode": "y-clean",
+      "pid": "15649",
+      "result": "DETECT_RESULT PASS mode=y-clean worker_ms=351 ui_ticks=127 ui_max_gap_ms=18 native=PASS cases=4 assertions=55 failures=0",
+      "app_pass": true,
+      "cases": [
+        {
+          "name": "idle_unregistered",
+          "result": "PASS",
+          "n": "3",
+          "exclusive_match": "0",
+          "exclusive_clean": "3",
+          "exclusive_unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "reader_match": "0",
+          "reader_clean": "3",
+          "reader_unknown": "0",
+          "direct": "0xf2c66881f2aaacc1",
+          "file": "0xf2c66881f2aaacc1"
+        }
+      ],
+      "execution": [
+        {
+          "name": "unregistered",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "accepted": "288",
+          "failed": "0",
+          "control_failed": "0",
+          "total_ns": "14003826",
+          "max_ns": "4868815"
+        }
+      ],
+      "store_checks": [
+        {
+          "name": "unregistered",
+          "n": "3",
+          "expected": "0",
+          "match": "0",
+          "clean": "3",
+          "unknown": "0",
+          "completed": "96",
+          "stores": "0",
+          "total_ns": "12048218",
+          "max_ns": "4197835"
+        }
+      ],
+      "store_state": [],
+      "execution_state": [],
+      "features": [],
+      "business": [],
+      "residuals": [],
+      "timing": [],
+      "log": "10-final-clean-15649.log",
+      "uid": 10284
+    }
+  ],
+  "passed": true,
+  "initial_modules": "",
+  "root": "uid=0(root) gid=0(root) groups=0(root) context=u:r:shell:s0",
+  "kernel": "Linux localhost 6.1.134-android14-11-g66e758f7d0c0-ab13748739 #1 SMP PREEMPT Tue Jul  8 09:17:32 UTC 2025 aarch64 Toybox",
+  "fingerprint": "google/oriole_beta/oriole:16/BP31.250610.009/13905196:user/release-keys",
+  "device_time": "2025-10-03T12:02:53+0800",
+  "kpver": "c00",
+  "artifacts": {
+    "y_kpm": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\out\\urov-y.kpm",
+      "sha256": "f9d29744c2f9c48b9d4dfb3c721c228bf605985ccad578cfc05cc69aac0932a8"
+    },
+    "apk": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\apps\\urov-detect\\out\\urovdetect.apk",
+      "sha256": "a18622d13bb11e2135fcf149082fb0e4f4cf3d94263b051f9940b32790319464"
+    },
+    "observer_apk": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\apps\\urov-detect\\out\\urovobserver.apk",
+      "sha256": "2392adbb25cb4683e3404436d67d4f78658b89eed54c1d6360f1b3ad0549f364"
+    },
+    "x_kpm": {
+      "path": "E:\\KernelPatch\\kpms\\urov-lab\\out\\urov-x.kpm",
+      "sha256": "7457485747884e5576b7a250426991e0f847ce0199cffe3f0e6a14a8b9d9817a"
+    }
+  },
+  "x_control_skipped": false,
+  "control_status": "mode=site-bound state=inactive sites=0 hits=0 failures=0 hooks=0x1f core_checks=4152",
+  "control": {
+    "active_changed": {
+      "match": 3,
+      "clean": 0,
+      "reader_match": 3
+    },
+    "cpu_cases": 8,
+    "cpu_exclusive_matches": 24,
+    "cpu_reader_matches": 24
+  },
+  "loaded_status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=cc9d hooks=0x7f core_checks=4152 abi=7 fpsimd=1 flen=0",
+  "07-hold_status": "mode=site-trap state=active sites=2 armed=2 hits=2 replays=0 failures=0 llsc=0 degraded=0 imm=cc9d hooks=0x7f core_checks=4152 abi=7 fpsimd=1 flen=8",
+  "07-hold_unload": "",
+  "08-hold-page_status": "mode=page-trap state=active sites=2 armed=2 hits=1 replays=0 failures=0 llsc=0 degraded=0 imm=cc9d hooks=0x7f core_checks=4152 abi=7 fpsimd=1 flen=8",
+  "other_uid_owner_status": "mode=page-trap state=active sites=2 armed=2 hits=20 replays=0 failures=0 llsc=0 degraded=0 imm=cc9d hooks=0x7f core_checks=4152 abi=7 fpsimd=1 flen=8",
+  "08-hold-page_unload": "",
+  "09-hold-ap_status": "mode=data-ap state=active sites=2 armed=2 hits=1 replays=96 failures=0 llsc=0 degraded=0 imm=cc9d hooks=0x7f core_checks=4152 abi=7 fpsimd=1 flen=8",
+  "other_uid_ap_owner_status": "mode=data-ap state=active sites=2 armed=2 hits=20 replays=96 failures=0 llsc=0 degraded=0 imm=cc9d hooks=0x7f core_checks=4152 abi=7 fpsimd=1 flen=8",
+  "09-hold-ap_unload": "",
+  "final_modules": "",
+  "kernel_issues": [],
+  "totals": {
+    "runs": 12,
+    "elim_cases": 21,
+    "observations": 63,
+    "exclusive_matches": 0,
+    "exclusive_clean": 63,
+    "exclusive_unknown": 0,
+    "accepted_triplets": 6048,
+    "failed_target_stores": 0,
+    "control_failed_stores": 0,
+    "reader_matches": 0,
+    "reader_clean": 63,
+    "reader_unknown": 0,
+    "feature_business_reads": 3
+  },
+  "execution_totals": {
+    "active_page": {
+      "n": 33,
+      "match": 33,
+      "clean": 0,
+      "unknown": 0,
+      "accepted": 3168,
+      "failed": 3168,
+      "control_failed": 0
+    },
+    "controls": {
+      "n": 84,
+      "match": 0,
+      "clean": 83,
+      "unknown": 1,
+      "accepted": 8032,
+      "failed": 1,
+      "control_failed": 0
+    }
+  },
+  "store_totals": {
+    "ap_active": {
+      "n": 45,
+      "match": 0,
+      "clean": 45,
+      "unknown": 0,
+      "completed": 1440,
+      "stores": 0,
+      "total_ns": 522837402
+    },
+    "controls": {
+      "n": 60,
+      "match": 0,
+      "clean": 60,
+      "unknown": 0,
+      "completed": 1920,
+      "stores": 0,
+      "total_ns": 417729251
+    }
+  }
+}

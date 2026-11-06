@@ -18,7 +18,97 @@ struct uy_layout {
     int vma_mm;
     int vma_flags;
     int vma_file;
+    /* offsetof(task_struct, thread.uw.fpsimd_state); -1 when the running
+     * kernel's BTF does not describe the FPSIMD layout we can drive. */
+    int task_fpsimd;
 };
+
+/* Direct member lookup (no recursion, so it is one scan of one type). */
+static int uy_btf_member(const struct kclf_btf *btf, const struct kclf_btf_type *type,
+                         const char *name, uint32_t *type_id)
+{
+    const struct kclf_btf_member *member;
+    unsigned kind, i, n;
+
+    if (!type) return -1;
+    kind = (type->info >> 24) & 31;
+    if (kind != 4 && kind != 5) return -1;
+    member = (const void *)(type + 1);
+    n = type->info & 0xffff;
+    for (i = 0; i < n; i++) {
+        uint32_t bitoff = (type->info >> 31) ? (member[i].offset & 0xffffff)
+                                             : member[i].offset;
+        if ((bitoff & 7) || bitoff / 8 >= type->size) continue;
+        if (member[i].name && !strcmp(kclf_btf_name(btf, member[i].name), name)) {
+            if (type_id) *type_id = member[i].type;
+            return (int)(bitoff / 8);
+        }
+    }
+    return -1;
+}
+
+/* uapi struct user_fpsimd_state: 32 16-byte vregs, then fpsr/fpcr.  The
+ * register file update helper takes a pointer to it, so its layout has to be
+ * verified rather than assumed. */
+static int uy_fpsimd_layout(const struct kclf_btf *btf)
+{
+    if (kclf_btf_member_range(btf, "user_fpsimd_state", "vregs", 512, 16) != 0 ||
+        kclf_btf_member_range(btf, "user_fpsimd_state", "fpsr", 4, 4) != 512 ||
+        kclf_btf_member_range(btf, "user_fpsimd_state", "fpcr", 4, 4) != 516)
+        return -1;
+    return 0;
+}
+
+/* Size of uapi struct user_fpsimd_state as mirrored by struct uy_fpstate. */
+#define UY_FPSIMD_BYTES 528U
+
+/* walk task_struct.thread -> (<=2 named levels) -> user_fpsimd_state */
+static int uy_fpsimd_offset(const struct kclf_btf *btf)
+{
+    const struct kclf_btf_type *task = kclf_btf_find(btf, "task_struct", 0);
+    const struct kclf_btf_type *thread, *uw;
+    uint32_t thread_type = 0, uw_type = 0;
+    int thread_off, uw_off, fp_off;
+    unsigned i, n;
+
+    thread_off = uy_btf_member(btf, task, "thread", &thread_type);
+    if (thread_off < 0) return -1;
+    thread = kclf_btf_resolve(btf, thread_type);
+    if (!thread) return -1;
+    uw_off = uy_btf_member(btf, thread, "uw", &uw_type);
+    if (uw_off >= 0) {
+        uw = kclf_btf_resolve(btf, uw_type);
+        fp_off = uy_btf_member(btf, uw, "fpsimd_state", 0);
+        if (fp_off >= 0) {
+            if ((unsigned)(uw_off + fp_off) + UY_FPSIMD_BYTES > thread->size)
+                return -1;
+            return thread_off + uw_off + fp_off;
+        }
+    }
+    /* Older/renamed layouts: accept a direct member, or any anonymous member
+     * one level deep that itself holds user_fpsimd_state. */
+    fp_off = uy_btf_member(btf, thread, "fpsimd_state", 0);
+    if (fp_off >= 0)
+        return (unsigned)fp_off + UY_FPSIMD_BYTES > thread->size ? -1 : thread_off + fp_off;
+    n = (((thread->info >> 24) & 31) == 4 || ((thread->info >> 24) & 31) == 5)
+            ? (thread->info & 0xffff) : 0;
+    for (i = 0; i < n; i++) {
+        const struct kclf_btf_member *member = (const void *)(thread + 1);
+        uint32_t bitoff = (thread->info >> 31) ? (member[i].offset & 0xffffff)
+                                               : member[i].offset;
+        const struct kclf_btf_type *sub;
+        int sub_off;
+        if ((bitoff & 7) || bitoff / 8 >= thread->size) continue;
+        sub = kclf_btf_resolve(btf, member[i].type);
+        sub_off = uy_btf_member(btf, sub, "fpsimd_state", 0);
+        if (sub_off >= 0) {
+            if (bitoff / 8 + (unsigned)sub_off + UY_FPSIMD_BYTES > thread->size)
+                return -1;
+            return thread_off + (int)(bitoff / 8) + sub_off;
+        }
+    }
+    return -1;
+}
 
 static int uy_layout_from_btf(struct uy_layout *layout, const struct kclf_btf *btf)
 {
@@ -32,6 +122,7 @@ static int uy_layout_from_btf(struct uy_layout *layout, const struct kclf_btf *b
     layout->vma_mm = kclf_btf_member_range(btf, "vm_area_struct", "vm_mm", 8, 8);
     layout->vma_flags = kclf_btf_member_range(btf, "vm_area_struct", "vm_flags", 8, 8);
     layout->vma_file = kclf_btf_member_range(btf, "vm_area_struct", "vm_file", 8, 8);
+    layout->task_fpsimd = uy_fpsimd_layout(btf) ? -1 : uy_fpsimd_offset(btf);
     layout->mmap_lock = -1;
     if (sem && sem->size >= 16 && sem->size <= 512) {
         layout->mmap_lock = kclf_btf_member_range(btf, "mm_struct", "mmap_lock", sem->size, 8);

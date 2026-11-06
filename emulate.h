@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+﻿/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef URO_LAB_EMULATE_H
 #define URO_LAB_EMULATE_H
 #include "decode.h"
@@ -13,7 +13,7 @@
 #define URO_READ_ESR ((UINT64_C(0x24) << 26) | (UINT64_C(1) << 25) | 15U)
 /* Exact number of assertions performed by uro_core_selftest(). Keep the KPM
  * load gate and the host tests in sync with this value. */
-#define URO_CORE_CHECKS 4139U
+#define URO_CORE_CHECKS 4152U
 
 enum uro_result {
     URO_OK = 0,

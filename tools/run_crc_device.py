@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Test in-process SO patching and CRC32 views on a connected Android device."""
 
 import argparse
@@ -94,7 +94,7 @@ def main():
         else:
             stages = [dict(KV.findall(line)) for line in re.findall(r"CRC_STAGE [^\n]+", logs)]
             stage_key = "name"
-        if mode in ("crc-ap-text", "crc-ap-libc"):
+        if mode in ("crc-ap-text", "crc-ap-libc", "crc-ap-big"):
             expected = ["clean", "overlay", "deactivated"]
         else:
             expected = ["clean", "patch_only", "overlay", "deactivated"] if active else \
@@ -108,13 +108,19 @@ def main():
         if mode == "crc-ap-libc" and not re.search(
                 r"CRC_LIBC_VMA .*private_dirty_kb=0 anonymous_kb=0", logs):
             raise RuntimeError(f"{label}: libc text VMA was not the normal private mapping")
+        if mode == "crc-ap-big" and not re.search(
+                r"CRC_BIG_VMA .*private_dirty_kb=0 anonymous_kb=0", logs):
+            raise RuntimeError(f"{label}: big-transfer VMA was not the normal private mapping")
+        if mode == "crc-ap-big" and not re.search(
+                r"CRC_BIG n=\d+ lengths=16,32,64,160,512,1024,4096 ", logs):
+            raise RuntimeError(f"{label}: big-transfer reader matrix missing")
         if active and "state=inactive" not in kp("kpm", "ctl0", MODULE, "status"):
             raise RuntimeError(f"{label}: fixture left an active session")
         report["runs"].append({"label": label, "mode": mode, "uid": int(uid[1]), "pid": pid,
                                "log": log_path.name, "result": result[0], "stages": stages,
                                "details": re.findall(r"(?:CRC_(?:REJECT|PRIVATE|REMAP|MAP|OVERLAY|SITE|"
-                                                     r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC)|ELIM_EXEC) [^\n]+", logs)})
-        if mode in ("crc-ap-text", "crc-ap-libc"):
+                                                     r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC|BIG|BIG_OVERLAY|BIG_VMA|MIXED|SET)|ELIM_EXEC) [^\n]+", logs)})
+        if mode in ("crc-ap-text", "crc-ap-libc", "crc-ap-big"):
             last = stages[1]
         elif active:
             last = stages[2]
@@ -150,7 +156,7 @@ def main():
         run_app("loaded-idle", "crc-clean")
         for i in range(1, args.cycles + 1):
             for mode in ("crc-brk", "crc-uxn", "crc-ap", "crc-ap-all", "crc-ap-text",
-                         "crc-ap-libc"):
+                         "crc-ap-libc", "crc-ap-big"):
                 run_app(f"{mode}-{i}", mode)
         report["passed"] = True
     except Exception as exc:

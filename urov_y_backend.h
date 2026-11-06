@@ -17,6 +17,9 @@ struct uy_status {
     uint32_t imm;
     uint32_t mode;
     uint32_t degraded;
+    uint32_t fpsimd;      /* native FPSIMD helpers available */
+    uint32_t overlay_len; /* active overlay bytes, 0 when inactive */
+    uint32_t abi;
 };
 
 /* Installs the reader-site traps (BRK, PAGE_UXN and/or PAGE_AP mode), the

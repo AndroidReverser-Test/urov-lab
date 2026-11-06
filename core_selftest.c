@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+﻿/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "emulate.h"
 
 static int same_regs(const struct uro_regs *a, const struct uro_regs *b)
@@ -152,6 +152,35 @@ int uro_core_selftest(uint8_t *page, unsigned *checks)
         CHECK(uro_emulate(&v, 0xf9400002U, URO_READ_ESR, r.x[0], &r) == URO_BAD_CONFIG);
         CHECK(same_regs(&r, &keep));
         v.fake = fake;
+    }
+
+    /* decode.c also decodes the SIMD&FP load forms so the urov-y target-page
+     * backend can serve large libc transfers (bionic switches to LDR Q/LDP Q
+     * from 16 bytes in memcpy and in memcmp/strlen over larger ranges).  The
+     * shared GPR emulator must keep rejecting them exactly as urov-x did. */
+    {
+        struct uro_load d;
+        struct uro_regs keep;
+        struct uro_regs q = { { 0 }, 0x2000, 0x20000, 0 };
+
+        q.x[0] = 0x10020;
+        q.x[1] = 0x10020;
+        CHECK(uro_decode(0x3dc00020U, &q, &d) == 0);
+        CHECK(d.vector && d.size == 16 && d.count == 1 && d.rt == 0 &&
+              d.address == 0x10020 && d.dest_bits == 128);
+        CHECK(uro_decode(0xad412c2aU, &q, &d) == 0);
+        CHECK(d.vector && d.size == 16 && d.count == 2 && d.rt == 10 &&
+              d.rt2 == 11 && d.address == 0x10040 && !d.writeback);
+        CHECK(uro_decode(0xadc2342cU, &q, &d) == 0);
+        CHECK(d.vector && d.writeback && d.address == 0x10060 && d.wb == 0x10060);
+        CHECK(uro_decode(0x3cdf0022U, &q, &d) == 0);
+        CHECK(d.vector && d.size == 16 && d.address == 0x10010 && !d.writeback);
+        CHECK(uro_decode(0xfd400026U, &q, &d) == 0);
+        CHECK(d.vector && d.size == 8 && d.rt == 6 && d.dest_bits == 64);
+        CHECK(uro_decode(0x3d800020U, &q, &d) == -1); /* STR Q is not a load */
+        copy_regs(&keep, &r);
+        CHECK(uro_emulate(&v, 0x3dc00020U, URO_READ_ESR, 0x10020, &r) == URO_UNSUPPORTED);
+        CHECK(same_regs(&r, &keep));
     }
 
     for (i = 0; i < URO_PAGE_SIZE; ++i) CHECK(page[i] == (uint8_t)(i * 17U + 3U));

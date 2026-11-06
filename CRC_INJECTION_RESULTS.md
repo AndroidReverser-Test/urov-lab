@@ -107,9 +107,38 @@ VMA 可读、可执行、当前不可写                                VM_READ 
 `crc-ap-libc` 每次运行 15 轮，`hits=360`、`replays=504`、`failures=0`；
 窗口外直接读/裸站点读仍为 `f50bcaf6`，执行仍返回 `0x1234`，注销后恢复。
 该场景证明的是**标量 libc 路径**：bionic 的 `memcpy` 在 16 字节起、`memcmp`
-在 160 字节起、`strlen` 在越过前 32 字节后会使用 SIMD `LDR q`/`LDP q`；
-这些大范围路径仍按 fail-closed 处理（SIGSEGV），不在本次解决范围。内核辅助
-读取（`/proc/self/mem`、ptrace、`process_vm_readv`）也仍看到真实字节。
+在 160 字节起、`strlen` 在越过前 32 字节后会使用 SIMD `LDR q`/`LDP q`；这些大范围
+路径在 ABI v6 上仍按 fail-closed 处理（SIGSEGV）。内核辅助读取
+（`/proc/self/mem`、ptrace、`process_vm_readv`）也仍看到真实字节。
+
+### 大长度传输：`crc-ap-big`（ABI v7）
+
+ABI v7 给 `PAGE_AP` 增加了 SIMD&FP load 模拟（经内核
+`fpsimd_signal_preserve_current_state()` + `fpsimd_update_current_state()`）和
+整页覆盖镜像。`crc-ap-big` 注册同一页 linker `.text`，窗口为整页 4096 字节
+（`fake_addr` 指向夹具构造的伪页），调用者窗口只覆盖 `crc_big_business()`：
+
+| 读取方式 | 结果 |
+| --- | --- |
+| `memcpy(copy, target, n)`，n = 16/32/64/160/512/1024/4096 | 全部等于伪镜像前 n 字节（bionic SIMD 路径） |
+| `memcmp(target, fake, 4096)` | 0 |
+| `strlen(target)` | 4095（终止符在页尾，`ldp q1,q2,[x1,#0x20]!` 路径） |
+| zlib `crc32(0, copy, 4096)` | `71515206`（伪页 CRC32） |
+| 窗口外 `memcpy(copy, target, 4096)` + 标量读 | `0adadb20`（原页 CRC32，replay 路径） |
+
+第二轮再注册一个 **32 字节、offset 64 的内部窗口**，同一次 4 KiB `memcpy`
+得到“原页字节 + 窗口内 32 字节伪值”的合成视图（`window_crc=d1f7ac49`），
+说明合并是按字节的、窗口边界精确；随后用 `SET` 换掉这 32 字节，`generation=2`，
+重新读到 `window_crc=fd83e7b5`。
+
+2026-11-06 在 Pixel 6（6.1.134）上跑
+`run_crc_device.py --repeats 5 --cycles 2`：16 次运行全部 PASS。`crc-ap-big`
+两轮均为 `window_crc=71515206`、`strlen=4095`、
+`hits=4242 / replays=21125 / failures=0 / length=4096`，`smaps` 的
+`Private_Dirty/Anonymous` 仍为 0，注销后页面 CRC32 恢复、`kpm list` 为空、内核
+增量无告警（[机器汇总](results/crc-20261106-212757/summary.json)）。设计、反汇编
+依据与残余（多结构 load、SVE、跨页）见
+[ELIMINATION_DESIGN.md §13](ELIMINATION_DESIGN.md)。
 
 ### 真机结果
 

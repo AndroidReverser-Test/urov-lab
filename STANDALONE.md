@@ -10,7 +10,7 @@
 | 控制通道 | `urov_backend.c`，`fp_hook_syscalln(__NR_kcmp)` | magic + 128 字节请求；普通 kcmp 原样放行 |
 | 映射事务 | `urov_backend.c` | `get_task_mm`、`pin_user_pages_unlocked`、VMA/PTE 校验、清 `PTE.AP[1]`、`flush_tlb_mm`、恢复 |
 | 映射门控 | `urov_backend.c` | mprotect/munmap/mremap/madvise/mmap(MAP_FIXED) 与活动页相交时返回 `-EBUSY` |
-| 解码/模拟 | `decode.c`、`emulate.c` | 纯软件、无分配；支持 8/16/24/32 字节覆盖窗口；`core_selftest.c` 提供 4139 项加载自测 |
+| 解码/模拟 | `decode.c`、`emulate.c` | 纯软件、无分配；支持 8/16/24/32 字节覆盖窗口；`core_selftest.c` 提供 4152 项加载自测（含 SIMD&FP load 解码，供 `urov-y` 的 `PAGE_AP` 使用；本模块的 `uro_emulate` 仍只提交 GPR） |
 | KPM 入口 | `urov_kpm.c` | 元数据、init/exit、`ctl0` 只读状态输出 |
 
 ## 语义

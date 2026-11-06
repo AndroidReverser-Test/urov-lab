@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+﻿/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Serial management test of the preflight KPM, NOT an overlay test. */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -95,7 +95,7 @@ int main(int argc, char **argv)
         memset(output, 0xa5, sizeof(output));
         EXPECT(ctl(key, "status", output, sizeof(output)), 0);
         if (!memchr(output, 0, sizeof(output)) || !strstr(output, "mode=preflight active=0 backend=none core=pass ") ||
-            !strstr(output, "loader_contract=unverified") || !strstr(output, "checks=4139 ")) {
+            !strstr(output, "loader_contract=unverified") || !strstr(output, "checks=4152 ")) {
             fprintf(stderr, "FAIL status schema\n"); goto done;
         }
         if (n == 0) printf("module_status %s", output);

@@ -715,3 +715,142 @@ Pixel 6（Android 16、6.1.134）上的 `crc-ap-text` 直接注册
 4. 门控检查 `mremap` 的源区间和 `MREMAP_FIXED` 的目标区间；`pkey_mprotect`、
    `remap_file_pages` 等未 hook 的映射路径仍是残余，应用自己换掉目标页后覆盖
    会静默失效（不涉及内存安全）。
+
+## 13. 第六轮：大长度 libc 传输——SIMD&FP load 与整页覆盖
+
+### 13.1 触发本轮的限制
+
+§12.4 把业务窗口从"只查当前 `x30`"扩展到 `x29` 帧链，标量路径的
+`memcpy`/`memcmp`/`strlen`/zlib `crc32` 因此都能命中。但 bionic 在更大长度上
+换指令（对 `libc.so` 的目标实现反汇编确认）：
+
+| 函数 | 标量路径 | 转入 SIMD 的阈值 | 用到的 load |
+|---|---|---|---|
+| `memcpy` | `<16` 字节（`ldr/ldur` x/w/h/b） | `>=16` | `ldr q`、`ldur q`、`ldp q`（含前索引 `ldp q1,q2,[x1,#0x20]!`） |
+| `memcmp` | `<160` 字节（`ldp x` 对 + 尾部标量） | `>=160` | `ldr q`（含写回 `ldr q0,[x0,#0x40]!`） |
+| `strlen` | 前 32 字节（`ldp x,x`） | 之后每 32 字节块 | `ldp q1,q2,[x1,#0x20]!`（页尾对齐例外用 `ld1 {v1.16b,v2.16b}`） |
+
+旧实现只模拟 GPR load：`uro_decode()` 对 bit26=1 的 SIMD&FP 编码一律失败，
+`uy_emulate_load()` 于是 fail-closed（SIGSEGV）。同时 `UROV_Y_FAKE_MAX == 32`，
+请求里只有 `value`+`value_hi[3]`，即使指令能模拟，一个 4 KiB 调用也只能改前
+32 字节。**"足够大长度的函数调用修改"卡在两处：向量寄存器没有提交路径，覆盖
+镜像也放不下。**
+
+### 13.2 机制
+
+1. **解码**（`decode.c`）。新增 SIMD&FP load 的四组编码：
+
+   | 掩码 | 形式 | 说明 |
+   |---|---|---|
+   | `(i & 0x3f000000) == 0x3d000000` | unsigned imm12 | `opc[0]` 是 load 位，`opc[1]` 仅与 `size==0` 合法地表示 128 位；`imm12 << log2(access)` |
+   | `(i & 0x3f000000) == 0x3c000000` | unscaled / 前中后索引 / 寄存器偏移 | `S` 位对 128 位形式按 16 缩放（编码里 size 仍为 0） |
+   | `(i & 0x3f000000) == 0x1c000000` | literal | `opc` 0/1/2 = 4/8/16 字节，3 是 PRFM |
+   | `(i & 0x3e000000) == 0x2c000000` | LDP/STP pair | `opc` 0/1/2 = 4/8/16 字节元素 |
+
+   store、`LDTR`、`LD1`/`LD2` 多结构、`opc=3` 组合一律拒绝（保持原生 fault 或
+   fail-closed）。解码结果新增 `vector` 标志区分两类寄存器文件。
+2. **共享核心不变**。`uro_emulate()` 在解码后立刻对 `vector` 返回
+   `URO_UNSUPPORTED`，`urov-x`/`urov-lab` 的白名单和行为完全不变；
+   `core_selftest` 增加 13 项解码/拒绝断言，总数 4139 → 4152。
+3. **FPSIMD 提交**（`urov_y_backend.c`）。`PAGE_AP` 的数据异常里，向量 load 的
+   合并字节不写 `pt_regs`（那里没有向量寄存器），而是走内核自己的保存/更新对：
+
+   ```text
+   fpsimd_signal_preserve_current_state();          /* live V0..V31 -> thread.uw.fpsimd_state */
+   thread.uw.fpsimd_state.vregs[rt]  = merged;      /* 标量 load 先零扩展 16 字节 */
+   thread.uw.fpsimd_state.vregs[rt2] = merged2;     /* LDP 的第二个寄存器 */
+   fpsimd_update_current_state(&thread.uw.fpsimd_state);  /* 装载 + 绑定 CPU + 清 FOREIGN */
+   ```
+
+   选内核 helper 而不是内联 `stp q`：`preserve` 在 `TIF_FOREIGN_FPSTATE` 置位时
+   不覆盖权威的内存副本（软中断 NEON、KVM、ptrace 场景），`update` 负责重绑 CPU
+   并在返回 EL0 前清 foreign 标志。`thread.uw.fpsimd_state` 的偏移来自运行内核
+   BTF（`task_struct.thread` → `uw` → `fpsimd_state`），并用 BTF 复核
+   `user_fpsimd_state` 的 `vregs/fpsr/fpcr` 布局；缺任一 helper 或布局时
+   `g_fp_ready=0`，向量 load 继续 fail-closed，`ctl0 status` 的 `fpsimd=0` 明示。
+4. **整页覆盖镜像（ABI v7）**。请求从 240 字节扩到 256 字节，新增
+   `uint64_t fake_addr`（`length > 32` 时指向调用者缓冲区）与 `uint64_t reserved`
+   （必须为 0）。`length` 允许 8..4096（8 的倍数），`offset+length <= 4096`；
+   `<=32` 仍可用 `value`/`value_hi` 内联，旧夹具不改。`REGISTER`/`SET` 先用
+   `access_remote_vm()` 把调用者镜像拷到模块暂存区（可在 seqlock 外 fault-in），
+   再在 seqlock 内 4 KiB 拷贝发布，并把前 32 字节镜像回 `value`/`value_hi`
+   （`STATUS` 仍按老格式回显）。故障路径只按当前 load 的 ≤32 字节逐字节合并，
+   因此 4 KiB `memcpy`（128 条 `LDP Q`）每次只读 32 字节镜像。
+5. **失败语义**。没有 FPSIMD 能力 → `-6`（SIGSEGV）；seqlock 重试耗尽 → `-4`；
+   配置非法 → `-3`；绝不返回原字节冒充伪值。`PAGE_AP` 的 store 不进本路径
+   （`WnR=0` 过滤），只读映射的 store 仍按原生权限 fault。
+
+### 13.3 与既有性质的关系
+
+- **仍然每次 load 一次同步异常**：§10 的 LL/SC 桥、§9 的取指 canary、代码页与
+  映射特征都不变；`crc-ap-big` 中 `smaps` 的 `Private_Dirty/Anonymous` 仍为 0。
+- **业务窗口语义不变**：只有窗口内的调用拿伪值；窗口外的 4 KiB `memcpy` 走
+  `replay`（读注册快照），实测与直接标量读逐字节一致。
+- **站点指令仍必须是 GPR load**：`site_ok()` 显式拒绝 `vector`，BRK/UXN 模式的
+  可控指令集不变；只有 `PAGE_AP` 由故障地址选中，才服务向量 load。
+- **注销/卸载不涉及向量状态**：FPSIMD 只在异常处理里改一次当前任务的寄存器，
+  不 pin、不改 PTE/映射、不留跨会话状态。
+
+### 13.4 真机验证
+
+Pixel 6（oriole，Android 16，6.1.134，KP `0xc00`）。`urov-y.kpm` SHA256
+`f9d29744…32a8`，`urovdetect.apk` SHA256 `a18622d1…19464`；
+`run_crc_device.py --repeats 5 --cycles 2` 共 16 次运行全部 PASS，`crc-ap-big`
+两轮一致：
+
+| 观察量 | 值 |
+|---|---|
+| 4 KiB `memcpy(target)` 目的地 CRC32 | `71515206`（= `CRC_BIG fake_crc`） |
+| 16/32/64/160/512/1024/4096 字节 `memcpy` | 全部等于伪镜像前缀 |
+| `memcmp(target, fake, 4096)` | 0 |
+| `strlen(target)` | 4095（SIMD 32 字节块，终止符在页尾） |
+| zlib `crc32(0, copy, 4096)` | `71515206` |
+| 窗口外 4 KiB `memcpy` / 标量读 | `0adadb20`（= 原页 CRC32） |
+| 伪镜像与原页 CRC32 | `71515206` ≠ `0adadb20` |
+| 32 字节内部窗口（offset 64） | `window_crc=d1f7ac49`，窗口边界外逐字节保持原页 |
+| 同一会话 `SET` 32 字节新值 | `generation=2`，`window_crc=fd83e7b5` |
+| 计数器 | `hits=4242 replays=21125 failures=0 length=4096` |
+| 注销后 | 页面 CRC32 恢复 `0adadb20`，`kpm list` 为空 |
+| 内核增量 | 无 BUG/WARNING/Oops/stall，`kernel_issues=[]` |
+
+数据：[results/crc-20261106-212757](results/crc-20261106-212757/summary.json) 与
+[CRC_INJECTION_RESULTS.md](CRC_INJECTION_RESULTS.md)；同一构建的
+`run_elimination_device.py --repeats 3 --cycles 1` 矩阵 14 次运行 PASS
+（[results/eliminate-20261106-212835](results/eliminate-20261106-212835/summary.json)，
+含 `urov-x` 阳性对照、三种模式、不同 UID、活动期卸载，`kernel_issues=[]`）；root
+夹具 `urov_y_test --mode ap` 回归 33 项断言 PASS。
+
+### 13.5 残余特征与限制（诚实清单）
+
+1. **只有 `PAGE_AP` 支持向量 load**。BRK/UXN 模式的站点指令仍必须是 GPR load；
+   把站点换成 `ldr q` 会被 `site_ok()` 拒绝（`EINVAL`）。
+2. **多结构 load**：`LD1`/`LD2`/`LD3`/`LD4`（`strlen` 的页尾对齐例外用到
+   `ld1 {v1.16b,v2.16b}`）不在白名单，命中即 fail-closed（SIGSEGV）。
+3. **SVE/SME**：Pixel 6 无 SVE；带 SVE 的内核上 `TIF_SVE` 任务的低 128 位由
+   内核 helper 保持一致，但谓词/高 128 位不受覆盖，SVE 指令仍拒绝。
+4. **跨页**：覆盖仍限一页；跨页单条 load 仍 fail-closed，超过 4 KiB 的函数调用
+   只修改注册页内的那 4 KiB，其余页原样。
+5. **FPSIMD 提交的成本与语义**：每条向量 load 一次异常 + 一次
+   `fpsimd_preserve`/`fpsimd_update`（两段 `local_bh_disable`）。`fpsr`/`fpcr` 按
+   原值回写，其它 V 寄存器保持不变；异常上下文里没有新增睡眠点。
+6. **整页镜像发布**：`SET` 在 seqlock 内做 4 KiB 拷贝（约 1 µs），此间故障读会
+   短暂自旋；重试上限耗尽按 fail-closed 处理。`REGISTER` 的镜像拷贝在会话发布
+   前完成，不存在半镜像窗口。
+7. **残余检测面**：向量 load 与标量 load 一样进 EL1（每 16/32 字节一次数据
+   异常），时间特征仍是 §10.7 的量级；FPSIMD 状态改写由内核 helper 完成，不额外
+   改 `pt_regs`/PTE/代码页。root 仍可观察 hook 与 `ctl0 status`。
+8. **合作模型**：调用者自己声明业务窗口与目标页；同进程代码直接调用已注册的
+   业务函数仍会拿到伪值（§12.4 的边界不变）。
+
+### 13.6 构建与验证入口
+
+```powershell
+.\kpms\urov-lab\build.ps1
+.\kpms\urov-lab\apps\urov-detect\build.ps1
+python .\kpms\urov-lab\tools\run_crc_device.py `
+  --serial <SERIAL> --key <KP-SUPERKEY> --repeats 5 --cycles 2
+```
+
+新增场景 `crc-ap-big`：整页 4096 字节伪镜像（`fake_addr`）、16..4096 字节
+`memcpy`/`memcmp`/`strlen`/`crc32`、32 字节内部窗口（offset 64）与同会话 `SET`。
+主机侧 `tools/test_host.sh` 仍通过 58 个汇编语料向量与 4152 项核心自测。

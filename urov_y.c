@@ -56,11 +56,13 @@ static long urov_y_control(const char *args, char __user *out, int len)
            st.mode == UROV_Y_MODE_PAGE_AP ? "data-ap" : "site-trap";
     n = snprintf(message, sizeof(message),
                  "mode=%s state=%s sites=%u armed=%u hits=%llu replays=%llu "
-                 "failures=%llu llsc=%llu degraded=%u imm=%x hooks=0x%x core_checks=%u\n",
+                 "failures=%llu llsc=%llu degraded=%u imm=%x hooks=0x%x "
+                 "core_checks=%u abi=%u fpsimd=%u flen=%u\n",
                  mode, st.active ? "active" : "inactive", st.sites, st.armed,
                  (unsigned long long)st.hits, (unsigned long long)st.replays,
                  (unsigned long long)st.failures, (unsigned long long)st.llsc,
-                 st.degraded, st.imm, st.hooks, st.core_checks);
+                 st.degraded, st.imm, st.hooks, st.core_checks, st.abi,
+                 st.fpsimd, st.overlay_len);
     if (n < 0 || n >= (int)sizeof(message)) return -EOVERFLOW;
     if (len <= n) return -ENOSPC;
     return urov_y_copy_to_user(out, message, (size_t)n + 1) ? -EFAULT : 0;

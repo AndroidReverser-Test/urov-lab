@@ -1,0 +1,44 @@
+--------- beginning of main
+10-03 12:03:06.388 15172 15197 I urovdetect: CONTEXT pid=15172 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-03 12:03:06.389 15172 15197 I urovdetect: BEGIN mode=w-active repeats=3
+10-03 12:03:06.538 15172 15197 I urovdetect: ELIM_CASE name=baseline result=PASS n=3 exclusive_match=0 exclusive_clean=3 exclusive_unknown=0 accepted=288 failed=0 control_failed=0 reader_match=0 reader_clean=3 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-03 12:03:06.550 15172 15197 I urovdetect: ELIM_EXEC name=baseline n=3 expected=0 match=0 clean=2 unknown=1 accepted=256 failed=1 control_failed=0 total_ns=11737021 max_ns=4764242
+10-03 12:03:06.563 15172 15197 I urovdetect: ELIM_STORE name=baseline n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=12566079 max_ns=4346557
+10-03 12:03:06.575 15172 15197 I urovdetect: ELIM_RESIDUAL mode=ap site_file_word=f9400000 site_live_word=f9400000 differs=0 site_cow_private=0 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0
+10-03 12:03:06.612 15172 15197 I urovdetect: ELIM_CASE name=active_page result=PASS n=3 exclusive_match=0 exclusive_clean=3 exclusive_unknown=0 accepted=288 failed=0 control_failed=0 reader_match=0 reader_clean=3 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-03 12:03:06.648 15172 15197 I urovdetect: ELIM_CASE name=active_outside_window result=PASS n=3 exclusive_match=0 exclusive_clean=3 exclusive_unknown=0 accepted=288 failed=0 control_failed=0 reader_match=0 reader_clean=3 reader_unknown=0 direct=0x0 file=0x0
+10-03 12:03:06.660 15172 15197 I urovdetect: ELIM_EXEC name=active_changed n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=11057821 max_ns=3747396
+10-03 12:03:06.727 15172 15197 I urovdetect: ELIM_EXEC name=active_cpu_0 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=64554566 max_ns=22092245
+10-03 12:03:06.792 15172 15197 I urovdetect: ELIM_EXEC name=active_cpu_1 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=62391277 max_ns=20930868
+10-03 12:03:06.857 15172 15197 I urovdetect: ELIM_EXEC name=active_cpu_2 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=61576539 max_ns=20683269
+10-03 12:03:06.926 15172 15197 I urovdetect: ELIM_EXEC name=active_cpu_3 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=65455607 max_ns=22430013
+10-03 12:03:06.947 15172 15197 I urovdetect: ELIM_EXEC name=active_cpu_4 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=20520589 max_ns=7031779
+10-03 12:03:06.969 15172 15197 I urovdetect: ELIM_EXEC name=active_cpu_5 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=20263225 max_ns=6783244
+10-03 12:03:06.982 15172 15197 I urovdetect: ELIM_EXEC name=active_cpu_6 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=11661295 max_ns=4284587
+10-03 12:03:06.994 15172 15197 I urovdetect: ELIM_EXEC name=active_cpu_7 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=11224406 max_ns=3890015
+10-03 12:03:06.994 15172 15197 I urovdetect: ELIM_EXEC_STATE unchanged=1 generation=1 hits=2 replays=761 failures=0
+10-03 12:03:07.006 15172 15197 I urovdetect: ELIM_STORE name=active_changed n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=11124226 max_ns=3762207
+10-03 12:03:07.017 15172 15197 I urovdetect: ELIM_STORE name=active_outside_window n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=11107097 max_ns=3735026
+10-03 12:03:07.084 15172 15197 I urovdetect: ELIM_STORE name=active_cpu_0 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=63899495 max_ns=21694417
+10-03 12:03:07.149 15172 15197 I urovdetect: ELIM_STORE name=active_cpu_1 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=62484457 max_ns=21201050
+10-03 12:03:07.215 15172 15197 I urovdetect: ELIM_STORE name=active_cpu_2 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=63309204 max_ns=21859863
+10-03 12:03:07.284 15172 15197 I urovdetect: ELIM_STORE name=active_cpu_3 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=64988851 max_ns=22533895
+10-03 12:03:07.306 15172 15197 I urovdetect: ELIM_STORE name=active_cpu_4 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=20717244 max_ns=7149658
+10-03 12:03:07.327 15172 15197 I urovdetect: ELIM_STORE name=active_cpu_5 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=20375815 max_ns=6831910
+10-03 12:03:07.339 15172 15197 I urovdetect: ELIM_STORE name=active_cpu_6 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=11163737 max_ns=3784830
+10-03 12:03:07.351 15172 15197 I urovdetect: ELIM_STORE name=active_cpu_7 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=11280924 max_ns=3857055
+10-03 12:03:07.351 15172 15197 I urovdetect: ELIM_STORE_STATE mode=ap preserved=1 generation=1 hits=2 failures=0 replays_before=761 replays_after=1721
+10-03 12:03:07.354 15172 15197 I urovdetect: ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1
+10-03 12:03:07.355 15172 15197 I urovdetect: ELIM_TIMING mode=ap site_call_ns=285
+10-03 12:03:07.391 15172 15197 I urovdetect: ELIM_CASE name=active_after_set result=PASS n=3 exclusive_match=0 exclusive_clean=3 exclusive_unknown=0 accepted=288 failed=0 control_failed=0 reader_match=0 reader_clean=3 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-03 12:03:07.428 15172 15197 I urovdetect: ELIM_CASE name=active_equal_value result=PASS n=3 exclusive_match=0 exclusive_clean=3 exclusive_unknown=0 accepted=288 failed=0 control_failed=0 reader_match=0 reader_clean=3 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-03 12:03:07.439 15172 15197 I urovdetect: ELIM_EXEC name=active_equal_value n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=11002807 max_ns=3721761
+10-03 12:03:07.451 15172 15197 I urovdetect: ELIM_STORE name=active_equal_value n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=11095379 max_ns=3740560
+10-03 12:03:07.462 15172 15197 I urovdetect: ELIM_RESIDUAL restored_site_file_word=f9400000 live_word=f9400000 equal=1 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0
+10-03 12:03:07.498 15172 15197 I urovdetect: ELIM_CASE name=deactivated result=PASS n=3 exclusive_match=0 exclusive_clean=3 exclusive_unknown=0 accepted=288 failed=0 control_failed=0 reader_match=0 reader_clean=3 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-03 12:03:07.509 15172 15197 I urovdetect: ELIM_EXEC name=deactivated n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=11035605 max_ns=3722656
+10-03 12:03:07.521 15172 15197 I urovdetect: ELIM_STORE name=deactivated n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=11075806 max_ns=3724324
+10-03 12:03:07.522 15172 15197 I urovdetect: ELIM_BUSINESS ops=213120 errors=0 execution=original
+10-03 12:03:07.522 15172 15197 I urovdetect: CONTEXT pid=15172 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-03 12:03:07.522 15172 15197 I urovdetect: NATIVE_RESULT PASS cases=32 assertions=407 failures=0 mode=w-active
+10-03 12:03:07.525 15172 15172 I urovdetect: DETECT_RESULT PASS mode=w-active worker_ms=1135 ui_ticks=204 ui_max_gap_ms=20 native=PASS cases=32 assertions=407 failures=0

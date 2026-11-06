@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+﻿/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Assemble with -x assembler-with-cpp -DURO_ASM_CORPUS to independently check
  * every opcode in the table. Use objcopy -O binary -j .text, then pass the
  * resulting file as argv[1] to the native host test. No target is accessed. */
@@ -54,6 +54,14 @@ ldp q0, q1, [x1]
 ldtr x2, [x1]
 prfm pldl1keep, .+16
 nop
+ldur q2, [x1, #-16]
+ldr q3, [x1, #48]!
+ldp q12, q13, [x1, #64]!
+ldr d6, [x1]
+ldp s20, s21, [x1]
+ldr q5, [x1, x3, lsl #4]
+ldr q7, .+16
+str q0, [x1]
 #else
 #include <stdio.h>
 #include <stdlib.h>
@@ -67,15 +75,24 @@ struct vector {
     int sign, writeback;
     unsigned rn;
     uint64_t wb;
+    unsigned is_vector;
 };
 
 #define SINGLE(op, addr, sz, dest, bits, sign) \
-    { op, addr, sz, 1, dest, 31, bits, sign, 0, 1, 0 }
+    { op, addr, sz, 1, dest, 31, bits, sign, 0, 1, 0, 0 }
 #define WB(op, addr, sz, base) \
-    { op, addr, sz, 1, 2, 31, sz == 8 ? 64 : 32, 0, 1, 1, base }
+    { op, addr, sz, 1, 2, 31, sz == 8 ? 64 : 32, 0, 1, 1, base, 0 }
 #define PAIR(op, addr, sz, bits, sign, writes, base) \
-    { op, addr, sz, 2, 2, 3, bits, sign, writes, 1, base }
-#define BAD(op) { op, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+    { op, addr, sz, 2, 2, 3, bits, sign, writes, 1, base, 0 }
+#define VSINGLE(op, addr, sz, rt) \
+    { op, addr, sz, 1, rt, 31, sz * 8, 0, 0, 1, 0, 1 }
+#define VWB(op, addr, sz, rt, base) \
+    { op, addr, sz, 1, rt, 31, sz * 8, 0, 1, 1, base, 1 }
+#define VPAIR(op, addr, sz, rt, rt2) \
+    { op, addr, sz, 2, rt, rt2, sz * 8, 0, 0, 1, 0, 1 }
+#define VPAIRWB(op, addr, sz, rt, rt2, base) \
+    { op, addr, sz, 2, rt, rt2, sz * 8, 0, 1, 1, base, 1 }
+#define BAD(op) { op, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 static const struct vector vectors[] = {
     SINGLE(0x39400c20U, 0x1003, 1, 0, 32, 0),
     SINGLE(0x79400c22U, 0x1006, 2, 2, 32, 0),
@@ -103,9 +120,9 @@ static const struct vector vectors[] = {
     SINGLE(0xf8635822U, 0x1018, 8, 2, 64, 0),
     SINGLE(0xf863d822U, 0x1018, 8, 2, 64, 0),
     SINGLE(0xf863f822U, 0x1018, 8, 2, 64, 0),
-    { 0x18000082U, 0x3010, 4, 1, 2, 31, 32, 0, 0, 31, 0 },
-    { 0x58ffff83U, 0x2ff0, 8, 1, 3, 31, 64, 0, 0, 31, 0 },
-    { 0x98000064U, 0x300c, 4, 1, 4, 31, 64, 1, 0, 31, 0 },
+    { 0x18000082U, 0x3010, 4, 1, 2, 31, 32, 0, 0, 31, 0, 0 },
+    { 0x58ffff83U, 0x2ff0, 8, 1, 3, 31, 64, 0, 0, 31, 0, 0 },
+    { 0x98000064U, 0x300c, 4, 1, 4, 31, 64, 1, 0, 31, 0, 0 },
     PAIR(0xa9410c22U, 0x1010, 8, 64, 0, 0, 0),
     PAIR(0x29410c22U, 0x1008, 4, 32, 0, 0, 0),
     PAIR(0x69410c22U, 0x1008, 4, 64, 1, 0, 0),
@@ -115,12 +132,23 @@ static const struct vector vectors[] = {
     PAIR(0xa8ff0c22U, 0x1000, 8, 64, 0, 1, 0x0ff0),
     PAIR(0x69c10c22U, 0x1008, 4, 64, 1, 1, 0x1008),
     PAIR(0x68ff0c22U, 0x1000, 4, 64, 1, 1, 0x0ff8),
-    { 0xa9400bffU, 0x2000, 8, 2, 31, 2, 64, 0, 0, 31, 0 },
-    { 0xf94007ffU, 0x2008, 8, 1, 31, 31, 64, 0, 0, 31, 0 },
+    { 0xa9400bffU, 0x2000, 8, 2, 31, 2, 64, 0, 0, 31, 0, 0 },
+    { 0xf94007ffU, 0x2008, 8, 1, 31, 31, 64, 0, 0, 31, 0, 0 },
     SINGLE(0xf87f6822U, 0x1000, 8, 2, 64, 0),
     BAD(0xf9000022U), BAD(0xf9800020U), BAD(0xc8dffc22U),
-    BAD(0xc85f7c22U), BAD(0x3dc00020U), BAD(0xad400420U),
-    BAD(0xf8400822U), BAD(0xd8000080U), BAD(0xd503201fU)
+    BAD(0xc85f7c22U), VSINGLE(0x3dc00020U, 0x1000, 16, 0),
+    VPAIR(0xad400420U, 0x1000, 16, 0, 1),
+    BAD(0xf8400822U), BAD(0xd8000080U), BAD(0xd503201fU),
+    /* SIMD&FP loads the urov-y target-page backend now emulates: the forms
+     * bionic takes for large memcpy/memcmp/strlen transfers. */
+    VSINGLE(0x3cdf0022U, 0x0ff0, 16, 2),
+    VWB(0x3cc30c23U, 0x1030, 16, 3, 0x1030),
+    VPAIRWB(0xadc2342cU, 0x1040, 16, 12, 13, 0x1040),
+    VSINGLE(0xfd400026U, 0x1000, 8, 6),
+    VPAIR(0x2d405434U, 0x1000, 4, 20, 21),
+    VSINGLE(0x3ce37825U, 0x1030, 16, 5),
+    { 0x9c000087U, 0x3010, 16, 1, 7, 31, 128, 0, 0, 31, 0, 1 },
+    BAD(0x3d800020U)
 };
 
 static unsigned checks;
@@ -163,6 +191,7 @@ static void test_vectors(void)
         CHECK(out.rt == v->rt && out.rt2 == v->rt2);
         CHECK(out.dest_bits == v->dest_bits && out.sign_extend == v->sign);
         CHECK(out.writeback == v->writeback && out.wb == v->wb && out.rn == v->rn);
+        CHECK(out.vector == v->is_vector);
     }
 }
 
@@ -201,6 +230,10 @@ static void test_edges(void)
     reject(0xf8630022U, &r); /* Reserved register addressing mode. */
     reject(0xb9c00022U, &r); /* Reserved signed word to W destination. */
     reject(0xf9c00022U, &r); /* Reserved size/opc. */
+    reject(0x3d800020U, &r); /* SIMD store must keep its native fault. */
+    reject(0xad400020U, &r); /* LDP Q with duplicate destinations. */
+    reject(0x3cc00820U, &r); /* LDTR Q unprivileged form is not supported. */
+    reject(0x3c000000U, &r); /* SIMD store (STR B) must fault natively. */
     r.sp = 0x2008;
     reject(0xf94007ffU, &r);
     reject(0xa9400bffU, &r);
@@ -262,11 +295,13 @@ static void test_random(void)
             CHECK(memcmp(&out, &original, sizeof(out)) == 0);
         } else {
             CHECK(out.count == 1 || out.count == 2);
-            CHECK(out.size == 1 || out.size == 2 || out.size == 4 || out.size == 8);
-            CHECK(out.dest_bits == 32 || out.dest_bits == 64);
+            CHECK(out.size == 1 || out.size == 2 || out.size == 4 ||
+                  out.size == 8 || (out.vector && out.size == 16));
+            CHECK(out.dest_bits == 32 || out.dest_bits == 64 ||
+                  (out.vector && out.dest_bits == out.size * 8));
             CHECK(out.rt <= 31 && out.rt2 <= 31 && out.rn <= 31);
             CHECK(out.address <= ~(uint64_t)0 - (out.size * out.count - 1));
-            CHECK(!out.writeback || out.rn == 31 ||
+            CHECK(out.vector || !out.writeback || out.rn == 31 ||
                   (out.rn != out.rt && (out.count == 1 || out.rn != out.rt2)));
         }
     }

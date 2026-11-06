@@ -470,6 +470,290 @@ static void crc_libc_case(const struct crc_patch_api *api, const char *key,
     LOG("CRC_LIBC_RESTORED direct=%08x window=%08x", direct_crc, window_crc);
 }
 
+/* -------------------------------------------------- large libc transfers */
+
+/* Register the whole target page as the overlay window and drive bionic's
+ * memcpy/memcmp/strlen across it.  bionic switches memcpy to LDR Q/LDP Q from
+ * 16 bytes, memcmp from 160 bytes and strlen past its first 32 bytes, so this
+ * is the path that used to fail closed (SIGSEGV): the old ABI carried at most
+ * 32 overlay bytes and no vector register could be committed.  ABI v7 serves
+ * the SIMD&FP loads through the task's FPSIMD state and can publish a full
+ * 4 KiB image, which is what the sizes below exercise. */
+#define CRC_BIG_PAGE UROV_Y_FAKE_PAGE
+
+static void *(*volatile crc_big_memcpy)(void *, const void *, size_t) = memcpy;
+static int (*volatile crc_big_memcmp)(const void *, const void *, size_t) = memcmp;
+static size_t (*volatile crc_big_strlen)(const char *) = strlen;
+extern char crc_big_start[], crc_big_end[];
+
+static uint8_t crc_big_fake[CRC_BIG_PAGE];
+static uint8_t crc_big_original[CRC_BIG_PAGE];
+static uint8_t crc_big_copy[CRC_BIG_PAGE];
+static uint8_t crc_big_scratch[CRC_BIG_PAGE];
+
+static void crc_big_fill(void)
+{
+    unsigned i;
+    for (i = 0; i < CRC_BIG_PAGE; ++i)
+        crc_big_fake[i] = (uint8_t)(0x41U + (i * 37U) % 90U);
+    crc_big_fake[CRC_BIG_PAGE - 1] = 0; /* strlen terminator in the last chunk */
+}
+
+static uint32_t crc_big_crc(const uint8_t *bytes)
+{
+    return (uint32_t)crc32(0, bytes, CRC_BIG_PAGE);
+}
+
+/* Runs entirely inside the registered business window. */
+__attribute__((noinline))
+static uint32_t crc_big_business(const void *address, const uint8_t *fake,
+                                 uint8_t *copy, uint8_t *scratch, size_t *strlen_out)
+{
+    static const size_t lens[] = { 16, 32, 64, 160, 512, 1024, 4096 };
+    uint32_t bad = 0;
+    unsigned i;
+
+    __asm__ volatile(".global crc_big_start\ncrc_big_start:" ::: "memory");
+    for (i = 0; i < sizeof(lens) / sizeof(lens[0]); ++i) {
+        crc_big_memcpy(copy, address, lens[i]);
+        if (memcmp(copy, fake, lens[i]) != 0) bad |= 1U << i;
+    }
+    if (crc_big_memcmp(address, fake, CRC_BIG_PAGE) != 0) bad |= 1U << 8;
+    *strlen_out = crc_big_strlen((const char *)address);
+    if (*strlen_out != CRC_BIG_PAGE - 1) bad |= 1U << 9;
+    crc_big_memcpy(scratch, address, CRC_BIG_PAGE);
+    if (crc32(0, scratch, CRC_BIG_PAGE) != crc_big_crc(fake)) bad |= 1U << 10;
+    __asm__ volatile(".global crc_big_end\ncrc_big_end:" ::: "memory");
+    return bad;
+}
+
+static int crc_big_register(const struct crc_patch_api *api, const char *key,
+                            const void *text, struct urov_y_request *out)
+{
+    *out = uy_req(UROV_Y_REGISTER);
+    out->address = (uintptr_t)text;
+    out->mode = UROV_Y_MODE_PAGE_AP;
+    out->offset = 0;
+    out->length = CRC_BIG_PAGE;
+    out->fake_addr = (uintptr_t)crc_big_fake;
+    out->site_count = 1;
+    out->sites[0] = (uintptr_t)&uy_site_ldrb;
+    out->caller_count = 1;
+    out->caller_start[0] = (uintptr_t)crc_big_start;
+    out->caller_end[0] = (uintptr_t)crc_big_end;
+    return (int)api->control(key, out);
+}
+
+/* Second phase: the same 4 KiB transfer under a 32-byte window that does not
+ * start at offset 0.  The merged view must be the page's own bytes, with only
+ * [CRC_MIXED_OFFSET, +32) replaced, so this pins the per-byte merge across both
+ * window edges under LDR Q/LDP Q.  It also re-publishes the image through SET,
+ * which exercises the large-image update path and its generation check. */
+#define CRC_MIXED_OFFSET 64U
+#define CRC_MIXED_LEN 32U
+
+extern char crc_mixed_start[], crc_mixed_end[];
+
+__attribute__((noinline))
+static uint32_t crc_mixed_business(const void *address, const uint8_t *expected,
+                                   uint8_t *copy)
+{
+    uint32_t bad = 0;
+
+    __asm__ volatile(".global crc_mixed_start\ncrc_mixed_start:" ::: "memory");
+    crc_big_memcpy(copy, address, CRC_BIG_PAGE);
+    if (memcmp(copy, expected, CRC_BIG_PAGE) != 0) bad |= 1;
+    if (crc_big_memcmp(address, expected, CRC_BIG_PAGE) != 0) bad |= 2;
+    if (crc32(0, copy, CRC_BIG_PAGE) != crc32(0, expected, CRC_BIG_PAGE)) bad |= 4;
+    __asm__ volatile(".global crc_mixed_end\ncrc_mixed_end:" ::: "memory");
+    return bad;
+}
+
+static void crc_mixed_expected(uint8_t *out, const uint8_t window[CRC_MIXED_LEN])
+{
+    memcpy(out, crc_big_original, CRC_BIG_PAGE);
+    memcpy(out + CRC_MIXED_OFFSET, window, CRC_MIXED_LEN);
+}
+
+static int crc_mixed_register(const struct crc_patch_api *api, const char *key,
+                              const void *text, const uint8_t window[CRC_MIXED_LEN],
+                              struct urov_y_request *out)
+{
+    *out = uy_req(UROV_Y_REGISTER);
+    out->address = (uintptr_t)text;
+    out->mode = UROV_Y_MODE_PAGE_AP;
+    out->offset = CRC_MIXED_OFFSET;
+    out->length = CRC_MIXED_LEN;
+    memcpy(&out->value, window, 8);
+    memcpy(&out->value_hi[0], window + 8, 8);
+    memcpy(&out->value_hi[1], window + 16, 8);
+    memcpy(&out->value_hi[2], window + 24, 8);
+    out->site_count = 1;
+    out->sites[0] = (uintptr_t)&uy_site_ldrb;
+    out->caller_count = 1;
+    out->caller_start[0] = (uintptr_t)crc_mixed_start;
+    out->caller_end[0] = (uintptr_t)crc_mixed_end;
+    return (int)api->control(key, out);
+}
+
+static void crc_big_case(const struct crc_patch_api *api, const char *key,
+                         const void *text, int repeats)
+{
+    struct urov_y_request q;
+    struct ud_mapping before, after;
+    unsigned dirty, anon;
+    uint32_t orig_crc, fake_crc, execute, window_crc;
+    size_t strlen_out = 0;
+    int active = 0;
+
+    ++g_cases;
+    if (ud_mapping_at("/proc/self/smaps", text, &before) ||
+        uy_mapping_private_kb(text, &dirty, &anon)) {
+        REQUIRE(0, "CRC big mapping errno=%d", errno);
+        return;
+    }
+    REQUIRE(!before.writable && before.readable && before.executable && !before.shared &&
+            before.maywrite && before.end - (uintptr_t)text >= CRC_BIG_PAGE &&
+            !dirty && !anon,
+            "CRC big VMA shape span=%llu dirty=%u anon=%u",
+            (unsigned long long)(before.end - before.start), dirty, anon);
+    LOG("CRC_BIG_VMA span=%llu offset=%llx shared=%d maywrite=%d private_dirty_kb=%u "
+        "anonymous_kb=%u",
+        (unsigned long long)(before.end - before.start),
+        (unsigned long long)before.offset, before.shared, before.maywrite, dirty, anon);
+
+    crc_big_fill();
+    copy_scalar(crc_big_original, text, CRC_BIG_PAGE);
+    REQUIRE(memcmp(crc_big_original, crc_big_fake, CRC_BIG_PAGE) != 0,
+            "CRC big fake image equals the mapped page");
+    orig_crc = crc_big_crc(crc_big_original);
+    fake_crc = crc_big_crc(crc_big_fake);
+    execute = crc_execute(text);
+    REQUIRE(execute == CRC_ORIGINAL_RETURN, "CRC big clean execution=%04x", execute);
+    LOG("CRC_STAGE name=clean n=%d execute=%04x file=%08x backing=%08x direct=%08x "
+        "site=%08x window=%08x bridge_match=0 bridge_clean=%d bridge_unknown=0",
+        repeats, execute, orig_crc, fake_crc, orig_crc, orig_crc, orig_crc, repeats);
+
+    int rc = crc_big_register(api, key, text, &q);
+    active = rc == 0;
+    REQUIRE(active && q.state == UROV_Y_ACTIVE && q.session == 1 &&
+            q.mode == UROV_Y_MODE_PAGE_AP && q.length == CRC_BIG_PAGE,
+            "CRC big register rc=%d errno=%d state=%u length=%u", rc, errno, q.state,
+            q.length);
+    if (!active) return;
+
+    for (int i = 0; i < repeats; ++i) {
+        uint32_t bad = crc_big_business(text, crc_big_fake, crc_big_copy,
+                                        crc_big_scratch, &strlen_out);
+        REQUIRE(bad == 0, "CRC big reader mask=%08x strlen=%zu", bad, strlen_out);
+        REQUIRE(crc_execute(text) == CRC_ORIGINAL_RETURN, "CRC big execution changed");
+        /* A call from outside the business window must see the original page
+         * even for a 4 KiB transfer; every load takes the replay path. */
+        memset(crc_big_scratch, 0, CRC_BIG_PAGE);
+        crc_libc_memcpy(crc_big_scratch, text, CRC_BIG_PAGE);
+        REQUIRE(!memcmp(crc_big_scratch, crc_big_original, CRC_BIG_PAGE),
+                "CRC big outside-window memcpy did not stay original");
+        copy_scalar(crc_big_copy, text, CRC_BIG_PAGE);
+        REQUIRE(!memcmp(crc_big_copy, crc_big_original, CRC_BIG_PAGE),
+                "CRC big outside-window read did not stay original");
+    }
+    (void)crc_big_business(text, crc_big_fake, crc_big_copy, crc_big_scratch, &strlen_out);
+    window_crc = crc_big_crc(crc_big_copy);
+    REQUIRE(window_crc == fake_crc, "CRC big window=%08x fake=%08x", window_crc, fake_crc);
+    LOG("CRC_BIG n=%d lengths=16,32,64,160,512,1024,4096 fake_crc=%08x window_crc=%08x "
+        "strlen=%zu file_crc=%08x", repeats, fake_crc, window_crc, strlen_out, orig_crc);
+    LOG("CRC_STAGE name=overlay n=%d execute=%04x file=%08x backing=%08x direct=%08x "
+        "site=%08x window=%08x bridge_match=0 bridge_clean=%d bridge_unknown=0",
+        repeats, crc_execute(text), orig_crc, fake_crc, orig_crc, orig_crc, window_crc,
+        repeats);
+
+    q = uy_req(UROV_Y_STATUS);
+    q.session = 1;
+    REQUIRE(!api->control(key, &q) && q.state == UROV_Y_ACTIVE && q.generation == 1 &&
+            q.length == CRC_BIG_PAGE && q.hits > 0 && q.failures == 0,
+            "CRC big counters hits=%llu failures=%llu length=%u",
+            (unsigned long long)q.hits, (unsigned long long)q.failures, q.length);
+    LOG("CRC_BIG_OVERLAY hits=%llu replays=%llu failures=%llu length=%u",
+        (unsigned long long)q.hits, (unsigned long long)q.replays,
+        (unsigned long long)q.failures, q.length);
+
+    REQUIRE(!ud_mapping_at("/proc/self/smaps", text, &after) &&
+            after.start == before.start && after.end == before.end &&
+            after.offset == before.offset && !after.writable && after.executable &&
+            !after.shared && after.maywrite &&
+            !uy_mapping_private_kb(text, &dirty, &anon) && !dirty && !anon,
+            "CRC big active mapping changed");
+
+    if (!crc_deactivate(api, key)) return;
+    copy_scalar(crc_big_original, text, CRC_BIG_PAGE);
+    execute = crc_execute(text);
+    REQUIRE(crc_big_crc(crc_big_original) == orig_crc &&
+            execute == CRC_ORIGINAL_RETURN,
+            "CRC big deactivation did not restore page=%08x execute=%04x",
+            crc_big_crc(crc_big_original), execute);
+    window_crc = crc_big_crc(crc_big_original);
+    LOG("CRC_STAGE name=deactivated n=%d execute=%04x file=%08x backing=%08x direct=%08x "
+        "site=%08x window=%08x bridge_match=0 bridge_clean=%d bridge_unknown=0",
+        repeats, execute, orig_crc, fake_crc, window_crc, window_crc, window_crc, repeats);
+    LOG("CRC_BIG_RESTORED page=%08x", window_crc);
+
+    /* Phase 2: 32-byte interior window inside the same 4 KiB transfer. */
+    uint8_t window_a[CRC_MIXED_LEN], window_b[CRC_MIXED_LEN];
+    for (unsigned i = 0; i < CRC_MIXED_LEN; ++i) {
+        window_a[i] = (uint8_t)(0xf0U - i);
+        window_b[i] = (uint8_t)(0x21U + (i * 11U) % 0x50U);
+    }
+    crc_mixed_expected(crc_big_scratch, window_a);
+    uint32_t expected_crc = crc_big_crc(crc_big_scratch);
+    rc = crc_mixed_register(api, key, text, window_a, &q);
+    active = rc == 0;
+    REQUIRE(active && q.state == UROV_Y_ACTIVE && q.session == 1 &&
+            q.mode == UROV_Y_MODE_PAGE_AP && q.length == CRC_MIXED_LEN &&
+            q.offset == CRC_MIXED_OFFSET,
+            "CRC mixed register rc=%d errno=%d state=%u length=%u offset=%u",
+            rc, errno, q.state, q.length, q.offset);
+    if (!active) return;
+    for (int i = 0; i < repeats; ++i) {
+        uint32_t bad = crc_mixed_business(text, crc_big_scratch, crc_big_copy);
+        REQUIRE(bad == 0, "CRC mixed reader mask=%08x", bad);
+        REQUIRE(crc_big_crc(crc_big_copy) == expected_crc,
+                "CRC mixed window=%08x expected=%08x", crc_big_crc(crc_big_copy),
+                expected_crc);
+        REQUIRE(crc_execute(text) == CRC_ORIGINAL_RETURN, "CRC mixed execution changed");
+    }
+    LOG("CRC_MIXED n=%d offset=%u length=%u window_crc=%08x file_crc=%08x",
+        repeats, CRC_MIXED_OFFSET, CRC_MIXED_LEN, expected_crc, orig_crc);
+
+    crc_mixed_expected(crc_big_scratch, window_b);
+    uint32_t set_crc = crc_big_crc(crc_big_scratch);
+    q = uy_req(UROV_Y_SET);
+    q.session = 1;
+    q.expected_generation = 1;
+    q.length = CRC_MIXED_LEN;
+    memcpy(&q.value, window_b, 8);
+    memcpy(&q.value_hi[0], window_b + 8, 8);
+    memcpy(&q.value_hi[1], window_b + 16, 8);
+    memcpy(&q.value_hi[2], window_b + 24, 8);
+    rc = (int)api->control(key, &q);
+    REQUIRE(rc == 0 && q.generation == 2 && q.length == CRC_MIXED_LEN,
+            "CRC mixed set rc=%d errno=%d generation=%llu", rc, errno,
+            (unsigned long long)q.generation);
+    for (int i = 0; rc == 0 && i < repeats; ++i) {
+        uint32_t bad = crc_mixed_business(text, crc_big_scratch, crc_big_copy);
+        REQUIRE(bad == 0, "CRC mixed set reader mask=%08x", bad);
+        REQUIRE(crc_big_crc(crc_big_copy) == set_crc,
+                "CRC mixed set window=%08x expected=%08x", crc_big_crc(crc_big_copy),
+                set_crc);
+    }
+    LOG("CRC_SET n=%d generation=%llu length=%u window_crc=%08x file_crc=%08x",
+        repeats, (unsigned long long)q.generation, CRC_MIXED_LEN, set_crc, orig_crc);
+    if (!crc_deactivate(api, key)) return;
+    copy_scalar(crc_big_original, text, CRC_BIG_PAGE);
+    REQUIRE(crc_big_crc(crc_big_original) == orig_crc,
+            "CRC mixed deactivation did not restore page=%08x", crc_big_crc(crc_big_original));
+    LOG("CRC_MIXED_RESTORED page=%08x", crc_big_crc(crc_big_original));
+}
+
 /* The checksum and the bridge check use only app-owned mappings. The fake
  * bytes, key, and authenticated requests are inputs to the fixture alone. */
 static void crc_stage(const char *name, const struct page *target, const struct page *backing,
@@ -545,13 +829,15 @@ static void crc_injection(const char *mode_name, const char *key, int repeats,
     int all_callers = !strcmp(mode_name, "crc-ap-all");
     int text_target = !strcmp(mode_name, "crc-ap-text");
     int libc_target = !strcmp(mode_name, "crc-ap-libc");
+    int big_target = !strcmp(mode_name, "crc-ap-big");
     int active = 0;
     const void *text = (const void *)(uintptr_t)&crc_original;
     void *library;
 
     if (!strcmp(mode_name, "crc-brk")) mode = UROV_Y_MODE_SITE_BRK;
     else if (!strcmp(mode_name, "crc-uxn")) mode = UROV_Y_MODE_PAGE_UXN;
-    else if (!strcmp(mode_name, "crc-ap") || all_callers || text_target || libc_target)
+    else if (!strcmp(mode_name, "crc-ap") || all_callers || text_target || libc_target ||
+             big_target)
         mode = UROV_Y_MODE_PAGE_AP;
     else if (strcmp(mode_name, "crc-clean")) { REQUIRE(0, "unknown CRC mode"); return; }
 
@@ -593,22 +879,24 @@ static void crc_injection(const char *mode_name, const char *key, int repeats,
             goto done;
         }
         LOG("CRC_QUERY authenticated=1 state=%u", q.state);
-        if (!text_target && !libc_target && mode == UROV_Y_MODE_PAGE_AP && !all_callers)
+        if (!text_target && !libc_target && !big_target && mode == UROV_Y_MODE_PAGE_AP && !all_callers)
             crc_private_case(&api, key, original, modified, repeats, *clean_crc,
                              *patched_crc);
-        if (!text_target && !libc_target && uy_open_exec_reference(&exec_reference)) {
+        if (!text_target && !libc_target && !big_target && uy_open_exec_reference(&exec_reference)) {
             REQUIRE(0, "CRC open reader canary alias errno=%d", errno);
             goto done;
         }
     }
 
-    if (text_target || libc_target) {
+    if (text_target || libc_target || big_target) {
         if (text_target)
             crc_text_case(&api, key, text, &target, original, modified, repeats,
                           *clean_crc, *patched_crc);
         if (libc_target)
             crc_libc_case(&api, key, text, &target, &patched, repeats,
                           *clean_crc, *patched_crc);
+        if (big_target)
+            crc_big_case(&api, key, text, repeats);
         REQUIRE(!app_pread(target.fd, target.file_offset, after, sizeof(after)) &&
                 !memcmp(original, after, sizeof(after)), "CRC text file bytes changed");
         goto done;
