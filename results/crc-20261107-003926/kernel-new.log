@@ -1,0 +1,226 @@
+[176785.397379] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=7  ffc:=0, pd_verifed:=0
+[176785.397418] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 0 num_thermal_levels: 16 
+[176785.428627] [mi_disp:mi_sde_cdev_set_cur_brightness [msm_drm]][2026-11-07 00:39:25.894166] [I]thermal dimming:set thermal_brightness_limit to 200 percent
+[176785.508602] logd: start watching /data/system/packages.list ...
+[176785.514655] logd: ReadPackageList, total packages: 312
+[176785.521162] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=9  ffc:=0, pd_verifed:=0
+[176785.535389] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 6 num_thermal_levels: 16 
+[176786.067318] audit: audit_lost=152023 audit_rate_limit=5 audit_backlog_limit=64
+[176786.067332] audit: rate limit exceeded
+[176786.070198] [mi_disp:_sde_kms_drm_check_dpms [msm_drm]][2026-11-07 00:39:26.535737] [I]conn66 early_trigger:1 (power mode 2->4, fps 60->120) - 0.3(ms)
+[176786.071150] [drm:dsi_display_set_mode [msm_drm]] [msm-dsi-info]: mdp_transfer_time=7300, hactive=1080, vactive=2400, fps=120, clk_rate=832000000
+[176786.071510] [mi_disp:dsi_panel_switch_locked [msm_drm]][2026-11-07 00:39:26.537050] [I]primary panel: DSI_CMD_SET_TIMING_SWITCH
+[176786.081756] [mi_disp:_sde_kms_drm_check_dpms [msm_drm]][2026-11-07 00:39:26.547296] [I]conn66 early_trigger:0 (power mode 2->4, fps 60->120) - 0.3(ms)
+[176786.236036] binder_alloc: 5391: pid 2629 spamming oneway? 1 buffers allocated for a total size of 443144
+[176786.259554] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=7  ffc:=0, pd_verifed:=0
+[176786.259602] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 0 num_thermal_levels: 16 
+[176786.289856] binder_alloc: 3774: binder_alloc_buf, no vma
+[176786.289867] binder: 2629:6692 transaction failed 29189/-3, size 792-8 line 3101
+[176786.348417] BATTERY_CHG: xm_batt_update_work: batt_update_work: batt_temp:36300 blank_state:0,interval:10,soc:19
+[176786.870651] [mi_disp:_sde_kms_drm_check_dpms [msm_drm]][2026-11-07 00:39:27.336190] [I]conn66 early_trigger:1 (power mode 2->4, fps 120->60) - 0.2(ms)
+[176786.871547] [drm:dsi_display_set_mode [msm_drm]] [msm-dsi-info]: mdp_transfer_time=7300, hactive=1080, vactive=2400, fps=60, clk_rate=832000000
+[176786.874320] [mi_disp:dsi_panel_switch_locked [msm_drm]][2026-11-07 00:39:27.339859] [I]primary panel: DSI_CMD_SET_TIMING_SWITCH
+[176786.883835] [mi_disp:_sde_kms_drm_check_dpms [msm_drm]][2026-11-07 00:39:27.349375] [I]conn66 early_trigger:0 (power mode 2->4, fps 120->60) - 0.3(ms)
+[176787.166886] audit: audit_lost=152042 audit_rate_limit=5 audit_backlog_limit=64
+[176787.166895] audit: rate limit exceeded
+[176787.338319] [mi_disp:_sde_kms_drm_check_dpms [msm_drm]][2026-11-07 00:39:27.803858] [I]conn66 early_trigger:1 (power mode 2->4, fps 60->120) - 0.2(ms)
+[176787.339453] [drm:dsi_display_set_mode [msm_drm]] [msm-dsi-info]: mdp_transfer_time=7300, hactive=1080, vactive=2400, fps=120, clk_rate=832000000
+[176787.339797] [mi_disp:dsi_panel_switch_locked [msm_drm]][2026-11-07 00:39:27.805337] [I]primary panel: DSI_CMD_SET_TIMING_SWITCH
+[176787.346946] [mi_disp:_sde_kms_drm_check_dpms [msm_drm]][2026-11-07 00:39:27.812486] [I]conn66 early_trigger:0 (power mode 2->4, fps 60->120) - 0.2(ms)
+[176787.927537] [+] KP D load_module_path: /data/local/tmp/urov-crc-20261107-003926.kpm
+[176787.927554] [+] KP D load_module_path: module size: 1d3b8
+[176787.927640] [+] KP D loading module: 
+[176787.927641] [+] KP D     name: urov-y
+[176787.927642] [+] KP D     version: 2.4.0
+[176787.927644] [+] KP D     license: GPL v2
+[176787.927645] [+] KP D     author: UROV-Y
+[176787.927646] [+] KP D     description: Reader-site trap ARM64 user read overlay: BRK, UXN page trap or AP[1] data trap
+[176787.927669] [+] KP I alloc module size: 13708
+[176787.927674] [+] KP D final section addresses:
+[176787.927674] [+] KP D     .text ffffffde5e200008 d5b0
+[176787.927678] [+] KP D     .kpm.info ffffffde5e20e008 a8
+[176787.927679] [+] KP D     .kpm.init ffffffde5e20f008 8
+[176787.927680] [+] KP D     .kpm.ctl0 ffffffde5e20f010 8
+[176787.927681] [+] KP D     .kpm.exit ffffffde5e20f018 8
+[176787.927682] [+] KP D     .rodata.str1.1 ffffffde5e20e0b0 908
+[176787.927683] [+] KP D     .rodata ffffffde5e20e9b8 281
+[176787.927684] [+] KP D     .bss ffffffde5e20f020 12a0
+[176787.927685] [+] KP D     .data ffffffde5e2102c0 18
+[176787.927686] [+] KP D     .symtab ffffffde5e211008 1380
+[176787.927687] [+] KP D     .strtab ffffffde5e212d1e 9f2
+[176788.060274] [+] KP V Wrap func: ffffffd40c27d544, origin: ffffffd40c27d544, replace: ffffffde5df045f0, relocate: ffffffde5df043b8, chain: ffffffde5df04370
+[176788.060281] [+] KP V Wrap chain add: ffffffd40c27d544, ffffffde5e202310, 0 successed
+[176788.060293] [+] KP V Wrap func: ffffffd40c27d544 succsseed
+[176788.060298] [+] KP V Wrap func pointer add: ffffffd40e0b6be0, ffffffde5e2024f4, 0 successed
+[176788.060302] [+] KP V Wrap func pointer add: ffffffd40e0b6db8, ffffffde5e20268c, 0 successed
+[176788.060306] [+] KP V Wrap func pointer add: ffffffd40e0b6d60, ffffffde5e20268c, 0 successed
+[176788.060309] [+] KP V Wrap func pointer add: ffffffd40e0b6d68, ffffffde5e20268c, 0 successed
+[176788.060313] [+] KP V Wrap func pointer add: ffffffd40e0b6d98, ffffffde5e20268c, 0 successed
+[176788.060316] [+] KP V Wrap func pointer add: ffffffd40e0b6df0, ffffffde5e20268c, 0 successed
+[176788.060317] [+] KP V Wrap func pointer add: ffffffd40e0b6d90, ffffffde5e20268c, 0 successed
+[176788.060321] [+] KP V Wrap func pointer add: ffffffd40e0b6f70, ffffffde5e20268c, 0 successed
+[176788.060324] [+] KP V Wrap func pointer add: ffffffd40e0b6fa8, ffffffde5e20268c, 0 successed
+[176788.060328] [+] KP V Wrap func pointer add: ffffffd40e0b6df8, ffffffde5e20268c, 0 successed
+[176788.060331] [+] KP V Wrap func pointer add: ffffffd40e0b6d88, ffffffde5e202990, 0 successed
+[176788.060335] [+] KP V Wrap func pointer add: ffffffd40e0b7440, ffffffde5e202990, 0 successed
+[176788.060336] [+] KP V Wrap func: ffffffd40c2af884, origin: ffffffd40c2af884, replace: ffffffde5df08950, relocate: ffffffde5df08718, chain: ffffffde5df086d0
+[176788.060338] [+] KP V Wrap chain add: ffffffd40c2af884, ffffffde5e202ebc, 0 successed
+[176788.060350] [+] KP V Wrap func: ffffffd40c2af884 succsseed
+[176788.060352] [+] KP V Wrap func: ffffffd40c68a898, origin: ffffffd40c68a898, replace: ffffffde5df08e20, relocate: ffffffde5df08be8, chain: ffffffde5df08ba0
+[176788.060353] [+] KP V Wrap chain add: ffffffd40c68a898, ffffffde5e20340c, ffffffde5e203448 successed
+[176788.060355] [+] KP V Wrap func: ffffffd40c68a898 succsseed
+[176788.060357] [+] KP I load_module: [urov-y] succeed with [key=<MODULE-KEY>] 
+[176788.103656] [+] KP I module_control0: name urov-y, args: status
+[176788.103691] [+] KP I module_control0: name: urov-y, rc: 0
+[176788.187842] binder: undelivered transaction 201478339, process died.
+[176788.256882] audit: audit_lost=152070 audit_rate_limit=5 audit_backlog_limit=64
+[176788.256888] audit: rate limit exceeded
+[176788.287319] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=11  ffc:=0, pd_verifed:=0
+[176788.308056] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 6 num_thermal_levels: 16 
+[176788.513079] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=7  ffc:=0, pd_verifed:=0
+[176788.529923] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 3 num_thermal_levels: 16 
+[176789.276487] BATTERY_CHG: handle_message: [ADSP] fg_update_status:: ssoc: 19, rsoc: 18, raw_soc: 1827, vbat: 3699, ibat: 745, temp: 363, ffc: 0, rm: 708, bf: 3874, bc: 130, client: PdAuthClien, fcc: 5000
+[176789.351718] audit: audit_lost=152093 audit_rate_limit=5 audit_backlog_limit=64
+[176789.351724] audit: rate limit exceeded
+[176789.656294] type=1400 audit(1793983170.116:242301): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.tudou.tool
+[176789.755543] type=1400 audit(1793983170.216:242302): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.tudou.tool
+[176789.822753] type=1400 audit(1793983170.284:242303): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.tudou.tool
+[176789.829886] type=1400 audit(1793983170.288:242304): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.tudou.tool
+[176789.831772] logd: logdr: UID=2000 GID=2000 PID=6710 n tail=0 logMask=99 pid=6556 start=0ns deadline=0ns
+[176789.838225] type=1400 audit(1793983170.296:242305): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.tudou.tool
+[176790.151111] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=11  ffc:=0, pd_verifed:=0
+[176790.166919] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 6 num_thermal_levels: 16 
+[176790.336354] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=7  ffc:=0, pd_verifed:=0
+[176790.351039] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 3 num_thermal_levels: 16 
+[176790.356376] audit: audit_lost=152110 audit_rate_limit=5 audit_backlog_limit=64
+[176790.356382] audit: rate limit exceeded
+[176790.448259] logd: logdr: UID=2000 GID=2000 PID=6860 n tail=0 logMask=99 pid=6768 start=0ns deadline=0ns
+[176790.756953] type=1400 audit(1793983171.216:242338): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[176790.858373] logd: logdr: UID=2000 GID=2000 PID=6879 n tail=0 logMask=99 pid=6768 start=0ns deadline=0ns
+[176790.864092] type=1400 audit(1793983171.324:242339): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[176791.368257] audit: audit_lost=152131 audit_rate_limit=5 audit_backlog_limit=64
+[176791.368263] audit: rate limit exceeded
+[176791.466388] (virq:irq_count)- 1:526973234 11:280143209 6:103694449 32:35614345 2:29412190 20:19773815 243:14285458 358:12829729 34:12033661 241:10763195 
+[176791.466426] (cpu:irq_count)- 0:221303366 1:193739228 2:195325827 3:143532846 4:105283373 5:65420562 6:68526104 7:82965836 
+[176791.466443] (ipi:irq_count)- 0:526973234 1:29412190 2:0 3:0 4:0 5:103694449 6:0 
+[176791.842264] [+] KP I module_control0: name urov-y, args: status
+[176791.842299] [+] KP I module_control0: name: urov-y, rc: 0
+[176791.905410] binder_alloc: 6768: binder_alloc_buf, no vma
+[176791.905419] binder: 2629:5832 transaction failed 29189/-3, size 64-0 line 3101
+[176791.910889] binder: undelivered transaction 201496813, process died.
+[176792.032060] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=11  ffc:=0, pd_verifed:=0
+[176792.057232] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 6 num_thermal_levels: 16 
+[176792.125875] [mi_disp:mi_sde_cdev_set_cur_brightness [msm_drm]][2026-11-07 00:39:32.591414] [I]thermal dimming:set thermal_brightness_limit to 129 percent
+[176792.234277] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=7  ffc:=0, pd_verifed:=0
+[176792.250823] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 3 num_thermal_levels: 16 
+[176792.452109] audit: audit_lost=152167 audit_rate_limit=5 audit_backlog_limit=64
+[176792.452116] audit: rate limit exceeded
+[176793.460738] audit: audit_lost=152174 audit_rate_limit=5 audit_backlog_limit=64
+[176793.460746] audit: rate limit exceeded
+[176793.731710] [+] KP I module_control0: name urov-y, args: status
+[176793.731745] [+] KP I module_control0: name: urov-y, rc: 0
+[176793.790186] binder_alloc: 6949: binder_alloc_buf, no vma
+[176793.790205] binder: 2629:6769 transaction failed 29189/-3, size 64-0 line 3101
+[176793.790209] binder_alloc: 6949: binder_alloc_buf, no vma
+[176793.790214] binder: 2150:2937 transaction failed 29189/-3, size 400-24 line 3101
+[176793.920518] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=11  ffc:=0, pd_verifed:=0
+[176793.939115] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 6 num_thermal_levels: 16 
+[176794.105331] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=7  ffc:=0, pd_verifed:=0
+[176794.122907] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 3 num_thermal_levels: 16 
+[176794.494976] audit: audit_lost=152212 audit_rate_limit=5 audit_backlog_limit=64
+[176794.494983] audit: rate limit exceeded
+[176795.008661] logd: logdr: UID=2000 GID=2000 PID=7431 n tail=0 logMask=99 pid=7147 start=0ns deadline=0ns
+[176795.081251] type=1400 audit(1793983175.540:242448): avc: denied { execmod } for comm="urov-detector" path="/data/app/~~wA9D-fCI0MpSBtKbqIgA5w==/com.example.urovdetect-6fk1-12E20U1lVbU8eAEEg==/lib/arm64/liburovdetect.so" dev="dm-44" ino=1948337 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:apk_data_file:s0 tclass=file permissive=0 app=com.example.urovdetect
+[176795.153782] type=1400 audit(1793983175.560:242449): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[176795.206328] type=1400 audit(1793983175.664:242450): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[176795.305503] type=1400 audit(1793983175.764:242451): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[176795.380985] type=1400 audit(1793983175.840:242452): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.example.urovdetect
+[176795.407498] logd: logdr: UID=2000 GID=2000 PID=7459 n tail=0 logMask=99 pid=7147 start=0ns deadline=0ns
+[176795.503827] audit: audit_lost=152229 audit_rate_limit=5 audit_backlog_limit=64
+[176795.503833] audit: rate limit exceeded
+[176795.593209] [+] KP I module_control0: name urov-y, args: status
+[176795.593232] [+] KP I module_control0: name: urov-y, rc: 0
+[176795.655297] binder_alloc: 7147: binder_alloc_buf, no vma
+[176795.655306] binder: 2629:4517 transaction failed 29189/-3, size 64-0 line 3101
+[176795.769788] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=11  ffc:=0, pd_verifed:=0
+[176795.791229] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 6 num_thermal_levels: 16 
+[176795.975345] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=7  ffc:=0, pd_verifed:=0
+[176795.990514] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 3 num_thermal_levels: 16 
+[176796.053850] logd: logdr: UID=2000 GID=2000 PID=7613 n tail=0 logMask=99 pid=7528 start=0ns deadline=0ns
+[176796.166605] type=1400 audit(1793983176.628:242494): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0 app=com.tencent.mobileqq
+[176796.218741] type=1400 audit(1793983176.672:242495): avc: denied { read } for comm="Thread-63" name="tcp" dev="proc" ino=4026532037 scontext=u:r:untrusted_app:s0:c50,c257,c512,c768 tcontext=u:object_r:proc_net_tcp_udp:s0 tclass=file permissive=0
+[176796.570803] audit: audit_lost=152261 audit_rate_limit=5 audit_backlog_limit=64
+[176796.570810] audit: rate limit exceeded
+[176796.588192] BATTERY_CHG: xm_batt_update_work: batt_update_work: batt_temp:36300 blank_state:0,interval:10,soc:19
+[176797.443689] [+] KP I module_control0: name urov-y, args: status
+[176797.443719] [+] KP I module_control0: name: urov-y, rc: 0
+[176797.506518] binder_alloc: 7528: binder_alloc_buf, no vma
+[176797.506530] binder: 2629:5473 transaction failed 29189/-3, size 64-0 line 3101
+[176797.510220] binder: undelivered transaction 201532532, process died.
+[176797.624359] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=11  ffc:=0, pd_verifed:=0
+[176797.644249] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 6 num_thermal_levels: 16 
+[176797.734211] audit: audit_lost=152285 audit_rate_limit=5 audit_backlog_limit=64
+[176797.734217] audit: rate limit exceeded
+[176797.808164] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=7  ffc:=0, pd_verifed:=0
+[176797.822817] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 3 num_thermal_levels: 16 
+[176798.754641] audit: audit_lost=152311 audit_rate_limit=5 audit_backlog_limit=64
+[176798.754648] audit: rate limit exceeded
+[176799.310413] BATTERY_CHG: handle_message: [ADSP] fg_update_status:: ssoc: 19, rsoc: 18, raw_soc: 1819, vbat: 3699, ibat: 1472, temp: 364, ffc: 0, rm: 705, bf: 3874, bc: 130, client: PdAuthClien, fcc: 5000
+[176799.331861] [+] KP I module_control0: name urov-y, args: status
+[176799.331895] [+] KP I module_control0: name: urov-y, rc: 0
+[176799.391638] binder_alloc: 7718: binder_alloc_buf, no vma
+[176799.391646] binder: 2629:6841 transaction failed 29189/-3, size 64-0 line 3101
+[176799.517223] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=11  ffc:=0, pd_verifed:=0
+[176799.532502] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 6 num_thermal_levels: 16 
+[176799.701913] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=11  ffc:=0, pd_verifed:=0
+[176799.717461] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 3 num_thermal_levels: 16 
+[176799.763908] audit: audit_lost=152345 audit_rate_limit=5 audit_backlog_limit=64
+[176799.763914] audit: rate limit exceeded
+[176800.200134] logd: logdr: UID=2000 GID=2000 PID=8065 n tail=0 logMask=99 pid=7940 start=0ns deadline=0ns
+[176800.274954] type=1400 audit(1793983180.732:242613): avc: denied { read } for comm="perf-hal-servic" name="cmdline" dev="proc" ino=43066053 scontext=u:r:vendor_hal_perf_default:s0 tcontext=u:r:hal_graphics_composer_default:s0 tclass=file permissive=0
+[176800.348514] type=1400 audit(1793983180.736:242614): avc: denied { read } for comm="perf-hal-servic" name="comm" dev="proc" ino=43066054 scontext=u:r:vendor_hal_perf_default:s0 tcontext=u:r:hal_graphics_composer_default:s0 tclass=file permissive=0
+[176800.348922] type=1400 audit(1793983180.776:242615): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0
+[176800.417362] type=1400 audit(1793983180.876:242616): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0
+[176800.516832] type=1400 audit(1793983180.976:242617): avc: denied { getattr } for comm="RenderThread" path="/sys/module/metis/parameters/minor_window_app" dev="sysfs" ino=78156 scontext=u:r:untrusted_app:s0:c63,c257,c512,c768 tcontext=u:object_r:sysfs_migt:s0 tclass=file permissive=0
+[176800.606724] logd: logdr: UID=2000 GID=2000 PID=8077 n tail=0 logMask=99 pid=7940 start=0ns deadline=0ns
+[176800.822463] audit: audit_lost=152360 audit_rate_limit=5 audit_backlog_limit=64
+[176800.822469] audit: rate limit exceeded
+[176801.007851] logd: logdr: UID=2000 GID=2000 PID=8091 n tail=0 logMask=99 pid=7940 start=0ns deadline=0ns
+[176801.217799] binder_alloc: 7940: binder_alloc_buf, no vma
+[176801.217808] binder: 2629:6758 transaction failed 29189/-3, size 64-0 line 3101
+[176801.282144] type=1400 audit(1793983181.740:242637): avc: denied { search } for comm="kpatch" name="nativetest" dev="dm-44" ino=9 scontext=u:r:shell:s0 tcontext=u:object_r:nativetest_data_file:s0 tclass=dir permissive=0 app=com.tudou.tool
+[176801.282462] type=1400 audit(1793983181.740:242638): avc: denied { search } for comm="kpatch" name="nativetest64" dev="dm-44" ino=10 scontext=u:r:shell:s0 tcontext=u:object_r:nativetest_data_file:s0 tclass=dir permissive=0 app=com.tudou.tool
+[176801.285043] [-] KP E unload_module: name: urov-y
+[176801.285050] [+] KP V Wrap func pointer remove: ffffffd40e0b6db8, ffffffde5e20268c, 0
+[176801.285056] [+] KP V Unwrap func pointer: ffffffd40e0b6db8, ffffffde5e20268c, 0
+[176801.285057] [+] KP V Wrap func pointer remove: ffffffd40e0b6d60, ffffffde5e20268c, 0
+[176801.285062] [+] KP V Unwrap func pointer: ffffffd40e0b6d60, ffffffde5e20268c, 0
+[176801.285063] [+] KP V Wrap func pointer remove: ffffffd40e0b6d68, ffffffde5e20268c, 0
+[176801.285066] [+] KP V Unwrap func pointer: ffffffd40e0b6d68, ffffffde5e20268c, 0
+[176801.285066] [+] KP V Wrap func pointer remove: ffffffd40e0b6d98, ffffffde5e20268c, 0
+[176801.285076] [+] KP V Unwrap func pointer: ffffffd40e0b6d98, ffffffde5e20268c, 0
+[176801.285077] [+] KP V Wrap func pointer remove: ffffffd40e0b6df0, ffffffde5e20268c, 0
+[176801.285081] [+] KP V Unwrap func pointer: ffffffd40e0b6df0, ffffffde5e20268c, 0
+[176801.285082] [+] KP V Wrap func pointer remove: ffffffd40e0b6d90, ffffffde5e20268c, 0
+[176801.285083] [+] KP V Wrap func pointer remove: ffffffd40e0b6f70, ffffffde5e20268c, 0
+[176801.285088] [+] KP V Unwrap func pointer: ffffffd40e0b6f70, ffffffde5e20268c, 0
+[176801.285089] [+] KP V Wrap func pointer remove: ffffffd40e0b6fa8, ffffffde5e20268c, 0
+[176801.285094] [+] KP V Unwrap func pointer: ffffffd40e0b6fa8, ffffffde5e20268c, 0
+[176801.285095] [+] KP V Wrap func pointer remove: ffffffd40e0b6df8, ffffffde5e20268c, 0
+[176801.285101] [+] KP V Unwrap func pointer: ffffffd40e0b6df8, ffffffde5e20268c, 0
+[176801.285102] [+] KP V Wrap func pointer remove: ffffffd40e0b6be0, ffffffde5e2024f4, 0
+[176801.285107] [+] KP V Unwrap func pointer: ffffffd40e0b6be0, ffffffde5e2024f4, 0
+[176801.285108] [+] KP V Wrap func pointer remove: ffffffd40e0b7440, ffffffde5e202990, 0
+[176801.285111] [+] KP V Unwrap func pointer: ffffffd40e0b7440, ffffffde5e202990, 0
+[176801.285112] [+] KP V Wrap func pointer remove: ffffffd40e0b6d88, ffffffde5e202990, 0
+[176801.285115] [+] KP V Unwrap func pointer: ffffffd40e0b6d88, ffffffde5e202990, 0
+[176801.285116] [+] KP V Wrap chain remove: ffffffd40c27d544, ffffffde5e202310, 0
+[176801.285128] [+] KP V Unwrap func: ffffffd40c27d544
+[176801.285129] [+] KP V Wrap chain remove: ffffffd40c2af884, ffffffde5e202ebc, 0
+[176801.285143] [+] KP V Unwrap func: ffffffd40c2af884
+[176801.285144] [+] KP V Wrap chain remove: ffffffd40c68a898, ffffffde5e20340c, ffffffde5e203448
+[176801.285147] [+] KP V Unwrap func: ffffffd40c68a898
+[176801.285166] [+] KP I unload_module: name: urov-y, rc: 0
+[176801.345360] BATTERY_CHG: battery_psy_set_charge_current: chg_type=SDP tl:=11  ffc:=0, pd_verifed:=0
+[176801.361896] BATTERY_CHG: wlscharge_control_limit_store: set thermal-level: 6 num_thermal_levels: 16 
+[176801.427199] [+] KP I commit_common_su: pid: 8150, tgid: 8150, to_uid: 0, sctx: , via_hook: 1

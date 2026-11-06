@@ -295,7 +295,8 @@ static void crc_text_case(const struct crc_patch_api *api, const char *key,
  * at their loads is the business return address and matches the registered
  * window directly.  crc32 calls an internal helper first, so its load-time LR
  * points into libz; the backend's frame-pointer walk finds the saved business
- * LR.  The sizes below deliberately select bionic's scalar paths (12 bytes
+ * LR, including when libz signs it with PACIASP. The sizes below exercise the
+ * short bionic paths (12 bytes
  * for memcpy, 32 for memcmp and a 31-byte strlen); the SIMD >32-byte paths are a separate
  * limitation and are not exercised here. */
 static void *(*volatile crc_libc_memcpy)(void *, const void *, size_t) = memcpy;

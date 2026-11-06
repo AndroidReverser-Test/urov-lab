@@ -18,7 +18,7 @@
 #include "urov_y_backend.h"
 
 KPM_NAME("urov-y");
-KPM_VERSION("2.3.0");
+KPM_VERSION("2.4.0");
 KPM_LICENSE("GPL v2");
 KPM_AUTHOR("UROV-Y");
 KPM_DESCRIPTION("Reader-site trap ARM64 user read overlay: BRK, UXN page trap or AP[1] data trap");
@@ -44,14 +44,12 @@ static long urov_y_control(const char *args, char __user *out, int len)
     char message[256];
     const char *mode;
     int n;
+    long ret;
 
     if (!out || len < 1) return -EINVAL;
-    if (str_eq(args, "reap")) {
-        urov_y_reap();
-        return 0;
-    }
     if (!str_eq(args, "status") && !str_eq(args, "selftest")) return -EINVAL;
-    urov_y_status_get(&st);
+    ret = urov_y_status_get(&st);
+    if (ret) return ret;
     mode = st.mode == UROV_Y_MODE_PAGE_UXN ? "page-trap" :
            st.mode == UROV_Y_MODE_PAGE_AP ? "data-ap" : "site-trap";
     n = snprintf(message, sizeof(message),
@@ -65,7 +63,7 @@ static long urov_y_control(const char *args, char __user *out, int len)
                  st.fpsimd, st.overlay_len, st.page_count, st.page_shift, st.caps);
     if (n < 0 || n >= (int)sizeof(message)) return -EOVERFLOW;
     if (len <= n) return -ENOSPC;
-    return urov_y_copy_to_user(out, message, (size_t)n + 1) ? -EFAULT : 0;
+    return urov_y_copy_to_user(out, message, (size_t)n + 1);
 }
 
 static long urov_y_exit(void *reserved)

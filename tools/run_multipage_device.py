@@ -17,7 +17,7 @@ LAB = Path(__file__).resolve().parents[1]
 PACKAGE = "com.example.urovdetect"
 ACTIVITY = f"{PACKAGE}/.MainActivity"
 MODULE = "urov-y"
-MODES = ("mp-multi", "mp-ld1", "mp-cross", "mp-srcfile")
+MODES = ("mp-multi", "mp-ld1", "mp-cross", "mp-srcfile", "mp-audit")
 STAMP = re.compile(r"^\[\s*([0-9.]+)\]", re.M)
 
 
@@ -88,10 +88,14 @@ def main():
         uid = re.search(r"CONTEXT pid=\d+ uid=(\d+) selinux=u:r:untrusted_app:", logs)
         if not uid or int(uid[1]) < 10000:
             raise RuntimeError(f"{label}: invalid app credentials")
-        if not re.search(r"MP_QUERY caps=0x7f max_pages=4096 page_shift=12 abi=8", logs):
+        query = re.search(r"MP_QUERY caps=(0x[0-9a-f]+) max_pages=(\d+) page_shift=(12|14) abi=8", logs)
+        if not query or int(query[1], 16) & 0x47f != 0x47f or int(query[2]) < 24:
             raise RuntimeError(f"{label}: ABI v8 QUERY report missing")
+        page_bytes = 1 << int(query[3])
+        if page_bytes != report["page_size"]:
+            raise RuntimeError(f"{label}: module page size differs from the device")
         required = {
-            "mp-multi": (r"MP_MULTI pages=24 span=98304 register=1",
+            "mp-multi": (rf"MP_MULTI pages=24 span={24 * page_bytes} register=1",
                          r"MP_STATUS name=multi pages=24 armed=24",
                          r"MP_SET_PAGE page=7 generation=2",
                          r"MP_MULTI_DONE pages=24 restored=1"),
@@ -103,6 +107,7 @@ def main():
                          r"ld1_tail/uncovered_page0"),
             "mp-srcfile": (r"MP_SRC_FILE register=1 page=1",
                            r"MP_SRC_FILE_DONE page=1"),
+            "mp-audit": (r"MP_AUDIT invalid=5 updates=48 reads=[1-9]\d* errors=0 child_restored=1",),
         }[mode]
         for pattern in required:
             if not re.search(pattern, logs):
@@ -123,6 +128,7 @@ def main():
             raise RuntimeError("existing modules preserved")
         clean_start = True
         report["kernel"] = shell("uname", "-a")
+        report["page_size"] = int(shell("getconf", "PAGE_SIZE"))
         report["kpver"] = kp("kpver")
         report["selinux"] = shell("getenforce")
         before = kp("su", "-c", "dmesg")
@@ -149,7 +155,8 @@ def main():
         kp("kpm", "load", remote, " ".join(load_args))
         loaded = True
         report["loaded_status"] = kp("kpm", "ctl0", MODULE, "status")
-        if "hooks=0x7f" not in report["loaded_status"] or "abi=8" not in report["loaded_status"]:
+        hooks = re.search(r"hooks=(0x[0-9a-f]+)", report["loaded_status"])
+        if not hooks or int(hooks[1], 16) & 0x7e != 0x7e or "abi=8" not in report["loaded_status"]:
             raise RuntimeError("UROV-Y ABI v8 hooks incomplete")
         for cycle in range(1, args.cycles + 1):
             for mode in MODES:

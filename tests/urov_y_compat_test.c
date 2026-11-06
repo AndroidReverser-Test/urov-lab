@@ -137,6 +137,23 @@ static void test_build_id(void)
     puts("Detached BTF: exact build ID, mismatch, truncated note and oversized package PASS");
 }
 
+static void test_geometry(void)
+{
+    struct uy_geometry geom;
+    /* 4K/39-bit, 16K/47-bit, and 4K kernel/user walk depth mismatch. */
+    uint64_t arm4k = (UINT64_C(2) << 30) | (UINT64_C(25) << 16) | 25;
+    uint64_t arm16k = (UINT64_C(1) << 30) | (UINT64_C(17) << 16) | (2U << 14) | 17;
+    uint64_t different_depths = (arm4k & ~UINT64_C(63)) | 16;
+
+    assert(!uy_geometry_from_tcr(&geom, arm4k) && geom.page_shift == 12 && geom.user_va_bits == 39);
+    assert(!uy_geometry_from_tcr(&geom, arm16k) && geom.page_shift == 14 && geom.user_va_bits == 47);
+    assert(uy_geometry_from_tcr(&geom, different_depths));
+    assert(uy_geometry_from_tcr(&geom, arm16k | (UINT64_C(1) << 59)));
+    assert(uy_geometry_from_tcr(&geom, arm16k | (UINT64_C(6) << 32)));
+    assert(uy_geometry_from_tcr(&geom, arm16k ^ (2U << 14)));
+    puts("TCR: 4 KiB, 16 KiB, mismatched depths, LPA2 and mismatched granules PASS");
+}
+
 static void test_saved_btf(const char *path, const char *fault, int expected_args,
                            int expected_pgd, int expected_vma_flags)
 {
@@ -170,13 +187,14 @@ int main(int argc, char **argv)
     test_signatures();
     test_gup_flags();
     test_build_id();
-    if (argc != 1 && argc != 3) {
-        fprintf(stderr, "Usage: %s [fuxi-5.15.74.btf oriole-6.1.134.btf]\n", argv[0]);
+    test_geometry();
+    if (argc > 3) {
+        fprintf(stderr, "Usage: %s [fuxi-5.15.74.btf [oriole-6.1.134.btf]]\n", argv[0]);
         return 2;
     }
-    if (argc == 3) {
+    if (argc >= 2)
         test_saved_btf(argv[1], "do_handle_mm_fault", 5, 64, 80);
+    if (argc == 3)
         test_saved_btf(argv[2], "handle_mm_fault", 4, 56, 32);
-    }
     return 0;
 }

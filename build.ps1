@@ -58,6 +58,10 @@ foreach ($name in @('urov_y','urov_y_backend')) {
     (Join-Path $out 'urov_y_backend.o') (Join-Path $out 'decode.o') `
     (Join-Path $out 'emulate.o') (Join-Path $out 'core_selftest.o')
 if ($LASTEXITCODE -ne 0) { throw 'UROV-Y KPM link failed' }
+$imports = & $nm -u (Join-Path $out 'urov-y.kpm')
+if ($LASTEXITCODE -ne 0 -or ($imports -match '\bU\s+(memcpy|memmove|memset)\s*$')) {
+    throw 'UROV-Y contains a compiler-generated memory helper that the KPM loader cannot resolve'
+}
 $userFlags = @('--target=aarch64-linux-android31','-std=gnu11','-O2','-Wall','-Wextra',
     '-Werror','-Wformat=2','-Wshadow','-fPIE','-pie','-pthread')
 $core = @('decode.c','emulate.c','core_selftest.c') | ForEach-Object { Join-Path $PSScriptRoot $_ }

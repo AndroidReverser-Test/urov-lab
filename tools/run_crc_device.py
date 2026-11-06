@@ -21,6 +21,10 @@ KV = re.compile(r"(\w+)=([^\s]+)")
 STAMP = re.compile(r"^\[\s*([0-9.]+)\]", re.M)
 
 
+class IncompleteLog(RuntimeError):
+    """The app passed but logcat lost one or more required records."""
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", required=True)
@@ -60,7 +64,7 @@ def main():
     def kp(*argv):
         return shell("/data/local/tmp/kpatch", args.key, *argv)
 
-    def run_app(label, mode):
+    def run_once(label, mode):
         active = mode != "crc-clean"
         shell("am", "force-stop", PACKAGE)
         argv = ["am", "start", "-W", "-n", ACTIVITY, "--es", "mode", mode,
@@ -99,8 +103,13 @@ def main():
         else:
             expected = ["clean", "patch_only", "overlay", "deactivated"] if active else \
                        ["clean", "patch_only"]
-        if [stage[stage_key] for stage in stages] != expected or "CRC_FIXTURE dlopen=1" not in logs:
-            raise RuntimeError(f"{label}: incomplete CRC matrix")
+        names = [stage[stage_key] for stage in stages]
+        if names != [name for name in expected if name in names]:
+            raise RuntimeError(f"{label}: unexpected CRC stage order {names}")
+        if active and "state=inactive" not in kp("kpm", "ctl0", MODULE, "status"):
+            raise RuntimeError(f"{label}: fixture left an active session")
+        if names != expected or "CRC_FIXTURE dlopen=1" not in logs:
+            raise IncompleteLog(f"{label}: missing CRC records in {log_path.name}")
         if mode == "crc-ap-text" and not re.search(
                 r"CRC_VMA name=linker_text .*shared=0 maywrite=1 dc=0 private_dirty_kb=0 "
                 r"anonymous_kb=0", logs):
@@ -114,8 +123,6 @@ def main():
         if mode == "crc-ap-big" and not re.search(
                 r"CRC_BIG n=\d+ lengths=16,32,64,160,512,1024,4096 ", logs):
             raise RuntimeError(f"{label}: big-transfer reader matrix missing")
-        if active and "state=inactive" not in kp("kpm", "ctl0", MODULE, "status"):
-            raise RuntimeError(f"{label}: fixture left an active session")
         report["runs"].append({"label": label, "mode": mode, "uid": int(uid[1]), "pid": pid,
                                "log": log_path.name, "result": result[0], "stages": stages,
                                "details": re.findall(r"(?:CRC_(?:REJECT|PRIVATE|REMAP|MAP|OVERLAY|SITE|"
@@ -129,6 +136,16 @@ def main():
         print(f"{label} PASS execute={last['execute']} file={last['file']} "
               f"direct={last['direct']} window={last['window']} bridge={last['bridge_match']}/"
               f"{last['n']}", flush=True)
+
+    def run_app(label, mode):
+        for attempt in range(3):
+            try:
+                return run_once(label, mode)
+            except IncompleteLog as exc:
+                report.setdefault("incomplete_logs", []).append(str(exc))
+                if attempt == 2:
+                    raise
+                print(f"RETRY {exc}", flush=True)
 
     try:
         report["initial_modules"] = kp("kpm", "list")

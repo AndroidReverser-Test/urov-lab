@@ -1,59 +1,69 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  *
  * ABI v8 fixture: arbitrary multi-page overlay, LD1/LD2/LD3/LD4 and loads that
- * cross a 4 KiB page boundary.  Included by app.c after uy_fixture.inc, so it
+ * cross a base-page boundary.  Included by app.c after uy_fixture.inc, so it
  * reuses uy_req(), uy_control(), uy_status() and the REQUIRE/LOG macros.
  *
  * The target pages are ordinary linker .text pages (private, file-backed, RX).
- * Every page gets a caller-supplied 4 KiB image, which is the source the module
+ * Every page gets a caller-supplied page image, which is the source the module
  * copies at REGISTER time.  All reads go through small noinline business
  * functions so the registered caller window is the same for every load.
  */
 
 #define MP_MULTI_PAGES 24U
-#define MP_PAGE 4096U
+static unsigned mp_page_size;
 
 #include <stddef.h>
+#include <sys/wait.h>
 
 /* 24 contiguous pages for the multi-page case, one page for the structure
  * loads and three pages for the cross-page case.  The fill is a repeated
  * 16-byte pattern; the fixture reads the real bytes at runtime and never
  * assumes the linker preserved this pattern. */
 __asm__(".pushsection .text.mp_blob,\"ax\",%progbits\n"
-        ".p2align 12\n"
+        ".p2align 14\n"
         ".global mp_multi_blob\n"
         "mp_multi_blob:\n"
-        ".rept 6144\n"
+        ".rept 24576\n"
         ".quad 0x0706050403020100\n"
         ".quad 0x0f0e0d0c0b0a0908\n"
         ".endr\n"
         ".global mp_multi_blob_end\nmp_multi_blob_end:\n"
-        ".p2align 12\n"
+        ".p2align 14\n"
         ".global mp_ld_blob\n"
         "mp_ld_blob:\n"
-        ".rept 256\n"
+        ".quad 0xfedcba9876543210, 0x1122334455667788\n"
+        ".rept 1023\n"
         ".quad 0x0706050403020100\n"
         ".quad 0x0f0e0d0c0b0a0908\n"
         ".endr\n"
         ".global mp_ld_blob_end\nmp_ld_blob_end:\n"
-        ".p2align 12\n"
+        ".p2align 14\n"
         ".global mp_cross_blob\n"
         "mp_cross_blob:\n"
-        ".rept 768\n"
+        ".rept 3072\n"
         ".quad 0x0706050403020100\n"
         ".quad 0x0f0e0d0c0b0a0908\n"
         ".endr\n"
         ".global mp_cross_blob_end\nmp_cross_blob_end:\n"
+        ".p2align 14\n"
+        ".global mp_audit_site\n.hidden mp_audit_site\n.type mp_audit_site,%function\n"
+        "mp_audit_site:\n ldp x0, x1, [x0]\n ret\n"
+        ".size mp_audit_site, .-mp_audit_site\n"
+        ".p2align 7\n"
+        ".global mp_audit_data\n.hidden mp_audit_data\n"
+        "mp_audit_data:\n .quad 0x1020304050607080, 0x1020304050607080\n"
+        ".p2align 14\n"
         ".popsection\n");
 
 extern uint8_t mp_multi_blob[], mp_multi_blob_end[];
 extern uint8_t mp_ld_blob[], mp_ld_blob_end[];
 extern uint8_t mp_cross_blob[], mp_cross_blob_end[];
 
-static uint8_t mp_fake[MP_MULTI_PAGES * MP_PAGE] __attribute__((aligned(16)));
-static uint8_t mp_expected[MP_MULTI_PAGES * MP_PAGE] __attribute__((aligned(16)));
-static uint8_t mp_original[MP_MULTI_PAGES * MP_PAGE] __attribute__((aligned(16)));
-static uint8_t mp_out[MP_MULTI_PAGES * MP_PAGE] __attribute__((aligned(16)));
+static uint8_t mp_fake[MP_MULTI_PAGES * UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
+static uint8_t mp_expected[MP_MULTI_PAGES * UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
+static uint8_t mp_original[MP_MULTI_PAGES * UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
+static uint8_t mp_out[MP_MULTI_PAGES * UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
 
 static void *(*volatile mp_memcpy)(void *, const void *, size_t) = memcpy;
 static int (*volatile mp_memcmp)(const void *, const void *, size_t) = memcmp;
@@ -165,14 +175,14 @@ static void mp_cross_business(uint8_t *out, const void *page1, const void *page0
 {
     __asm__ volatile(".global mp_cross_start\nmp_cross_start:" ::: "memory");
     /* 32 bytes starting 16 bytes before the page1/page2 boundary. */
-    mp_ldp_q((const uint8_t *)page1 + MP_PAGE - 16, out);
+    mp_ldp_q((const uint8_t *)page1 + mp_page_size - 16, out);
     /* 64 bytes starting 32 bytes before the page1/page2 boundary. */
-    mp_ld1_4x16((const uint8_t *)page1 + MP_PAGE - 32, out + 64);
+    mp_ld1_4x16((const uint8_t *)page1 + mp_page_size - 32, out + 64);
     /* 16 bytes starting 8 bytes before the page1/page2 boundary. */
-    mp_ld1_1x16((const uint8_t *)page1 + MP_PAGE - 8, out + 128);
+    mp_ld1_1x16((const uint8_t *)page1 + mp_page_size - 8, out + 128);
     /* 32 bytes starting 16 bytes before the page0/page1 boundary; page 0 is
      * deliberately NOT registered, so the first half must be native memory. */
-    mp_ldp_q((const uint8_t *)page0 + MP_PAGE - 16, out + 160);
+    mp_ldp_q((const uint8_t *)page0 + mp_page_size - 16, out + 160);
     __asm__ volatile("nop\n.global mp_cross_end\nmp_cross_end:" ::: "memory");
 }
 
@@ -202,7 +212,7 @@ static int mp_register(const struct uy_ctx *ctx, const struct uy_page_desc *desc
     q.page_count = count;
     q.page_stride = (uint32_t)sizeof(*desc);
     q.pages_addr = (uintptr_t)desc;
-    q.caller_count = 1;
+    q.caller_count = caller_start ? 1 : 0;
     q.caller_start[0] = caller_start;
     q.caller_end[0] = caller_end;
     q.site_count = 0;
@@ -240,15 +250,15 @@ static void mp_multi_case(const struct uy_ctx *ctx, int repeats)
 {
     static struct uy_page_desc desc[MP_MULTI_PAGES];
     struct urov_y_request q;
-    size_t total = (size_t)MP_MULTI_PAGES * MP_PAGE;
-    uint8_t saved[MP_PAGE];
+    size_t total = (size_t)MP_MULTI_PAGES * mp_page_size;
+    uint8_t saved[mp_page_size];
     unsigned i;
     int rc, active = 0;
 
     ++g_cases;
-    if (sysconf(_SC_PAGESIZE) != (long)MP_PAGE ||
-        (uintptr_t)mp_multi_blob % MP_PAGE ||
-        (uintptr_t)(mp_multi_blob_end - mp_multi_blob) != (uintptr_t)total) {
+    if (sysconf(_SC_PAGESIZE) != (long)mp_page_size ||
+        (uintptr_t)mp_multi_blob % mp_page_size ||
+        (uintptr_t)(mp_multi_blob_end - mp_multi_blob) < (uintptr_t)total) {
         REQUIRE(0, "MP multi blob shape start=%p span=%lld page=%ld",
                 mp_multi_blob, (long long)(mp_multi_blob_end - mp_multi_blob),
                 (long)sysconf(_SC_PAGESIZE));
@@ -263,10 +273,10 @@ static void mp_multi_case(const struct uy_ctx *ctx, int repeats)
 
     for (i = 0; i < MP_MULTI_PAGES; ++i) {
         memset(&desc[i], 0, sizeof(desc[i]));
-        desc[i].base = (uintptr_t)mp_multi_blob + (size_t)i * MP_PAGE;
-        desc[i].fake_addr = (uintptr_t)mp_fake + (size_t)i * MP_PAGE;
+        desc[i].base = (uintptr_t)mp_multi_blob + (size_t)i * mp_page_size;
+        desc[i].fake_addr = (uintptr_t)mp_fake + (size_t)i * mp_page_size;
         desc[i].fake_off = 0;
-        desc[i].fake_len = MP_PAGE;
+        desc[i].fake_len = mp_page_size;
         desc[i].flags = UROV_Y_PAGE_SRC_USER;
     }
 
@@ -287,7 +297,7 @@ static void mp_multi_case(const struct uy_ctx *ctx, int repeats)
         unsigned diff = mp_first_diff(mp_out, mp_expected, total);
         unsigned at = diff < total ? diff : 0;
         REQUIRE(diff == total, "MP multi window diff=%u page=%u expect=%02x got=%02x",
-                diff, diff / MP_PAGE, mp_expected[at], mp_out[at]);
+                diff, diff / mp_page_size, mp_expected[at], mp_out[at]);
         /* The same range read from outside the caller window must stay native. */
         memset(mp_out, 0, total);
         mp_memcpy(mp_out, mp_multi_blob, total);
@@ -304,12 +314,12 @@ static void mp_multi_case(const struct uy_ctx *ctx, int repeats)
         set.session = 1;
         set.expected_generation = 1;
         set.reserved = target;
-        set.fake_addr = (uintptr_t)mp_fake + (size_t)target * MP_PAGE;
+        set.fake_addr = (uintptr_t)mp_fake + (size_t)target * mp_page_size;
         set.offset = 0;
-        set.length = MP_PAGE;
-        mp_pattern(saved, MP_PAGE, 0xd1);
-        memcpy(mp_fake + (size_t)target * MP_PAGE, saved, MP_PAGE);
-        memcpy(mp_expected + (size_t)target * MP_PAGE, saved, MP_PAGE);
+        set.length = mp_page_size;
+        mp_pattern(saved, mp_page_size, 0xd1);
+        memcpy(mp_fake + (size_t)target * mp_page_size, saved, mp_page_size);
+        memcpy(mp_expected + (size_t)target * mp_page_size, saved, mp_page_size);
         rc = (int)uy_control(ctx, UROV_Y_SET_PAGE, &set);
         REQUIRE(rc == 0 && set.generation == 2,
                 "MP multi SET_PAGE rc=%d errno=%d generation=%llu", rc, errno,
@@ -317,7 +327,7 @@ static void mp_multi_case(const struct uy_ctx *ctx, int repeats)
         memset(mp_out, 0, total);
         mp_multi_business(mp_out, mp_multi_blob, total);
         unsigned diff = mp_first_diff(mp_out, mp_expected, total);
-        REQUIRE(diff == total, "MP multi SET_PAGE diff=%u page=%u", diff, diff / MP_PAGE);
+        REQUIRE(diff == total, "MP multi SET_PAGE diff=%u page=%u", diff, diff / mp_page_size);
         LOG("MP_SET_PAGE page=%u generation=%llu diff=%u", target,
             (unsigned long long)set.generation, diff);
     }
@@ -377,8 +387,8 @@ static void mp_ld_business(uint8_t *out, const void *p)
 static void mp_ld_case(const struct uy_ctx *ctx, int repeats)
 {
     static struct uy_page_desc desc;
-    static uint8_t fake[MP_PAGE] __attribute__((aligned(16)));
-    static uint8_t native[MP_PAGE] __attribute__((aligned(16)));
+    static uint8_t fake[UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
+    static uint8_t native[UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
     static uint8_t expect[512] __attribute__((aligned(16)));
     static uint8_t out[512] __attribute__((aligned(16)));
     struct urov_y_request q;
@@ -387,14 +397,14 @@ static void mp_ld_case(const struct uy_ctx *ctx, int repeats)
     extern char mp_ld_start[], mp_ld_end[];
 
     ++g_cases;
-    if ((uintptr_t)mp_ld_blob % MP_PAGE ||
-        (uintptr_t)(mp_ld_blob_end - mp_ld_blob) != (uintptr_t)MP_PAGE) {
+    if ((uintptr_t)mp_ld_blob % mp_page_size ||
+        (uintptr_t)(mp_ld_blob_end - mp_ld_blob) < (uintptr_t)mp_page_size) {
         REQUIRE(0, "MP ld blob shape span=%lld",
                 (long long)(mp_ld_blob_end - mp_ld_blob));
         return;
     }
-    mp_memcpy(native, mp_ld_blob, MP_PAGE);
-    mp_pattern(fake, MP_PAGE, 0x5b);
+    mp_memcpy(native, mp_ld_blob, mp_page_size);
+    mp_pattern(fake, mp_page_size, 0x5b);
 
     /* Native oracle: the exact same bundled readers against the unregistered
      * page.  mp_ld_business is also the registered caller window later. */
@@ -422,7 +432,7 @@ static void mp_ld_case(const struct uy_ctx *ctx, int repeats)
     desc.base = (uintptr_t)mp_ld_blob;
     desc.fake_addr = (uintptr_t)fake;
     desc.fake_off = 0;
-    desc.fake_len = MP_PAGE;
+    desc.fake_len = mp_page_size;
     desc.flags = UROV_Y_PAGE_SRC_USER;
     rc = mp_register(ctx, &desc, 1, (uintptr_t)mp_ld_start, (uintptr_t)mp_ld_end, &q);
     active = rc == 0;
@@ -477,8 +487,8 @@ static void mp_ld_case(const struct uy_ctx *ctx, int repeats)
 static void mp_cross_case(const struct uy_ctx *ctx, int repeats)
 {
     static struct uy_page_desc desc[2];
-    static uint8_t fake[2 * MP_PAGE] __attribute__((aligned(16)));
-    static uint8_t native[3 * MP_PAGE] __attribute__((aligned(16)));
+    static uint8_t fake[2 * UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
+    static uint8_t native[3 * UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
     static uint8_t expect[256] __attribute__((aligned(16)));
     static uint8_t out[256] __attribute__((aligned(16)));
     struct urov_y_request q;
@@ -486,28 +496,28 @@ static void mp_cross_case(const struct uy_ctx *ctx, int repeats)
     int rc, active = 0;
 
     ++g_cases;
-    if ((uintptr_t)mp_cross_blob % MP_PAGE ||
-        (uintptr_t)(mp_cross_blob_end - mp_cross_blob) != (uintptr_t)(3 * MP_PAGE)) {
+    if ((uintptr_t)mp_cross_blob % mp_page_size ||
+        (uintptr_t)(mp_cross_blob_end - mp_cross_blob) < (uintptr_t)(3 * mp_page_size)) {
         REQUIRE(0, "MP cross blob shape span=%lld",
                 (long long)(mp_cross_blob_end - mp_cross_blob));
         return;
     }
-    mp_memcpy(native, mp_cross_blob, sizeof(native));
-    mp_pattern(fake, sizeof(fake), 0x91);
+    mp_memcpy(native, mp_cross_blob, 3U * mp_page_size);
+    mp_pattern(fake, 2U * mp_page_size, 0x91);
 
     /* Native oracle for the four reads. */
-    mp_cross_business(out, mp_cross_blob + MP_PAGE, mp_cross_blob);
-    REQUIRE(!memcmp(out, native + MP_PAGE + MP_PAGE - 16, 32), "MP cross ldp native");
-    REQUIRE(!memcmp(out + 64, native + MP_PAGE + MP_PAGE - 32, 64), "MP cross ld1 native");
-    REQUIRE(!memcmp(out + 128, native + MP_PAGE + MP_PAGE - 8, 16), "MP cross ld1 tail native");
-    REQUIRE(!memcmp(out + 160, native + MP_PAGE - 16, 32), "MP cross page0 native");
+    mp_cross_business(out, mp_cross_blob + mp_page_size, mp_cross_blob);
+    REQUIRE(!memcmp(out, native + mp_page_size + mp_page_size - 16, 32), "MP cross ldp native");
+    REQUIRE(!memcmp(out + 64, native + mp_page_size + mp_page_size - 32, 64), "MP cross ld1 native");
+    REQUIRE(!memcmp(out + 128, native + mp_page_size + mp_page_size - 8, 16), "MP cross ld1 tail native");
+    REQUIRE(!memcmp(out + 160, native + mp_page_size - 16, 32), "MP cross page0 native");
 
     for (i = 0; i < 2; ++i) {
         memset(&desc[i], 0, sizeof(desc[i]));
-        desc[i].base = (uintptr_t)mp_cross_blob + (i + 1) * MP_PAGE;
-        desc[i].fake_addr = (uintptr_t)fake + i * MP_PAGE;
+        desc[i].base = (uintptr_t)mp_cross_blob + (i + 1) * mp_page_size;
+        desc[i].fake_addr = (uintptr_t)fake + i * mp_page_size;
         desc[i].fake_off = 0;
-        desc[i].fake_len = MP_PAGE;
+        desc[i].fake_len = mp_page_size;
         desc[i].flags = UROV_Y_PAGE_SRC_USER;
     }
     rc = mp_register(ctx, desc, 2, (uintptr_t)mp_cross_start,
@@ -521,25 +531,25 @@ static void mp_cross_case(const struct uy_ctx *ctx, int repeats)
 
     for (int r = 0; r < repeats; ++r) {
         memset(out, 0, sizeof(out));
-        mp_cross_business(out, mp_cross_blob + MP_PAGE, mp_cross_blob);
+        mp_cross_business(out, mp_cross_blob + mp_page_size, mp_cross_blob);
         /* ldp q at page1+4080: 16 bytes of page1, 16 bytes of page2. */
-        memcpy(expect, fake + MP_PAGE - 16, 16);
-        memcpy(expect + 16, fake + MP_PAGE, 16);
+        memcpy(expect, fake + mp_page_size - 16, 16);
+        memcpy(expect + 16, fake + mp_page_size, 16);
         if (memcmp(out, expect, 32) != 0)
             LOG("MP_CROSS_LDP_DIFF at=%u got0=%02x%02x got1=%02x%02x want0=%02x%02x want1=%02x%02x",
                 mp_first_diff(out, expect, 32), out[0], out[1], out[16], out[17],
                 expect[0], expect[1], expect[16], expect[17]);
         REQUIRE(!memcmp(out, expect, 32), "MP cross ldp overlay");
         /* ld1 4x16 at page1+4064: 32 bytes of page1, 32 bytes of page2. */
-        memcpy(expect, fake + MP_PAGE - 32, 32);
-        memcpy(expect + 32, fake + MP_PAGE, 32);
+        memcpy(expect, fake + mp_page_size - 32, 32);
+        memcpy(expect + 32, fake + mp_page_size, 32);
         REQUIRE(!memcmp(out + 64, expect, 64), "MP cross ld1 overlay");
         /* ld1 1x16 at page1+4088: 8 bytes of page1, 8 bytes of page2. */
-        memcpy(expect, fake + MP_PAGE - 8, 8);
-        memcpy(expect + 8, fake + MP_PAGE, 8);
+        memcpy(expect, fake + mp_page_size - 8, 8);
+        memcpy(expect + 8, fake + mp_page_size, 8);
         REQUIRE(!memcmp(out + 128, expect, 16), "MP cross ld1 tail overlay");
         /* page0 is unregistered: 16 native bytes then 16 fake page1 bytes. */
-        memcpy(expect, native + MP_PAGE - 16, 16);
+        memcpy(expect, native + mp_page_size - 16, 16);
         memcpy(expect + 16, fake, 16);
         REQUIRE(!memcmp(out + 160, expect, 32), "MP cross uncovered page0");
     }
@@ -548,8 +558,8 @@ static void mp_cross_case(const struct uy_ctx *ctx, int repeats)
 
     rc = mp_deactivate(ctx);
     REQUIRE(rc == 0, "MP cross deactivate rc=%d errno=%d", rc, errno);
-    mp_cross_business(out, mp_cross_blob + MP_PAGE, mp_cross_blob);
-    REQUIRE(!memcmp(out + 64, native + MP_PAGE + MP_PAGE - 32, 64),
+    mp_cross_business(out, mp_cross_blob + mp_page_size, mp_cross_blob);
+    REQUIRE(!memcmp(out + 64, native + mp_page_size + mp_page_size - 32, 64),
             "MP cross deactivation did not restore");
 }
 
@@ -561,7 +571,7 @@ __attribute__((noinline))
 static void mp_srcfile_business(void *dst, const void *src)
 {
     __asm__ volatile(".global mp_src_start\nmp_src_start:" ::: "memory");
-    mp_memcpy(dst, src, MP_PAGE);
+    mp_memcpy(dst, src, mp_page_size);
     __asm__ volatile("nop\n.global mp_src_end\nmp_src_end:" ::: "memory");
 }
 
@@ -571,13 +581,13 @@ static void mp_srcfile_business(void *dst, const void *src)
 static void mp_srcfile_case(const struct uy_ctx *ctx, int repeats)
 {
     static struct uy_page_desc desc;
-    static uint8_t native[MP_PAGE] __attribute__((aligned(16)));
-    static uint8_t out[MP_PAGE] __attribute__((aligned(16)));
+    static uint8_t native[UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
+    static uint8_t out[UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
     struct urov_y_request q;
     int rc, active = 0;
 
     ++g_cases;
-    mp_memcpy(native, mp_ld_blob, MP_PAGE);
+    mp_memcpy(native, mp_ld_blob, mp_page_size);
     memset(&desc, 0, sizeof(desc));
     desc.base = (uintptr_t)mp_ld_blob;
     desc.flags = UROV_Y_PAGE_SRC_FILE;
@@ -592,15 +602,139 @@ static void mp_srcfile_case(const struct uy_ctx *ctx, int repeats)
     for (int r = 0; r < repeats; ++r) {
         memset(out, 0, sizeof(out));
         mp_srcfile_business(out, mp_ld_blob);
-        REQUIRE(!memcmp(out, native, MP_PAGE), "MP SRC_FILE view differs from file page");
+        REQUIRE(!memcmp(out, native, mp_page_size), "MP SRC_FILE view differs from file page");
         memset(out, 0, sizeof(out));
-        mp_memcpy(out, mp_ld_blob, MP_PAGE);
-        REQUIRE(!memcmp(out, native, MP_PAGE), "MP SRC_FILE direct read changed");
+        mp_memcpy(out, mp_ld_blob, mp_page_size);
+        REQUIRE(!memcmp(out, native, mp_page_size), "MP SRC_FILE direct read changed");
     }
     mp_check_status(ctx, 1, "srcfile");
     rc = mp_deactivate(ctx);
     REQUIRE(rc == 0, "MP SRC_FILE deactivate rc=%d errno=%d", rc, errno);
     LOG("MP_SRC_FILE_DONE page=1 reads=%d", repeats);
+}
+
+struct mp_pair {
+    uint64_t lo, hi;
+};
+
+extern struct mp_pair mp_audit_site(const void *at);
+extern const uint64_t mp_audit_data[2];
+
+static const uint64_t mp_audit_values[] = {
+    UINT64_C(0x1020304050607080), UINT64_C(0x0123456789abcdef), UINT64_C(0xfedcba9876543210),
+};
+
+struct mp_audit_worker {
+    atomic_bool stop;
+    atomic_uint reads, errors;
+};
+
+static void *mp_audit_read(void *arg)
+{
+    struct mp_audit_worker *worker = arg;
+
+    while (!atomic_load_explicit(&worker->stop, memory_order_relaxed)) {
+        struct mp_pair p = mp_audit_site(mp_audit_data);
+        if (p.lo != p.hi || (p.lo != mp_audit_values[0] &&
+                            p.lo != mp_audit_values[1] && p.lo != mp_audit_values[2]))
+            atomic_fetch_add_explicit(&worker->errors, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&worker->reads, 1, memory_order_relaxed);
+    }
+    return NULL;
+}
+
+static void mp_audit_case(const struct uy_ctx *ctx)
+{
+    struct mp_pair fake = {mp_audit_values[1], mp_audit_values[1]};
+    const uintptr_t base = (uintptr_t)&mp_audit_site;
+    struct uy_page_desc desc = {
+        .base = base, .fake_addr = (uintptr_t)&fake,
+        .fake_off = (unsigned)((uintptr_t)mp_audit_data - base), .fake_len = sizeof(fake),
+        .flags = UROV_Y_PAGE_SRC_USER,
+    };
+    struct uy_page_desc bad[] = {desc, desc, desc, desc, desc};
+    struct urov_y_request q = {0};
+    struct mp_audit_worker worker = {0};
+    pthread_t thread;
+    uint64_t generation;
+    unsigned invalid = 0, updates = 0;
+    int rc, have_thread, child_ok = 0;
+
+    ++g_cases;
+    bad[0].fake_len = mp_page_size + 8;
+    bad[1].fake_len = UINT32_MAX & ~7U;
+    bad[2].fake_off = UINT32_MAX;
+    bad[3].flags |= UROV_Y_PAGE_SRC_FILE;
+    bad[4].fake_addr = UINT64_MAX - 7;
+    for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+        rc = mp_register(ctx, &bad[i], 1, 0, 0, &q);
+        int saved_errno = errno;
+        REQUIRE(rc == -1 && saved_errno == EINVAL, "MP malformed desc %u rc=%d errno=%d",
+                i, rc, saved_errno);
+        if (!rc) (void)mp_deactivate(ctx);
+        if (rc == -1 && saved_errno == EINVAL) ++invalid;
+    }
+    REQUIRE(!uy_status(ctx, &q) && q.state == UROV_Y_INACTIVE, "MP invalid REGISTER armed a trap");
+    rc = mp_register(ctx, &desc, 1, 0, 0, &q);
+    REQUIRE(!rc && q.state == UROV_Y_ACTIVE, "MP audit REGISTER rc=%d errno=%d", rc, errno);
+    if (rc) return;
+    generation = q.generation;
+    struct mp_pair got = mp_audit_site(mp_audit_data);
+    REQUIRE(got.lo == fake.lo && got.hi == fake.hi, "MP self-page fetch/read mismatch");
+
+    q = uy_req(UROV_Y_SET_PAGE);
+    q.session = 1;
+    q.expected_generation = generation;
+    q.fake_addr = (uintptr_t)&fake;
+    q.length = mp_page_size + 8;
+    rc = (int)uy_control(ctx, UROV_Y_SET_PAGE, &q);
+    REQUIRE(rc == -1 && errno == EINVAL && !uy_status(ctx, &q) && q.generation == generation,
+            "MP malformed SET_PAGE changed the session");
+
+    have_thread = !pthread_create(&thread, NULL, mp_audit_read, &worker);
+    REQUIRE(have_thread, "MP audit reader thread");
+    for (unsigned i = 0; have_thread && i < 200 && !atomic_load(&worker.reads); ++i)
+        usleep(1000);
+    for (unsigned i = 0; i < 48; ++i) {
+        q = uy_req(UROV_Y_SET_PAGE);
+        fake.lo = fake.hi = mp_audit_values[1 + (i & 1U)];
+        q.session = 1;
+        q.expected_generation = generation;
+        q.fake_addr = (uintptr_t)&fake;
+        q.offset = desc.fake_off;
+        q.length = sizeof(fake);
+        rc = (int)uy_control(ctx, UROV_Y_SET_PAGE, &q);
+        REQUIRE(!rc && q.generation == generation + 1, "MP concurrent SET_PAGE rc=%d errno=%d", rc, errno);
+        if (rc) break;
+        generation = q.generation;
+        ++updates;
+    }
+    rc = mprotect((void *)base, mp_page_size, PROT_READ | PROT_EXEC);
+    REQUIRE(!rc && !uy_status(ctx, &q) && q.state == UROV_Y_INACTIVE,
+            "MP overlapping mprotect did not restore the page rc=%d errno=%d", rc, errno);
+    got = mp_audit_site(mp_audit_data);
+    REQUIRE(got.lo == mp_audit_values[0] && got.hi == got.lo, "MP read after mprotect was not native");
+    atomic_store(&worker.stop, 1);
+    if (have_thread) pthread_join(thread, NULL);
+    REQUIRE(atomic_load(&worker.reads) > 0 && !atomic_load(&worker.errors), "MP concurrent read tore");
+
+    rc = mp_register(ctx, &desc, 1, 0, 0, &q);
+    REQUIRE(!rc, "MP fork REGISTER rc=%d errno=%d", rc, errno);
+    if (!rc) {
+        pid_t child = fork();
+        int status;
+        if (child == 0) {
+            struct mp_pair value = mp_audit_site(mp_audit_data);
+            _exit(value.lo == mp_audit_values[0] && value.hi == value.lo ? 0 : 1);
+        }
+        child_ok = child > 0 && waitpid(child, &status, 0) == child &&
+                   WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        REQUIRE(child_ok && !uy_status(ctx, &q) && q.state == UROV_Y_INACTIVE,
+                "MP fork inherited a trap or left the session active");
+    }
+    (void)mp_deactivate(ctx);
+    LOG("MP_AUDIT invalid=%u updates=%u reads=%u errors=%u child_restored=%d",
+        invalid, updates, atomic_load(&worker.reads), atomic_load(&worker.errors), child_ok);
 }
 
 /* --------------------------------------------------------------- dispatch */
@@ -615,15 +749,20 @@ static void mp_fixture(const char *mode, const char *key, int repeats)
         return;
     }
     q = uy_req(UROV_Y_QUERY);
-    REQUIRE(!uy_control(&ctx, UROV_Y_QUERY, &q) && q.state == UROV_Y_INACTIVE &&
-            (q.session_flags & (UROV_Y_CAP_MULTI | UROV_Y_CAP_LD1 | UROV_Y_CAP_LD2 |
-                                UROV_Y_CAP_LD3 | UROV_Y_CAP_LD4 | UROV_Y_CAP_CROSS)) ==
-                (UROV_Y_CAP_MULTI | UROV_Y_CAP_LD1 | UROV_Y_CAP_LD2 |
-                 UROV_Y_CAP_LD3 | UROV_Y_CAP_LD4 | UROV_Y_CAP_CROSS) &&
-            q.page_stride == UROV_Y_PAGE_SHIFT && q.page_count >= 24 &&
-            !(q.session_flags & UROV_Y_CAP_16K),
-            "MP query caps=0x%x shift=%u max=%u state=%u", (unsigned)q.session_flags,
-            q.page_stride, q.page_count, q.state);
+    const long page_size = sysconf(_SC_PAGESIZE);
+    const uint64_t required = UROV_Y_CAP_MULTI | UROV_Y_CAP_LD1 | UROV_Y_CAP_LD2 |
+                              UROV_Y_CAP_LD3 | UROV_Y_CAP_LD4 | UROV_Y_CAP_CROSS |
+                              UROV_Y_CAP_PAGE_AP;
+    if (uy_control(&ctx, UROV_Y_QUERY, &q) || q.state != UROV_Y_INACTIVE ||
+        (q.session_flags & required) != required || q.page_count < MP_MULTI_PAGES ||
+        (q.page_stride != 12U && q.page_stride != 14U) ||
+        (1L << q.page_stride) != page_size ||
+        !!(q.session_flags & UROV_Y_CAP_16K) != (q.page_stride == 14U)) {
+        REQUIRE(0, "MP query caps=0x%x shift=%u max=%u state=%u page_size=%ld",
+                (unsigned)q.session_flags, q.page_stride, q.page_count, q.state, page_size);
+        return;
+    }
+    mp_page_size = (unsigned)page_size;
     LOG("MP_QUERY caps=0x%x max_pages=%u page_shift=%u abi=%u",
         (unsigned)q.session_flags, q.page_count, q.page_stride, UROV_Y_ABI_VERSION);
 
@@ -631,5 +770,6 @@ static void mp_fixture(const char *mode, const char *key, int repeats)
     else if (!strcmp(mode, "mp-ld1")) mp_ld_case(&ctx, repeats);
     else if (!strcmp(mode, "mp-cross")) mp_cross_case(&ctx, repeats);
     else if (!strcmp(mode, "mp-srcfile")) mp_srcfile_case(&ctx, repeats);
+    else if (!strcmp(mode, "mp-audit")) mp_audit_case(&ctx);
     else REQUIRE(0, "MP unknown mode %s", mode);
 }

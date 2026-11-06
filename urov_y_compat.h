@@ -28,7 +28,35 @@ struct uy_layout {
     /* offsetof(task_struct, thread.uw.fpsimd_state); -1 when the running
      * kernel's BTF does not describe the FPSIMD layout we can drive. */
     int task_fpsimd;
+    int task_sve_state;
+    int task_sme_state;
 };
+
+struct uy_geometry {
+    unsigned page_shift;
+    unsigned user_va_bits;
+};
+
+/* KernelPatch's walker uses the kernel translation depth for any PGD.
+ * Arm64 4K and 16K non-LPA2 descriptors both carry <=48-bit output addresses. */
+static int uy_geometry_from_tcr(struct uy_geometry *out, uint64_t tcr)
+{
+    unsigned tg0 = (tcr >> 14) & 3U, tg1 = (tcr >> 30) & 3U;
+    unsigned t0sz = tcr & 63U, t1sz = (tcr >> 16) & 63U;
+    unsigned shift, stride;
+
+    if ((tcr & (UINT64_C(1) << 59)) || ((tcr >> 32) & 7U) > 5U ||
+        t0sz < 16U || t0sz > 39U || t1sz < 16U || t1sz > 39U)
+        return -1;
+    if (tg0 == 0U && tg1 == 2U) shift = 12;
+    else if (tg0 == 2U && tg1 == 1U) shift = 14;
+    else return -1;
+    stride = shift - 3;
+    if ((60U - t0sz) / stride != (60U - t1sz) / stride) return -1;
+    out->page_shift = shift;
+    out->user_va_bits = 64U - t0sz;
+    return 0;
+}
 
 /* Direct member lookup (no recursion, so it is one scan of one type). */
 static int uy_btf_member(const struct kclf_btf *btf, const struct kclf_btf_type *type,
@@ -133,6 +161,23 @@ static int uy_fpsimd_offset(const struct kclf_btf *btf)
     return -1;
 }
 
+static int uy_task_thread_ptr(const struct kclf_btf *btf, const char *name)
+{
+    const struct kclf_btf_type *task = kclf_btf_find(btf, "task_struct", 0);
+    const struct kclf_btf_type *thread, *type;
+    uint32_t id;
+    int thread_off = uy_btf_member(btf, task, "thread", &id);
+    int off;
+
+    if (thread_off < 0) return -1;
+    thread = kclf_btf_resolve(btf, id);
+    if (!thread || thread->size > task->size - (unsigned)thread_off) return -1;
+    off = uy_btf_member(btf, thread, name, &id);
+    if (off < 0 || ((thread_off + off) & 7) || thread->size - (unsigned)off < 8) return -1;
+    type = kclf_btf_resolve(btf, id);
+    return type && ((type->info >> 24) & 31U) == 2U ? thread_off + off : -1;
+}
+
 static int uy_layout_from_btf(struct uy_layout *layout, const struct kclf_btf *btf)
 {
     const struct kclf_btf_type *sem = kclf_btf_find(btf, "rw_semaphore", 0);
@@ -150,6 +195,8 @@ static int uy_layout_from_btf(struct uy_layout *layout, const struct kclf_btf *b
     layout->vma_pgoff = kclf_btf_member_range(btf, "vm_area_struct", "vm_pgoff", 8, 8);
     layout->vma_pgoff_ok = layout->vma_pgoff >= 0;
     layout->task_fpsimd = uy_fpsimd_offset(btf);
+    layout->task_sve_state = uy_task_thread_ptr(btf, "sve_state");
+    layout->task_sme_state = uy_task_thread_ptr(btf, "sme_state");
     layout->mmap_lock = -1;
     if (sem && sem->size >= 16 && sem->size <= 512) {
         layout->mmap_lock = kclf_btf_member_range(btf, "mm_struct", "mmap_lock", sem->size, 8);

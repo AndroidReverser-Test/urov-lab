@@ -7,16 +7,12 @@
  * as the business call windows.
  *
  * Expected result against urov-y:
- *   - ud_observe_exclusive() on the target page: NO_MATCH (a native load
- *     in BRK/UXN modes, or the adjacent LL/SC bridge in AP mode);
- *   - ud_observe_reader() with the bare reader routine: NO_MATCH (a call from
- *     outside the business window is emulated from the original bytes);
- *   - ud_observe_execution() on the canary: MATCH only in active PAGE_UXN;
- *   - ud_observe_unreserved_store(): NO_MATCH in every mode.  In active
- *     PAGE_AP the trapped LDRB still runs through EL1, but the branch-skips-
- *     LDXR sequence must be left to its native STXR failure: the bridge only
- *     retires a store whose LDXR result is still in the target register.
- *     Matching here would mean the handler invented a store.
+ *   - ud_observe_exclusive() sees the reservation lost in PAGE_AP; BRK
+ *     and UXN leave the unregistered direct-read sequence native.
+ *   - ud_observe_reader() outside the business window returns original bytes.
+ *   - ud_observe_execution() on the canary matches only in active PAGE_UXN.
+ *   - ud_observe_unreserved_store() confirms STXR never writes without an
+ *     exclusive reservation, including on an active AP page.
  *   - the registered business call still returns the fake value.
  */
 
@@ -263,10 +259,9 @@ static int uy_mapping_private_kb(const void *addr, unsigned *dirty, unsigned *an
     return found ? 0 : -1;
 }
 
-/* One full observation case: both delivered detector APIs must stay negative on
- * the target page, and the page itself must remain a plain native mapping. */
+/* Verify the read value and the architectural reservation result. */
 static void elimination_case(const char *name, const struct page *p, unsigned delta,
-                             int repeats)
+                             int repeats, enum ud_verdict expected_exclusive)
 {
     const uint8_t *at = p->address + p->entry + delta;
     const uint8_t *reference = (const uint8_t *)(uintptr_t)&ud_payload + delta;
@@ -292,7 +287,7 @@ static void elimination_case(const char *name, const struct page *p, unsigned de
         errno = EDOM;
         ud_observe_exclusive(at, reference, p->fd, offset, &ex);
         REQUIRE(errno == EDOM, "%s exclusive changed errno", name);
-        REQUIRE(ex.reservation_loss == UD_NO_MATCH ||
+        REQUIRE(ex.reservation_loss == expected_exclusive ||
                 (ex.reservation_loss == UD_UNKNOWN && ex.error == EAGAIN),
                 "%s exclusive=%d accepted=%u failed=%u control=%u error=%d",
                 name, ex.reservation_loss, ex.accepted, ex.target_failed,
@@ -329,7 +324,9 @@ static void elimination_case(const char *name, const struct page *p, unsigned de
             oldmap.writable == newmap.writable && oldmap.executable == newmap.executable &&
             oldmap.dontcopy == newmap.dontcopy && oldmap.randomread == newmap.randomread &&
             oldmap.maywrite == newmap.maywrite, "%s VMA changed", name);
-    REQUIRE(exclusive_matches == 0, "%s exclusive matched %u times", name, exclusive_matches);
+    REQUIRE(expected_exclusive == UD_MATCH ? exclusive_matches > 0 && !exclusive_clean :
+            exclusive_matches == 0, "%s unexpected reservation result matches=%u clean=%u",
+            name, exclusive_matches, exclusive_clean);
     REQUIRE(reader_matches == 0, "%s reader matched %u times", name, reader_matches);
     LOG("ELIM_CASE name=%s result=%s n=%d exclusive_match=%u exclusive_clean=%u "
         "exclusive_unknown=%u accepted=%u failed=%u control_failed=%u "
@@ -387,7 +384,7 @@ static void elimination_clean(void)
     REQUIRE(errno == EDOM && views.file_diff == UD_NO_MATCH && views.completed == UD_REPEATS,
             "UY clean views file=%d done=%u error=%d", views.file_diff,
             views.completed, views.error_file);
-    elimination_case("idle_unregistered", &p, 8, 3);
+    elimination_case("idle_unregistered", &p, 8, 3, UD_NO_MATCH);
     page_close(&p);
 }
 
@@ -405,9 +402,8 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     struct ud_reader_observation rd;
     struct urov_y_request st = {0}, before = {0};
     enum ud_verdict expected_exec = mode == UROV_Y_MODE_PAGE_UXN ? UD_MATCH : UD_NO_MATCH;
-    /* The 2026-11-05 PAGE_AP fingerprint (a store retired although the LDXR
-     * was never executed) is expected to be gone in every mode: a negative
-     * verdict here means the native STXR failed and no sentinel was written. */
+    enum ud_verdict expected_exclusive = mode == UROV_Y_MODE_PAGE_AP ? UD_MATCH : UD_NO_MATCH;
+    /* A failed native STXR must not write the sentinel. */
     enum ud_verdict expected_store = UD_NO_MATCH;
     unsigned base_dirty = 0, base_anon = 0;
     const uint64_t fake = UINT64_C(0x8877665544332211);
@@ -435,7 +431,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
 
     REQUIRE(!app_pread(p.fd, p.file_offset + p.entry + 8, (uint8_t *)&disk, 8), "UY pread");
     REQUIRE(!app_pread(p.fd, p.file_offset + p.entry, disk64, sizeof(disk64)), "UY pread64");
-    elimination_case("baseline", &p, 8, repeats);
+    elimination_case("baseline", &p, 8, repeats, UD_NO_MATCH);
     elimination_exec_case("baseline", &reference, repeats, UD_NO_MATCH);
     store_case("baseline", &p, 8, repeats, UD_NO_MATCH);
 
@@ -487,9 +483,9 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
         }
     }
 
-    /* Both delivered detectors must stay negative on the active page. */
-    elimination_case("active_page", &p, 8, repeats);
-    elimination_case("active_outside_window", &p, 96, repeats);
+    /* Only an actual data-abort path loses this reservation. */
+    elimination_case("active_page", &p, 8, repeats, expected_exclusive);
+    elimination_case("active_outside_window", &p, 96, repeats, expected_exclusive);
 
     REQUIRE(!uy_status(&ctx, &before) && before.state == UROV_Y_ACTIVE,
             "UY status before execution probe");
@@ -543,10 +539,10 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     REQUIRE(!uy_set_page(&ctx, generation, UINT64_C(0x0f0e0d0c0b0a0908)),
             "UY SET errno=%d", errno);
     REQUIRE(uy_business_ldr(at) == UINT64_C(0x0f0e0d0c0b0a0908), "UY SET not visible");
-    elimination_case("active_after_set", &p, 8, repeats);
+    elimination_case("active_after_set", &p, 8, repeats, expected_exclusive);
     REQUIRE(!uy_set_page(&ctx, generation + 1, disk), "UY SET identity errno=%d", errno);
     REQUIRE(uy_business_ldr(at) == disk, "UY identity SET not visible");
-    elimination_case("active_equal_value", &p, 8, repeats);
+    elimination_case("active_equal_value", &p, 8, repeats, expected_exclusive);
     elimination_exec_case("active_equal_value", &reference, repeats, expected_exec);
     store_case("active_equal_value", &p, 8, repeats, expected_store);
 
@@ -584,7 +580,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
             REQUIRE(dirty == base_dirty && anon == base_anon,
                     "UY page mode left the page private after deactivate");
     }
-    elimination_case("deactivated", &p, 8, repeats);
+    elimination_case("deactivated", &p, 8, repeats, UD_NO_MATCH);
     elimination_exec_case("deactivated", &reference, repeats, UD_NO_MATCH);
     store_case("deactivated", &p, 8, repeats, UD_NO_MATCH);
 
@@ -602,9 +598,9 @@ out:
     page_close(&p);
 }
 
-/* Hold an active session while the harness unloads the module; the site must
- * come back to the original bytes without a signal in this process. */
-static void elimination_hold(const char *key_hex, unsigned mode)
+/* Keep the owner alive through unload. Legacy loaders need an authenticated
+ * DEACTIVATE in this task before root can unload the now idle module. */
+static void elimination_hold(const char *key_hex, unsigned mode, int quiesce)
 {
     struct uy_ctx ctx;
     struct page p, reference;
@@ -638,6 +634,19 @@ static void elimination_hold(const char *key_hex, unsigned mode)
     for (unsigned i = 0; i < 900; ++i) {
         unsigned dirty = 0, anon = 0;
         usleep(100000);
+        /* Give the independent observer time to run while the owner is live. */
+        if (quiesce && i == (mode == UROV_Y_MODE_SITE_BRK ? 19U : 119U)) {
+            struct urov_y_request d = uy_req(UROV_Y_DEACTIVATE);
+
+            d.session = 1;
+            int rc = (int)uy_control(&ctx, UROV_Y_DEACTIVATE, &d);
+            REQUIRE(!rc && d.state == UROV_Y_INACTIVE && uy_business_ldr(at) == disk,
+                    "UY hold DEACTIVATE rc=%d errno=%d state=%u", rc, errno, d.state);
+            if (rc) break;
+            LOG("ELIM_HOLD_QUIESCED pid=%d mode=%s", getpid(), uy_mode_name(mode));
+            /* No control calls during the harness's idle-module unload. */
+            usleep(2000000);
+        }
         if (uy_business_ldr(at) == disk) {
             uint32_t insn = load32_at((const uint8_t *)(uintptr_t)&uy_site_ldr);
             (void)uy_mapping_private_kb((const void *)(uintptr_t)&uy_site_ldr, &dirty, &anon);

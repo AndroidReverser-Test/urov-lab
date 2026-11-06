@@ -1272,9 +1272,8 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
         if (!strcmp(mode, "y-active") || !strcmp(mode, "z-active") ||
             !strcmp(mode, "w-active"))
             elimination_active(key, (int)repeats, trap);
-        else if (!strcmp(mode, "y-hold") || !strcmp(mode, "z-hold") ||
-                 !strcmp(mode, "w-hold"))
-            elimination_hold(key, trap);
+        else if (!strcmp(mode + 1, "-hold") || !strcmp(mode + 1, "-quiesce"))
+            elimination_hold(key, trap, !strcmp(mode + 1, "-quiesce"));
         else {
             if (strcmp(mode, "z-observer")) elimination_clean();
             elimination_observe_passive((int)repeats);
