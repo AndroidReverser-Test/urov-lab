@@ -1,0 +1,137 @@
+{
+  "serial": "25091FDF60063J",
+  "repeats": 5,
+  "cycles": 2,
+  "runs": [
+    {
+      "label": "mp-multi-1",
+      "mode": "mp-multi",
+      "uid": 10288,
+      "pid": "13402",
+      "log": "mp-multi-1-13402.log",
+      "result": "DETECT_RESULT PASS mode=mp-multi worker_ms=350 ui_ticks=127 ui_max_gap_ms=19 native=PASS cases=1 assertions=19 failures=0",
+      "status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=9d11 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x7f",
+      "details": [
+        "MP_QUERY caps=0x7f max_pages=4096 page_shift=12 abi=8",
+        "MP_MULTI pages=24 span=98304 register=1 generation=1",
+        "MP_STATUS name=multi pages=24 armed=24 hits=0 replays=0 failures=0",
+        "MP_SET_PAGE page=7 generation=2 diff=98304",
+        "MP_MULTI_DONE pages=24 restored=1"
+      ]
+    },
+    {
+      "label": "mp-ld1-1",
+      "mode": "mp-ld1",
+      "uid": 10288,
+      "pid": "13485",
+      "log": "mp-ld1-1-13485.log",
+      "result": "DETECT_RESULT PASS mode=mp-ld1 worker_ms=350 ui_ticks=127 ui_max_gap_ms=20 native=PASS cases=1 assertions=58 failures=0",
+      "status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=9d11 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x7f",
+      "details": [
+        "MP_QUERY caps=0x7f max_pages=4096 page_shift=12 abi=8",
+        "MP_LD register=1 page=1 generation=1",
+        "MP_LD_DONE readers=ld1x4/ld1x2/ld1x1/ld1_8b/post_imm/post_reg/ld2/ld3/ld4 n=5"
+      ]
+    },
+    {
+      "label": "mp-cross-1",
+      "mode": "mp-cross",
+      "uid": 10288,
+      "pid": "13564",
+      "log": "mp-cross-1-13564.log",
+      "result": "DETECT_RESULT PASS mode=mp-cross worker_ms=350 ui_ticks=127 ui_max_gap_ms=20 native=PASS cases=1 assertions=28 failures=0",
+      "status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=9d11 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x7f",
+      "details": [
+        "MP_QUERY caps=0x7f max_pages=4096 page_shift=12 abi=8",
+        "MP_CROSS register=1 pages=2 generation=1",
+        "MP_CROSS_DONE reads=ldp_page1_page2/ld1_page1_page2/ld1_tail/uncovered_page0 n=5"
+      ]
+    },
+    {
+      "label": "mp-srcfile-1",
+      "mode": "mp-srcfile",
+      "uid": 10288,
+      "pid": "13639",
+      "log": "mp-srcfile-1-13639.log",
+      "result": "DETECT_RESULT PASS mode=mp-srcfile worker_ms=351 ui_ticks=128 ui_max_gap_ms=17 native=PASS cases=1 assertions=15 failures=0",
+      "status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=9d11 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x7f",
+      "details": [
+        "MP_QUERY caps=0x7f max_pages=4096 page_shift=12 abi=8",
+        "MP_SRC_FILE register=1 page=1 generation=1",
+        "MP_STATUS name=srcfile pages=1 armed=1 hits=645 replays=645 failures=0",
+        "MP_SRC_FILE_DONE page=1 reads=5"
+      ]
+    },
+    {
+      "label": "mp-multi-2",
+      "mode": "mp-multi",
+      "uid": 10288,
+      "pid": "13713",
+      "log": "mp-multi-2-13713.log",
+      "result": "DETECT_RESULT PASS mode=mp-multi worker_ms=350 ui_ticks=128 ui_max_gap_ms=20 native=PASS cases=1 assertions=19 failures=0",
+      "status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=9d11 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x7f",
+      "details": [
+        "MP_QUERY caps=0x7f max_pages=4096 page_shift=12 abi=8",
+        "MP_MULTI pages=24 span=98304 register=1 generation=1",
+        "MP_STATUS name=multi pages=24 armed=24 hits=0 replays=0 failures=0",
+        "MP_SET_PAGE page=7 generation=2 diff=98304",
+        "MP_MULTI_DONE pages=24 restored=1"
+      ]
+    },
+    {
+      "label": "mp-ld1-2",
+      "mode": "mp-ld1",
+      "uid": 10288,
+      "pid": "13821",
+      "log": "mp-ld1-2-13821.log",
+      "result": "DETECT_RESULT PASS mode=mp-ld1 worker_ms=350 ui_ticks=128 ui_max_gap_ms=22 native=PASS cases=1 assertions=58 failures=0",
+      "status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=9d11 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x7f",
+      "details": [
+        "MP_QUERY caps=0x7f max_pages=4096 page_shift=12 abi=8",
+        "MP_LD register=1 page=1 generation=1",
+        "MP_LD_DONE readers=ld1x4/ld1x2/ld1x1/ld1_8b/post_imm/post_reg/ld2/ld3/ld4 n=5"
+      ]
+    },
+    {
+      "label": "mp-cross-2",
+      "mode": "mp-cross",
+      "uid": 10288,
+      "pid": "13896",
+      "log": "mp-cross-2-13896.log",
+      "result": "DETECT_RESULT PASS mode=mp-cross worker_ms=351 ui_ticks=128 ui_max_gap_ms=23 native=PASS cases=1 assertions=28 failures=0",
+      "status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=9d11 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x7f",
+      "details": [
+        "MP_QUERY caps=0x7f max_pages=4096 page_shift=12 abi=8",
+        "MP_CROSS register=1 pages=2 generation=1",
+        "MP_CROSS_DONE reads=ldp_page1_page2/ld1_page1_page2/ld1_tail/uncovered_page0 n=5"
+      ]
+    },
+    {
+      "label": "mp-srcfile-2",
+      "mode": "mp-srcfile",
+      "uid": 10288,
+      "pid": "13967",
+      "log": "mp-srcfile-2-13967.log",
+      "result": "DETECT_RESULT PASS mode=mp-srcfile worker_ms=350 ui_ticks=127 ui_max_gap_ms=18 native=PASS cases=1 assertions=15 failures=0",
+      "status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=9d11 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x7f",
+      "details": [
+        "MP_QUERY caps=0x7f max_pages=4096 page_shift=12 abi=8",
+        "MP_SRC_FILE register=1 page=1 generation=1",
+        "MP_STATUS name=srcfile pages=1 armed=1 hits=645 replays=645 failures=0",
+        "MP_SRC_FILE_DONE page=1 reads=5"
+      ]
+    }
+  ],
+  "passed": true,
+  "initial_modules": "",
+  "kernel": "Linux localhost 6.1.134-android14-11-g66e758f7d0c0-ab13748739 #1 SMP PREEMPT Tue Jul  8 09:17:32 UTC 2025 aarch64 Toybox",
+  "kpver": "c00",
+  "selinux": "Enforcing",
+  "artifacts": {
+    "urovdetect.apk": "dee2dfb1268ac55ce5578c56ee65a4a44bb467f24f22b3c6bc42f8a7e10ee867",
+    "urov-y.kpm": "bea1c4c26e635c7b229fe3af3720049da808bff8858a975a0d7ae60699c6809d"
+  },
+  "loaded_status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=9d11 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x7f",
+  "final_modules": "",
+  "kernel_issues": []
+}

@@ -47,9 +47,9 @@ int uro_emulate(const struct uro_view *v, uint32_t opcode, uint64_t esr,
      * backend commits through the task's FPSIMD state.  This shared GPR
      * emulator (urov-x/urov-lab) has no vector register file in its model, so
      * it keeps rejecting them exactly as before. */
-    if (d.vector)
+    if (d.vector || d.multi)
         return URO_UNSUPPORTED;
-    total = (uint64_t)d.size * d.count;
+    total = d.total;
     if (d.address < v->base || d.address - v->base > URO_PAGE_SIZE - total ||
         (d.writeback && !valid_user(d.wb, v->user_limit)))
         return URO_BAD_RANGE;

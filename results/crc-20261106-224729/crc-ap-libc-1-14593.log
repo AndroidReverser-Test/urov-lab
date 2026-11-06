@@ -1,0 +1,15 @@
+--------- beginning of main
+10-03 13:22:02.803 14593 14616 I urovdetect: CONTEXT pid=14593 uid=10288 selinux=u:r:untrusted_app:s0:c32,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-03 13:22:02.803 14593 14616 I urovdetect: BEGIN mode=crc-ap-libc repeats=3
+10-03 13:22:02.805 14593 14616 I urovdetect: CRC_FIXTURE dlopen=1 mode=crc-ap-libc all_callers=0
+10-03 13:22:02.809 14593 14616 I urovdetect: CRC_QUERY authenticated=1 state=0
+10-03 13:22:02.855 14593 14616 I urovdetect: CRC_LIBC_VMA span=225280 offset=9000 shared=0 maywrite=1 private_dirty_kb=0 anonymous_kb=0
+10-03 13:22:02.855 14593 14616 I urovdetect: CRC_STAGE name=clean n=3 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=3 bridge_unknown=0
+10-03 13:22:02.855 14593 14616 I urovdetect: CRC_LIBC n=3 window=0c7da8a0 direct=f50bcaf6 execute=1234 readers=memcpy12/memcmp32/strlen31/crc32-direct/crc32-copy
+10-03 13:22:02.855 14593 14616 I urovdetect: CRC_STAGE name=overlay n=3 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=0c7da8a0 bridge_match=0 bridge_clean=3 bridge_unknown=0
+10-03 13:22:02.855 14593 14616 I urovdetect: CRC_LIBC_OVERLAY hits=72 replays=120 failures=0
+10-03 13:22:02.881 14593 14616 I urovdetect: CRC_STAGE name=deactivated n=3 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=3 bridge_unknown=0
+10-03 13:22:02.881 14593 14616 I urovdetect: CRC_LIBC_RESTORED direct=f50bcaf6 window=f50bcaf6
+10-03 13:22:02.882 14593 14616 I urovdetect: CONTEXT pid=14593 uid=10288 selinux=u:r:untrusted_app:s0:c32,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-03 13:22:02.882 14593 14616 I urovdetect: NATIVE_RESULT PASS cases=1 assertions=20 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0 mode=crc-ap-libc
+10-03 13:22:03.165 14593 14593 I urovdetect: DETECT_RESULT PASS mode=crc-ap-libc worker_ms=351 ui_ticks=127 ui_max_gap_ms=18 native=PASS cases=1 assertions=20 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0

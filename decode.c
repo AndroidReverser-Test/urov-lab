@@ -116,6 +116,84 @@ static int simd_size(uint32_t insn, unsigned *size, unsigned *scale)
     return 0;
 }
 
+/* LD1/LD2/LD3/LD4 (multiple structures), including the post-index forms.
+ * Fixed group bits: bits 31==0, 29:24==001100, 23 selects post-index, 22 is
+ * the load bit, 21 must be zero, 20:16 is Rm (11111 means the immediate
+ * post-index form), 15:12 is the opcode and 11:10 the element size. */
+static int multi_structure(uint32_t insn, const struct uro_regs *regs,
+                           struct uro_load *load)
+{
+    unsigned q = (insn >> 30) & 1U;
+    unsigned post = (insn >> 23) & 1U;
+    unsigned rm = (insn >> 16) & 31U;
+    unsigned opcode = (insn >> 12) & 15U;
+    unsigned size_log2 = (insn >> 10) & 3U;
+    unsigned rn = (insn >> 5) & 31U;
+    unsigned datasize, esize, elements, rpt, selem, total;
+    unsigned r, s;
+    uint64_t base, offset, wb;
+
+    if (!(insn & (1U << 22)) || (insn & (1U << 21)))
+        return -1; /* Store or architecturally unallocated. */
+    if (!post && rm != 0)
+        return -1; /* No-offset form requires bits 20:16 == 0. */
+    switch (opcode) {
+    case 0x2: rpt = 4; selem = 1; break; /* LD1, four registers */
+    case 0x6: rpt = 3; selem = 1; break; /* LD1, three registers */
+    case 0xa: rpt = 2; selem = 1; break; /* LD1, two registers */
+    case 0x7: rpt = 1; selem = 1; break; /* LD1, one register */
+    case 0x8: rpt = 1; selem = 2; break; /* LD2 */
+    case 0x4: rpt = 1; selem = 3; break; /* LD3 */
+    case 0x0: rpt = 1; selem = 4; break; /* LD4 */
+    default: return -1;
+    }
+    datasize = 8U << q;
+    esize = 1U << size_log2;
+    if (size_log2 == 3U && q == 0U && selem > 1U)
+        return -1; /* 1D forms are UNDEF for LD2/LD3/LD4. */
+    elements = datasize / esize;
+    total = rpt * selem * datasize;
+    if (!total || total > 64U)
+        return -1;
+    if (base_value(regs, rn, &base))
+        return -1;
+    if (post) {
+        /* Rt names a V register, so a destination cannot alias the GPR base;
+         * only the base/offset-register pairing is constrained. */
+        if (rm == 31U) {
+            offset = total;
+        } else {
+            if (rm == rn && rn != 31U)
+                return -1;
+            offset = regs->x[rm];
+        }
+        if (add_magnitude(base, offset, 0, &wb))
+            return -1;
+        load->address = base;
+        load->wb = wb;
+        load->writeback = 1;
+    } else {
+        load->address = base;
+        load->wb = 0;
+        load->writeback = 0;
+    }
+    load->vector = 1;
+    load->multi = 1;
+    load->nregs = rpt;
+    load->selem = selem;
+    load->esize = esize;
+    load->elements = elements;
+    load->size = datasize;
+    load->count = rpt * selem;
+    load->total = total;
+    load->dest_bits = datasize * 8U;
+    load->rt2 = 31;
+    for (r = 0; r < rpt; ++r)
+        for (s = 0; s < selem; ++s)
+            load->dst[r * selem + s] = (load->rt + r + s) & 31U;
+    return 0;
+}
+
 int uro_decode(uint32_t insn, const struct uro_regs *regs, struct uro_load *out)
 {
     struct uro_load load = { 0 };
@@ -266,12 +344,20 @@ int uro_decode(uint32_t insn, const struct uro_regs *regs, struct uro_load *out)
         load.address = mode == 1 ? base : load.wb;
         if (!load.writeback)
             load.wb = 0;
+    } else if ((insn & 0xbf000000U) == 0x0c000000U) {
+        /* SIMD&FP multiple structures: LD1/LD2/LD3/LD4 including the
+         * post-index immediate and register forms.  The single-lane group
+         * (0x0d......) and the store forms are rejected by the helper. */
+        if (multi_structure(insn, regs, &load))
+            return -1;
     } else {
         return -1;
     }
 
+    if (!load.total)
+        load.total = (uint64_t)load.size * load.count;
     /* Even a non-writing-back load must not wrap its last accessed byte. */
-    if ((uint64_t)(load.size * load.count - 1U) > URO_U64_MAX - load.address)
+    if (!load.total || load.total - 1U > URO_U64_MAX - load.address)
         return -1;
     *out = load;
     return 0;

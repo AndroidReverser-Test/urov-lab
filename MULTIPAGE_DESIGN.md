@@ -14,9 +14,13 @@ SIMD&FP 单/pair、整页镜像；见 [ELIMINATION_DESIGN.md](ELIMINATION_DESIGN
 `process_vm_readv`、可写页（GOT/RELRO）、多进程/fork 继承、检测面消除——**不在本轮
 范围**。下文凡涉及它们的句子都只是边界声明，不作为设计目标。
 
-> 状态：**设计稿，未实现、未上机**。文中的内存/时间/工作量数字是预算或估算，不是
-> 实测结果。当前已实测的能力仍以
-> [results/crc-20261106-212757](results/crc-20261106-212757/summary.json) 为准。
+> 状态：**R1/R2/R3 已实现并上机（ABI v8），R4（16 KiB）明确不实现**。本轮按用户
+> 要求保留 4 KiB 基础页；`QUERY` 报 `page_shift=12`、caps 不含
+> `UROV_Y_CAP_16K`，`supported_pagetables()` 仍拒绝非 4 KiB 内核。实现与真机证据
+> 见 [MULTIPAGE_RESULTS.md](MULTIPAGE_RESULTS.md) 与
+> [results/multipage-20261106-224709](results/multipage-20261106-224709/summary.json)。
+> 下文 §10（16 KiB）保留为设计记录，未落地；其余小节（多页数组、LD1/LD2、
+> 跨页、配额、生命周期）已按文实现。
 
 ---
 
@@ -556,6 +560,15 @@ KernelPatch 的 RW 池固定 2 MiB（`MEMORY_RW_SIZE (2 << 20)`），所以镜�
 | A4 | 跨页 `ldp q`/`ld1` 读取结果与"两页镜像拼接"一致 |
 | A5 | `page_shift=14` 的对齐/PTE/CONT 单元测试通过（16 KiB 真机另计） |
 | A6 | 失败注入（配额、PTE 回收、非法描述符）无残留：`kpm list` 空、页面可再注册 |
+
+本轮落地情况（2026-11-06）：A1/A2/A3/A4 的真机等价矩阵见
+[MULTIPAGE_RESULTS.md](MULTIPAGE_RESULTS.md) 与
+[results/multipage-20261106-224709](results/multipage-20261106-224709/summary.json)
+（24 页、`SET_PAGE`、LD1/LD2/LD3/LD4、跨页；A2 的"16 个函数"用 24 页整段和
+`SET_PAGE` 覆盖）；A5（16 KiB）本轮明确不做；A6 的非法描述符/`-ENOMEM` 回滚路径
+在代码中保留，设备矩阵确认每次注销后 `ctl0 status` 为 inactive、最终
+`kpm list` 为空、`kernel_issues=[]`。
+
 
 ---
 

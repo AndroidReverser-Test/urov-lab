@@ -1210,6 +1210,7 @@ finish:
 /* UROV-Y fixtures share the observation helpers above. */
 #include "uy_fixture.inc"
 #include "crc_fixture.inc"
+#include "mp_fixture.inc"
 
 JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
     JNIEnv *env, jclass cls, jstring mode_value, jint repeats, jstring key_value)
@@ -1251,6 +1252,13 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
         else if (!strcmp(mode, "x-simd")) stealth_simd(key);
         else if (!strcmp(mode, "x-fork")) stealth_fork(key);
         else stealth_clean();
+        snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
+                 g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
+        goto done;
+    }
+    if (!strncmp(mode, "mp-", 3)) {
+        /* ABI v8: arbitrary page arrays, LD1/LD2/LD3/LD4 and cross-page loads. */
+        mp_fixture(mode, key, (int)repeats);
         snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
                  g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
         goto done;

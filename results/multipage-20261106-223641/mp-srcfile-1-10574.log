@@ -1,0 +1,9 @@
+--------- beginning of main
+10-03 13:11:07.576 10574 10598 I urovdetect: CONTEXT pid=10574 uid=10288 selinux=u:r:untrusted_app:s0:c32,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-03 13:11:07.576 10574 10598 I urovdetect: BEGIN mode=mp-srcfile repeats=5
+10-03 13:11:07.576 10574 10598 I urovdetect: MP_SRC_FILE register=1 page=1 generation=1
+10-03 13:11:07.577 10574 10598 I urovdetect: MP_STATUS name=srcfile pages=1 armed=1 hits=645 replays=645 failures=0
+10-03 13:11:07.577 10574 10598 I urovdetect: MP_SRC_FILE_DONE page=1 reads=5
+10-03 13:11:07.577 10574 10598 I urovdetect: CONTEXT pid=10574 uid=10288 selinux=u:r:untrusted_app:s0:c32,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-03 13:11:07.577 10574 10598 I urovdetect: NATIVE_RESULT PASS cases=1 assertions=14 failures=0 mode=mp-srcfile
+10-03 13:11:07.931 10574 10574 I urovdetect: DETECT_RESULT PASS mode=mp-srcfile worker_ms=351 ui_ticks=127 ui_max_gap_ms=18 native=PASS cases=1 assertions=14 failures=0

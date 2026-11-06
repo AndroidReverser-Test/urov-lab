@@ -18,6 +18,8 @@ struct uy_layout {
     int vma_mm;
     int vma_flags;
     int vma_file;
+    int vma_pgoff;
+    int vma_pgoff_ok;
     /* offsetof(task_struct, thread.uw.fpsimd_state); -1 when the running
      * kernel's BTF does not describe the FPSIMD layout we can drive. */
     int task_fpsimd;
@@ -122,6 +124,8 @@ static int uy_layout_from_btf(struct uy_layout *layout, const struct kclf_btf *b
     layout->vma_mm = kclf_btf_member_range(btf, "vm_area_struct", "vm_mm", 8, 8);
     layout->vma_flags = kclf_btf_member_range(btf, "vm_area_struct", "vm_flags", 8, 8);
     layout->vma_file = kclf_btf_member_range(btf, "vm_area_struct", "vm_file", 8, 8);
+    layout->vma_pgoff = kclf_btf_member_range(btf, "vm_area_struct", "vm_pgoff", 8, 8);
+    layout->vma_pgoff_ok = layout->vma_pgoff >= 0;
     layout->task_fpsimd = uy_fpsimd_layout(btf) ? -1 : uy_fpsimd_offset(btf);
     layout->mmap_lock = -1;
     if (sem && sem->size >= 16 && sem->size <= 512) {

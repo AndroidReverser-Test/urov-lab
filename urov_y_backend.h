@@ -18,13 +18,17 @@ struct uy_status {
     uint32_t mode;
     uint32_t degraded;
     uint32_t fpsimd;      /* native FPSIMD helpers available */
-    uint32_t overlay_len; /* active overlay bytes, 0 when inactive */
+    uint32_t overlay_len; /* page-0 overlay bytes, 0 when inactive */
     uint32_t abi;
+    uint32_t page_count;  /* pages in the active session */
+    uint32_t page_shift;  /* base page shift (12) */
+    uint32_t caps;        /* UROV_Y_CAP_* */
 };
 
 /* Installs the reader-site traps (BRK, PAGE_UXN and/or PAGE_AP mode), the
  * authenticated prctl channel and the mapping lifecycle gates. The argument
- * string must contain key=<32 hex digits>; "verbose" enables printk. */
+ * string must contain key=<32 hex digits>; "verbose" enables printk,
+ * "max_pages=N" and "max_kb=N" lower the runtime quota. */
 long urov_y_backend_init(const char *args);
 long urov_y_backend_exit(void);
 void urov_y_status_get(struct uy_status *out);

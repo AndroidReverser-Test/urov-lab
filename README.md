@@ -1,5 +1,21 @@
 # UROV-LAB
 
+2026-11-06 ABI v8 多页/宽 load（本轮）：`urov-y` 的 `PAGE_AP` 模式从"一页一会话"
+扩到**一次会话任意页数组**（`struct uy_page_desc[page_count]`，默认配额 4096 页 /
+8 MiB 镜像，`kvmalloc` 动态分配），并新增 **LD1/LD2/LD3/LD4**（含 post-index
+立即数/寄存器两种形式）与**跨页 load**：一条 64 字节的 `ld1 {v0-v3.16b}` 或 32
+字节的 `ldp q` 可以在两个已注册页之间拼接，未注册段走 nofault uaccess 读真实
+内存。每页有独立整页镜像、窗口、seqlock 与 `SET_PAGE` 更新；`SRC_FILE` 从
+`vm_file` 读原始页，`SRC_USER` 拷贝调用者镜像。真机
+[multipage-20261106-224709](results/multipage-20261106-224709/summary.json)：
+24 页同时 ARMED 的 96 KiB `memcpy` 整段等于伪页、`SET_PAGE` 换第 7 页后重读一致、
+注销后 24 页全部恢复；LD1 1/2/3/4 寄存器、LD1 8B、post-index 立即数/寄存器、
+LD2/LD3/LD4 去交织全部等于架构解释；跨页 `ldp q`/`ld1` 与"两页镜像拼接"逐字节
+一致，起始于未注册页的跨界读前半段为真实内存；`SRC_FILE` 路径也已上机。同轮
+`crc-*` 回归矩阵全 PASS（含 `crc-ap-big` 的 SIMD 大长度传输）。**16 KiB 基础页
+本轮明确不实现**：`QUERY` 报 `page_shift=12`、caps 不含 `UROV_Y_CAP_16K`，
+`supported_pagetables()` 仍拒绝非 4 KiB 内核。
+
 2026-11-06 大长度传输（ABI v7）：`urov-y` 的 `PAGE_AP` 模式现在能服务 SIMD&FP
 load，并把覆盖镜像从 32 字节扩到整页 4 KiB。bionic 的 `memcpy` 从 16 字节起、
 `memcmp` 从 160 字节起、`strlen` 越过前 32 字节后都会走 `LDR q`/`LDP q`，此前这些
@@ -109,7 +125,8 @@ UROV-LAB 是一个适用于 Android arm64 的独立 KPM：把一个一页只读�
 
 ## UROV-Y 的 5.x 和 6.x 兼容路径
 
-`urov-y` 使用 ABI v7 的 `prctl` 通道（256 字节请求，比 v6 多 `fake_addr`/`reserved`），
+`urov-y` 使用 ABI v8 的 `prctl` 通道（288 字节请求，比 v7 多 `page_count`/
+`page_stride`/`pages_addr`/`session_flags`/`reserved2`，多页页描述符数组），
 校验请求 MAC 后在调用者的 `mm` 中注册一个文件后备的 RX 页和读取点。模块快照目标页，
 异常处理中按读取点 PC 和调用者 `x30` 选择覆盖字节或原字节，模拟 A64 load 后更新
 寄存器（`PAGE_AP` 的 SIMD&FP load 更新 FPSIMD 状态）和 PC。`length` 可达 4096（整页），
@@ -136,10 +153,11 @@ UROV-LAB 是一个适用于 Android arm64 的独立 KPM：把一个一页只读�
 `crc-ap-big`（ABI v7）进一步覆盖 bionic 的 SIMD 路径：16/32/64/160/512/1024/4096
 字节的 `memcpy`、4 KiB `memcmp`、4095 字节 `strlen` 和整页 `crc32`。SIMD&FP load
 通过内核 `fpsimd_signal_preserve_current_state()` /
-`fpsimd_update_current_state()` 提交到当前任务，覆盖窗口可达整页 4 KiB。残余：
-多结构 load（`LD1`/`LD2`）、SVE/SME、acquire/exclusive、跨页 load 仍
-fail-closed；没有这两个内核 helper 或 BTF 布局时 `PAGE_AP` 的向量 load 也退回
-fail-closed，`ctl0 status` 的 `fpsimd=` 字段报告是否可用。
+`fpsimd_update_current_state()` 提交到当前任务，覆盖窗口可达整页 4 KiB。
+ABI v8 进一步覆盖多结构 load（`LD1`/`LD2`/`LD3`/`LD4`，含 post-index 两种形式）
+和跨页 load；残余仅 SVE/SME、acquire/exclusive、MTE/标签地址与 16 KiB 基础页；
+没有这两个内核 helper 或 BTF 布局时 `PAGE_AP` 的向量 load 仍 fail-closed，
+`ctl0 status` 的 `fpsimd=` 字段报告是否可用。
 
 2.1.1 加载时从运行内核的 BTF 获取 `task_struct`、`mm_struct`、VMA 和寄存器帧布局。小米 13 的 Android 5.15 使用 `__find_vma`、`down_write/up_write` 和五参数 `do_handle_mm_fault`。Pixel 6 的 Android 6.1 使用 `find_vma`、原生 `mmap_write_lock/unlock` 和四参数 `handle_mm_fault`。模块根据符号和 BTF 选择入口，并在注册时用 `get_task_mm()` 复核 `task_struct.mm`。[BTF 布局与签名校验](urov_y_compat.h)
 
@@ -245,14 +263,18 @@ fake 字节按小端排列：`value` 是字节 0..7，`value_hi[0]` 是 8..15，
 
 限制：
 
-1. 这是合作测试模型：全模块同一时间一个会话、一页、一个覆盖区间（默认 8/16/24/32 字节，`urov-y` ABI v7 可到整页 4 KiB）；多个 app 需串行（非 owner 会得到 `EBUSY`/`ENOENT`，死 owner 会自动回收）。不承诺任意进程、任意映射或任意指令。单条 A64 整数 load 最多 8 字节，LDP 最多 16 字节，`PAGE_AP` 的 `LDP Q` 最多 32 字节。
+1. 这是合作测试模型：全模块同一时间一个会话；`urov-x`/`urov-lab` 为一页、`urov-y`
+   的 `PAGE_AP` 可注册任意页数组（默认 4096 页 / 8 MiB 镜像配额）。多个 app 需串行
+   （非 owner 会得到 `EBUSY`/`ENOENT`，死 owner 会自动回收）。不承诺任意进程、任意
+   映射或任意指令。单条 A64 整数 load 最多 8 字节，LDP 最多 16 字节，`PAGE_AP` 的
+   `LDP Q` 最多 32 字节、`LD1` 四寄存器最多 64 字节。
 2. 设备没有 EPAN。清除 `PTE.AP[1]` 后 EL0 读会异常，但内核仍能通过普通 uaccess 读取该页，因此不能把 raw XOM 当作生产级隔离。
 3. fork 不继承目标页；拒绝继承（`VM_DONTCOPY`）是明确约定，不是透明继承。普通 app 模式只对注册的一页别名设置该标志，不会让子进程失去正常 lib 映射。
 4. 模块与 kpatch 的加载/卸载必须串行；卸载前应先注销会话或让测试程序正常退出。实测了带持续读线程、普通 app 会话活跃、owner 被 kill 后的卸载/回收；若宿主仍是“exit 在 RCU 读侧调用”的极老 loader，应先在模块外注销会话再卸载。
-5. 仅支持 64 位 EL0、小端、4 KiB 基础页。`urov-x`/`urov-lab` 只模拟白名单内的通用寄存器 load（含 LDP）；`urov-y` 的 `PAGE_AP` 另外模拟 B/H/S/D/Q 的 SIMD&FP load（无缩放/前中后索引/寄存器偏移/literal/LDP，含写回），其余 SIMD 读（`LD1`/`LD2` 多结构、SVE/SME）、跨页、acquire/exclusive、MTE/标签地址仍明确拒绝。没有 `fpsimd_signal_preserve_current_state()`/`fpsimd_update_current_state()` 或 `thread.uw.fpsimd_state` BTF 布局时，向量 load 退回 fail-closed。
+5. 仅支持 64 位 EL0、小端、4 KiB 基础页。`urov-x`/`urov-lab` 只模拟白名单内的通用寄存器 load（含 LDP）；`urov-y` 的 `PAGE_AP` 另外模拟 B/H/S/D/Q 的 SIMD&FP load（无缩放/前中后索引/寄存器偏移/literal/LDP，含写回）、`LD1`/`LD2`/`LD3`/`LD4`（无偏移与 post-index 立即数/寄存器）以及跨页 load。SVE/SME、acquire/exclusive、MTE/标签地址仍明确拒绝。16 KiB 基础页本轮未实现：`QUERY` 返回 `page_shift=12` 且不设 `UROV_Y_CAP_16K`。没有 `fpsimd_signal_preserve_current_state()`/`fpsimd_update_current_state()` 或 `thread.uw.fpsimd_state` BTF 布局时，向量 load 退回 fail-closed。
 6. 页面内容来自注册时的快照；同一页面若被测试程序之外的路径改写，不承诺覆盖结果。注册页必须保持只读且无 `VM_MAYWRITE`；普通 app 推荐使用已安装 native library 的一页 `MAP_SHARED` RX 别名。
 7. 更新路径使用 seqlock；fault 路径遇到写者临界区会短暂重试。若极端情况下重试耗尽，按 fail-closed 处理，不会返回撕裂数据或原字节。整页镜像的发布在 seqlock 内做 4 KiB 拷贝，读侧只拷当前 load 触到的 ≤32 字节。
-8. 普通 app 已可直接使用：控制走 `__NR_prctl`，页来源为自身一页只读可执行 `MAP_SHARED` 文件映射（lib 别名或私有 payload 页），会话按 mm 归属并支持死 owner 回收。仍有限制：全局单会话、单页窗口（`urov-y` 可到 4 KiB）、`PAGE_AP` 之外仅 GPR load、模块装卸需 root；详见 [APP_OVERLAY.md](APP_OVERLAY.md)。
+8. 普通 app 已可直接使用：控制走 `__NR_prctl`，页来源可为自身只读可执行 `MAP_SHARED` 文件映射（lib 别名或私有 payload 页）或私有 `.text` 页；ABI v8 的多页数组只承诺 `PAGE_AP`。会话按 mm 归属并支持死 owner 回收。仍有限制：全局单会话、16 KiB 未实现、`PAGE_AP` 之外仅 GPR load、模块装卸需 root；详见 [APP_OVERLAY.md](APP_OVERLAY.md)。
 
 ## 目录
 
@@ -270,15 +292,18 @@ fake 字节按小端排列：`value` 是字节 0..7，`value_hi[0]` 是 8..15，
 | `tools/run_app_device.ps1` | 普通 app 设备自动化脚本 |
 | `APP_OVERLAY.md` / `RESULTS_APP.md` | 普通 app 方案、检测面、限制与真机证据 |
 | `urov_x_backend.c` / `.h` / `urov_x.c` / `urov_x_abi.h` | covert 变体 `urov-x`：密钥化控制通道、读取点绑定、透明生命周期 |
-| `urov_y_backend.c` / `.h` / `urov_y.c` / `urov_y_abi.h` | 读取点陷阱变体 `urov-y`：`mode=1` BRK 读取点、`mode=2` EL0 execute-never 页陷阱、`mode=3` 目标页 AP[1] 数据陷阱 + 相邻 LL/SC 桥（仅在 `LDXR` 结果仍存于 `Rt` 时代写）；业务调用窗口；ABI v7 的整页覆盖与 SIMD&FP load 提交 |
+| `urov_y_backend.c` / `.h` / `urov_y.c` / `urov_y_abi.h` | 读取点陷阱变体 `urov-y`：`mode=1` BRK 读取点、`mode=2` EL0 execute-never 页陷阱、`mode=3` 目标页 AP[1] 数据陷阱 + 相邻 LL/SC 桥（仅在 `LDXR` 结果仍存于 `Rt` 时代写）；业务调用窗口；ABI v8 的多页数组、LD1/LD2/LD3/LD4、跨页 load 与整页 SIMD&FP 提交 |
 | `PAGE_AP_KEYLESS_RESULTS.md` / `PAGE_AP_KEYLESS_RESULTS_R2.md` | 普通 App 无密钥复核：AP 数据陷阱的可检测特征（R1）与本轮 LL/SC 桥执行存证消除（R2） |
 | `tests/urov_y_test.c` | `urov-y` root 验收程序（三种模式；功能/fork/门控/活动期卸载/代码页探针） |
 | `apps/urov-detect/uy_fixture.inc` | `urov-y` App 夹具（`y-*` BRK、`z-*` UXN 页陷阱、`w-*` AP 数据陷阱） |
+| `apps/urov-detect/mp_fixture.inc` | ABI v8 App 夹具（`mp-multi` 24 页、`mp-ld1` 多结构 load、`mp-cross` 跨页、`mp-srcfile`） |
 | `apps/urov-detect/crc_fixture.inc` | CRC 夹具：`crc-ap-text`/`crc-ap-libc`（标量 libc）与 `crc-ap-big`（整页覆盖 + SIMD 大长度传输、内部窗口、`SET`） |
 | `tools/run_elimination_device.py` | `urov-y` 设备矩阵（含 `urov-x` 阳性对照与三种模式对照） |
 | `tools/run_crc_device.py` | 同进程改码/CRC 矩阵（`crc-brk`/`crc-uxn`/`crc-ap`/`crc-ap-text`/`crc-ap-libc`/`crc-ap-big`） |
 | `ELIMINATION_DESIGN.md` / `ELIMINATION_RESULTS.md` | 读取点陷阱方案（§9 UXN、§10 AP+LL/SC 桥、§11 桥的执行存证、§13 SIMD&FP 大长度传输）、代码页/取指特征消除与真机对照结果 |
-| `MULTIPAGE_DESIGN.md` | 设计稿：任意多页同时覆盖、LD1/LD2、跨页 load、16 KiB 页（未实现、未上机） |
+| `MULTIPAGE_DESIGN.md` | 设计稿：任意多页同时覆盖、LD1/LD2、跨页 load、16 KiB 页（16 KiB 未实现） |
+| `MULTIPAGE_RESULTS.md` | ABI v8 多页/LD1/LD2/LD3/LD4/跨页/SRC_FILE 的实现说明与真机证据 |
+| `tools/run_multipage_device.py` | ABI v8 设备矩阵（`mp-multi`/`mp-ld1`/`mp-cross`/`mp-srcfile`） |
 | `tools/run_stealth_device.py` | `urov-x` 设备矩阵（无密钥/活动/观察者/卸载/SIMD/fork） |
 | `STEALTH_DESIGN.md` / `STEALTH_RESULTS.md` | 检测特征点消除设计与真机对照结果 |
 | `results/` | 构建、设备与覆盖运行记录 |

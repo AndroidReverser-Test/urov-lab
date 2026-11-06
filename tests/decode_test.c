@@ -1,4 +1,4 @@
-﻿/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Assemble with -x assembler-with-cpp -DURO_ASM_CORPUS to independently check
  * every opcode in the table. Use objcopy -O binary -j .text, then pass the
  * resulting file as argv[1] to the native host test. No target is accessed. */
@@ -62,6 +62,26 @@ ldp s20, s21, [x1]
 ldr q5, [x1, x3, lsl #4]
 ldr q7, .+16
 str q0, [x1]
+/* Multiple-structure loads (LD1/LD2/LD3/LD4), plus two rejected forms. */
+ld1 {v0.16b}, [x0]
+ld1 {v0.16b, v1.16b}, [x0]
+ld1 {v0.16b - v2.16b}, [x0]
+ld1 {v0.16b - v3.16b}, [x0]
+ld2 {v0.16b, v1.16b}, [x0]
+ld3 {v0.16b - v2.16b}, [x0]
+ld4 {v0.16b - v3.16b}, [x0]
+ld1 {v0.8b}, [x0], #8
+ld1 {v0.16b}, [x0], #16
+ld1 {v0.16b, v1.16b}, [x0], #32
+ld2 {v0.16b, v1.16b}, [x0], #32
+ld1 {v0.16b}, [x0], x1
+ld1 {v0.16b - v3.16b}, [x0], x1
+ld1 {v0.4h}, [x0]
+ld2 {v0.4h, v1.4h}, [x0]
+ld1 {v0.2d}, [x0]
+ld1 {v0.8b - v2.8b}, [x0]
+st1 {v0.16b}, [x0]
+ld1 {v0.b}[0], [x0]
 #else
 #include <stdio.h>
 #include <stdlib.h>
@@ -151,6 +171,41 @@ static const struct vector vectors[] = {
     BAD(0x3d800020U)
 };
 
+/* Multiple-structure corpus.  Address 0 comes from the zeroed x0 of
+ * registers(); x1 is 0x1000, hence the register post-index writeback. */
+struct multi_vector {
+    uint32_t opcode;
+    uint64_t address, wb;
+    unsigned size, count, rt, rt2, dest_bits, writeback, rn;
+    unsigned nregs, selem, esize, elements;
+    unsigned dst[4];
+};
+
+#define MULTI(op, sz, cnt, nregs, selem, esize, elements, \
+              d0, d1, d2, d3, writes, wb) \
+    { op, 0, wb, sz, cnt, 0, 31, sz * 8U, writes, 0, \
+      nregs, selem, esize, elements, { d0, d1, d2, d3 } }
+
+static const struct multi_vector multis[] = {
+    MULTI(0x4c407000U, 16, 1, 1, 1, 1, 16, 0, 0, 0, 0, 0, 0),
+    MULTI(0x4c40a000U, 16, 2, 2, 1, 1, 16, 0, 1, 0, 0, 0, 0),
+    MULTI(0x4c406000U, 16, 3, 3, 1, 1, 16, 0, 1, 2, 0, 0, 0),
+    MULTI(0x4c402000U, 16, 4, 4, 1, 1, 16, 0, 1, 2, 3, 0, 0),
+    MULTI(0x4c408000U, 16, 2, 1, 2, 1, 16, 0, 1, 0, 0, 0, 0),
+    MULTI(0x4c404000U, 16, 3, 1, 3, 1, 16, 0, 1, 2, 0, 0, 0),
+    MULTI(0x4c400000U, 16, 4, 1, 4, 1, 16, 0, 1, 2, 3, 0, 0),
+    MULTI(0x0cdf7000U, 8, 1, 1, 1, 1, 8, 0, 0, 0, 0, 1, 8),
+    MULTI(0x4cdf7000U, 16, 1, 1, 1, 1, 16, 0, 0, 0, 0, 1, 16),
+    MULTI(0x4cdfa000U, 16, 2, 2, 1, 1, 16, 0, 1, 0, 0, 1, 32),
+    MULTI(0x4cdf8000U, 16, 2, 1, 2, 1, 16, 0, 1, 0, 0, 1, 32),
+    MULTI(0x4cc17000U, 16, 1, 1, 1, 1, 16, 0, 0, 0, 0, 1, 0x1000),
+    MULTI(0x4cc12000U, 16, 4, 4, 1, 1, 16, 0, 1, 2, 3, 1, 0x1000),
+    MULTI(0x0c407400U, 8, 1, 1, 1, 2, 4, 0, 0, 0, 0, 0, 0),
+    MULTI(0x0c408400U, 8, 2, 1, 2, 2, 4, 0, 1, 0, 0, 0, 0),
+    MULTI(0x4c407c00U, 16, 1, 1, 1, 8, 2, 0, 0, 0, 0, 0, 0),
+    MULTI(0x0c406000U, 8, 3, 3, 1, 1, 8, 0, 1, 2, 0, 0, 0)
+};
+
 static unsigned checks;
 #define CHECK(expr) do { \
     ++checks; \
@@ -195,10 +250,42 @@ static void test_vectors(void)
     }
 }
 
+static void test_multi(void)
+{
+    struct uro_regs r = registers();
+    size_t i;
+
+    for (i = 0; i < sizeof(multis) / sizeof(multis[0]); ++i) {
+        const struct multi_vector *m = &multis[i];
+        struct uro_load out;
+        unsigned j;
+        CHECK(uro_decode(m->opcode, &r, &out) == 0);
+        CHECK(out.vector && out.multi);
+        CHECK(out.address == m->address);
+        CHECK(out.size == m->size && out.count == m->count);
+        CHECK(out.total == (uint64_t)m->size * m->count);
+        CHECK(out.rt == m->rt && out.rt2 == m->rt2);
+        CHECK(out.dest_bits == m->dest_bits);
+        CHECK(out.writeback == (int)m->writeback && out.wb == m->wb && out.rn == m->rn);
+        CHECK(out.nregs == m->nregs && out.selem == m->selem);
+        CHECK(out.esize == m->esize && out.elements == m->elements);
+        for (j = 0; j < m->count; ++j)
+            CHECK(out.dst[j] == m->dst[j]);
+    }
+    reject(0x4c007000U, &r); /* ST1 is a store. */
+    reject(0x0d400000U, &r); /* single-lane group is not multiple-structure. */
+    reject(0x4c410800U, &r); /* no-offset form with a nonzero Rm. */
+    reject(0x0c408c00U, &r); /* 1D LD2 form is UNDEF. */
+    r.x[0] = ~(uint64_t)0 - 8U;
+    reject(0x4cdfa000U, &r); /* 32-byte post-index wraps the address. */
+}
+
+
 static void verify_assembly(const char *path)
 {
     FILE *input = fopen(path, "rb");
     size_t i;
+
     CHECK(input != NULL);
     for (i = 0; i < sizeof(vectors) / sizeof(vectors[0]); ++i) {
         unsigned char b[4];
@@ -209,6 +296,28 @@ static void verify_assembly(const char *path)
         if (opcode != vectors[i].opcode)
             fprintf(stderr, "corpus[%zu] assembler=%08x expected=%08x\n", i, opcode, vectors[i].opcode);
         CHECK(opcode == vectors[i].opcode);
+    }
+    for (i = 0; i < sizeof(multis) / sizeof(multis[0]); ++i) {
+        unsigned char b[4];
+        uint32_t opcode;
+        CHECK(fread(b, 1, sizeof(b), input) == sizeof(b));
+        opcode = (uint32_t)b[0] | ((uint32_t)b[1] << 8) |
+                 ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+        if (opcode != multis[i].opcode)
+            fprintf(stderr, "multi[%zu] assembler=%08x expected=%08x\n", i, opcode, multis[i].opcode);
+        CHECK(opcode == multis[i].opcode);
+    }
+    /* The two rejected forms at the end of the assembly corpus. */
+    {
+        static const uint32_t tail[] = { 0x4c007000U, 0x0d400000U };
+        for (i = 0; i < sizeof(tail) / sizeof(tail[0]); ++i) {
+            unsigned char b[4];
+            uint32_t opcode;
+            CHECK(fread(b, 1, sizeof(b), input) == sizeof(b));
+            opcode = (uint32_t)b[0] | ((uint32_t)b[1] << 8) |
+                     ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+            CHECK(opcode == tail[i]);
+        }
     }
     CHECK(fgetc(input) == EOF && !ferror(input));
     CHECK(fclose(input) == 0);
@@ -294,13 +403,14 @@ static void test_random(void)
         if (result) {
             CHECK(memcmp(&out, &original, sizeof(out)) == 0);
         } else {
-            CHECK(out.count == 1 || out.count == 2);
+            CHECK(out.count >= 1 && out.count <= 4);
             CHECK(out.size == 1 || out.size == 2 || out.size == 4 ||
                   out.size == 8 || (out.vector && out.size == 16));
             CHECK(out.dest_bits == 32 || out.dest_bits == 64 ||
                   (out.vector && out.dest_bits == out.size * 8));
             CHECK(out.rt <= 31 && out.rt2 <= 31 && out.rn <= 31);
-            CHECK(out.address <= ~(uint64_t)0 - (out.size * out.count - 1));
+            CHECK(out.total == (uint64_t)out.size * out.count);
+            CHECK(out.address <= ~(uint64_t)0 - (out.total - 1));
             CHECK(out.vector || !out.writeback || out.rn == 31 ||
                   (out.rn != out.rt && (out.count == 1 || out.rn != out.rt2)));
         }
@@ -313,10 +423,12 @@ int main(int argc, char **argv)
     if (argc == 2)
         verify_assembly(argv[1]);
     test_vectors();
+    test_multi();
     test_edges();
     test_random();
-    printf("PASS checks=%u vectors=%zu random=100000 independent_assembler=%s\n", checks,
-           sizeof(vectors) / sizeof(vectors[0]), argc == 2 ? "verified" : "not_supplied");
+    printf("PASS checks=%u vectors=%zu multi=%zu random=100000 independent_assembler=%s\n", checks,
+           sizeof(vectors) / sizeof(vectors[0]), sizeof(multis) / sizeof(multis[0]),
+           argc == 2 ? "verified" : "not_supplied");
     return 0;
 }
 #endif
