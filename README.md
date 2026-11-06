@@ -278,6 +278,7 @@ fake 字节按小端排列：`value` 是字节 0..7，`value_hi[0]` 是 8..15，
 | `tools/run_elimination_device.py` | `urov-y` 设备矩阵（含 `urov-x` 阳性对照与三种模式对照） |
 | `tools/run_crc_device.py` | 同进程改码/CRC 矩阵（`crc-brk`/`crc-uxn`/`crc-ap`/`crc-ap-text`/`crc-ap-libc`/`crc-ap-big`） |
 | `ELIMINATION_DESIGN.md` / `ELIMINATION_RESULTS.md` | 读取点陷阱方案（§9 UXN、§10 AP+LL/SC 桥、§11 桥的执行存证、§13 SIMD&FP 大长度传输）、代码页/取指特征消除与真机对照结果 |
+| `MULTIPAGE_DESIGN.md` | 设计稿：任意多页同时覆盖、LD1/LD2、跨页 load、16 KiB 页（未实现、未上机） |
 | `tools/run_stealth_device.py` | `urov-x` 设备矩阵（无密钥/活动/观察者/卸载/SIMD/fork） |
 | `STEALTH_DESIGN.md` / `STEALTH_RESULTS.md` | 检测特征点消除设计与真机对照结果 |
 | `results/` | 构建、设备与覆盖运行记录 |
