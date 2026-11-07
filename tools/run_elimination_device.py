@@ -158,6 +158,7 @@ def main():
                "app_pass": found[1] == "PASS", "cases": cases,
                "execution": execution_cases(logs),
                "store_checks": store_cases(logs, mode),
+               "bridge_checks": [kv(line) for line in re.findall(r"ELIM_BRIDGE [^\n]+", logs)],
                "store_state": re.findall(r"ELIM_STORE_STATE [^\n]+", logs),
                "execution_state": re.findall(r"ELIM_EXEC_STATE [^\n]+", logs),
                "features": re.findall(r"ELIM_FEATURE [^\n]+", logs),

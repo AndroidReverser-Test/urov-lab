@@ -1,9 +1,21 @@
 # UROV-LAB
 
-`urov-y` 2.5.0 将 `prctl` 的 magic 固定为 `UROVYLAB`，保留 ABI v8 请求布局和 MAC 校验。
+`urov-y` 2.6.0 将 `prctl` 的 magic 固定为 `UROVYLAB`，保留 ABI v8 请求布局和 MAC 校验。
 2.4.0 的参数校验、并发镜像发布和陷阱撤销适配继续用于 Android ARM64 的 5.4 起的 5.x 和 6.x 内核，
 支持 4 KiB 及符合条件的 16 KiB 页表。实测、支持边界和复跑命令见
 [UROV-Y 兼容性与审计](COMPATIBILITY_Y.md)。下方日期条目保留各历史版本的行为和证据。
+
+2026-11-07 第七轮消除：`urov-y` 2.6.0 给 `PAGE_AP` 的 LL/SC 桥加**直接分支门控**，
+并把 `LDXR` 与 load 之间 0–3 个 `NOP` 纳入桥。提交桥前扫描故障 load 所在页前后各
+256 字节，解码 `B/BL/CBZ/CBNZ/TBZ/TBNZ`；目标落在 load 上说明该路径可以绕过
+`LDXR`，handler 不代写，PC 停在 `STXR` 上让原生指令报告失败。这样
+`CLREX/B;LDXR` + 预置 `Rt==[Xn]` 的无预约探针不再得到伪造成功。另实测否决了
+“在 EL1 重放 `STXR` 探测本地监视器”：数据异常进入 handler 前监视器已不可用。
+检测 App 的 Dobby 矩阵 5 轮 × 24 次：活动阶段 `bridge=0/24`、`spaced=0/24`、
+`unknown=0`、`accepted_crc=24/24`（2.5.0 为 `bridge=24/24`、
+`accepted_crc=0/24`）；`w-active` 的 11 项 `ELIM_BRIDGE` 全部 `verdict=0`。
+残余（间接分支、窗口外分支、保守误伤）见
+[设计 §15](ELIMINATION_DESIGN.md#15-第七轮直接分支门控与-nop-间隔桥)。
 
 2026-11-07 第六轮消除：`urov-y` 2.5.0 在 `PAGE_AP` 的 EL0 数据异常返回路径中恢复
 **相邻 LL/SC 桥**。仅当故障 PC 前一条是 `LDXR/LDAXR`、后一条是 `STXR/STLXR`，

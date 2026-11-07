@@ -136,11 +136,13 @@ def main():
         report["runs"].append({"label": label, "mode": mode, "uid": int(uid[1]), "pid": pid,
                                "log": log_path.name, "result": result[0], "stages": stages,
                                "details": re.findall(r"(?:CRC_(?:REJECT|PRIVATE|REMAP|MAP|OVERLAY|SITE|"
-                                                     r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC|BIG|BIG_OVERLAY|BIG_VMA|MIXED|SET)|ELIM_EXEC|DOBBY_DETECT_STATUS) [^\n]+", logs)})
+                                                     r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC|BIG|BIG_OVERLAY|BIG_VMA|MIXED|SET)"
+                                                     r"|ELIM_EXEC|DOBBY_DETECT_(?:STATUS|RESTORE|BUSINESS)) [^\n]+", logs)})
         if dobby:
             last = stages[2] if active else stages[-1]
             print(f"{label} PASS execute={last['execute']} file={last['file']} live={last['live']} "
-                  f"match={last['match']}/{last['n']} unknown={last['unknown']} "
+                  f"bridge={last['bridge_match']}/{last['n']} spaced={last['spaced_match']}/{last['n']} "
+                  f"unknown={last['unknown']} "
                   f"accepted_crc={last['accepted_crc']}", flush=True)
             return
         if mode in ("crc-ap-text", "crc-ap-libc", "crc-ap-big"):

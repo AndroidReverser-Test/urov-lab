@@ -49,6 +49,12 @@ void ud_observe_exclusive(const void *address, const void *reference,
                           int backing_fd, off_t offset,
                           struct ud_exclusive_observation *out);
 
+/* Same paired controls as ud_observe_exclusive, with a NOP between LDXR and
+ * LDRB to measure reservation loss outside the adjacent PAGE_AP bridge. */
+void ud_observe_spaced_exclusive(const void *address, const void *reference,
+                                 int backing_fd, off_t offset,
+                                 struct ud_exclusive_observation *out);
+
 /* Same retained RX mappings, offset and worker-thread requirements as above.
  * CLREX clears the reservation and a branch skips the LDXR next to the LDRB.
  * MATCH requires an unexpected STXR success AND a changed private scratch
@@ -60,6 +66,16 @@ void ud_observe_exclusive(const void *address, const void *reference,
 void ud_observe_unreserved_store(const void *address, const void *reference,
                                  int backing_fd, off_t offset,
                                  struct ud_store_observation *out);
+
+/* Same CLREX and skipped LDXR, with Rt set to the current private scratch
+ * value before the probe. MATCH requires the target STXR to report success
+ * and leave scratch unchanged in every trial, with both controls failing
+ * the STXR. unexpected_stores counts reported successes in this variant.
+ * The reference byte must match the file. The target byte must stay stable.
+ */
+void ud_observe_unreserved_status(const void *address, const void *reference,
+                                  int backing_fd, off_t offset,
+                                  struct ud_store_observation *out);
 
 /* Observe instruction fetch on an app-owned canary. Both addresses must be
  * 8-byte aligned, callable immutable RX entries for the same file bytes in

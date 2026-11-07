@@ -75,17 +75,34 @@ static unsigned exclusive_once(const void *address, uint64_t *scratch, unsigned 
     return failed;
 }
 
+__attribute__((noinline))
+static unsigned spaced_exclusive_once(const void *address, uint64_t *scratch, unsigned *byte)
+{
+    uint64_t old;
+    unsigned value, failed;
+    /* The NOP keeps the target load outside an adjacent LDXR/LDRB/STXR bridge. */
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     "nop\n"
+                     "ldrb %w1, [%4]\n"
+                     "stxr %w2, %0, [%3]\n"
+                     : "=&r"(old), "=&r"(value), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "memory");
+    *byte = value;
+    return failed;
+}
+
+static const uint64_t scratch_initial = UINT64_C(0x5a5a5a5aa5a5a5a5);
+
 /* Keep the LDXR in the instruction stream for the bridge's look-behind, but
  * branch over it. The native STXR must see an open exclusive monitor. */
 __attribute__((noinline))
-static int unreserved_store_once(const void *address, uint64_t *scratch, unsigned *byte)
+static int unreserved_store_once(const void *address, uint64_t *scratch,
+                                 uint64_t store_value, unsigned *byte)
 {
-    const uint64_t initial = UINT64_C(0x5a5a5a5aa5a5a5a5);
-    const uint64_t sentinel = UINT64_C(0xc3175ed9246ab08f);
-    uint64_t value = sentinel;
+    uint64_t value = store_value;
     unsigned status;
 
-    *scratch = initial;
+    *scratch = scratch_initial;
     __asm__ volatile("clrex\n"
                      "b 1f\n"
                      "ldxr %0, [%3]\n"
@@ -94,18 +111,19 @@ static int unreserved_store_once(const void *address, uint64_t *scratch, unsigne
                      : "+&r"(value), "=&r"(status), "=&r"(*byte)
                      : "r"(scratch), "r"(address) : "memory");
     uint64_t observed = *scratch;
-    if (status == 1 && observed == initial) return 0;
-    if (status == 0 && observed == sentinel) return 1;
+    if (status == 1 && observed == scratch_initial) return 0;
+    if (status == 0 && observed == store_value) return 1;
     return -1;
 }
 
-void ud_observe_unreserved_store(const void *address, const void *reference,
-                                 int backing_fd, off_t offset,
-                                 struct ud_store_observation *out)
+static void observe_unreserved_store(const void *address, const void *reference,
+                                     int backing_fd, off_t offset, uint64_t store_value,
+                                     struct ud_store_observation *out)
 {
     struct sample_identity target, control, after;
     uint64_t scratch;
     uint8_t file_byte;
+    unsigned target_byte = 0;
     int saved = errno;
     uint64_t begin = now_ns();
 
@@ -121,14 +139,16 @@ void ud_observe_unreserved_store(const void *address, const void *reference,
 
     for (unsigned i = 0; i < UD_STORE_TRIALS; ++i) {
         unsigned a, b, c;
-        int before = unreserved_store_once(reference, &scratch, &a);
-        int tested = unreserved_store_once(address, &scratch, &b);
-        int after_control = unreserved_store_once(reference, &scratch, &c);
+        int before = unreserved_store_once(reference, &scratch, store_value, &a);
+        int tested = unreserved_store_once(address, &scratch, store_value, &b);
+        int after_control = unreserved_store_once(reference, &scratch, store_value, &c);
         if (before != 0 || after_control != 0 || tested < 0 ||
-            a != file_byte || b != file_byte || c != file_byte) {
+            a != file_byte || c != file_byte || (i && b != target_byte) ||
+            (store_value != scratch_initial && b != file_byte)) {
             out->error = EAGAIN;
             goto done;
         }
+        target_byte = b;
         ++out->completed;
         out->unexpected_stores += tested == 1;
     }
@@ -145,6 +165,21 @@ void ud_observe_unreserved_store(const void *address, const void *reference,
 done:
     out->elapsed_ns = now_ns() - begin;
     errno = saved;
+}
+
+void ud_observe_unreserved_store(const void *address, const void *reference,
+                                 int backing_fd, off_t offset,
+                                 struct ud_store_observation *out)
+{
+    observe_unreserved_store(address, reference, backing_fd, offset,
+                             UINT64_C(0xc3175ed9246ab08f), out);
+}
+
+void ud_observe_unreserved_status(const void *address, const void *reference,
+                                  int backing_fd, off_t offset,
+                                  struct ud_store_observation *out)
+{
+    observe_unreserved_store(address, reference, backing_fd, offset, scratch_initial, out);
 }
 
 static uint64_t scalar_word(const void *address)
@@ -183,14 +218,18 @@ static unsigned execution_once(const void *address, uint64_t *scratch, unsigned 
     return failed;
 }
 
+enum reservation_probe { READ_ADJACENT, READ_SPACED, EXECUTE_CANARY };
+
 static void observe_reservation(const void *address, const void *reference,
-                                int backing_fd, off_t offset, int execute,
+                                int backing_fd, off_t offset, enum reservation_probe probe,
                                 struct ud_exclusive_observation *out)
 {
     struct sample_identity target, control, after;
+    int execute = probe == EXECUTE_CANARY;
     size_t size = execute ? sizeof(uint64_t) : 1U;
-    unsigned (*sample)(const void *, uint64_t *, unsigned *) =
-        execute ? execution_once : exclusive_once;
+    unsigned (*sample)(const void *, uint64_t *, unsigned *) = exclusive_once;
+    if (execute) sample = execution_once;
+    if (probe == READ_SPACED) sample = spaced_exclusive_once;
     /* Keep the scratch away from normal stack writes and compiler spills.
      * The caller does not share this stack storage with other threads.
      */
@@ -264,14 +303,21 @@ void ud_observe_exclusive(const void *address, const void *reference,
                           int backing_fd, off_t offset,
                           struct ud_exclusive_observation *out)
 {
-    observe_reservation(address, reference, backing_fd, offset, 0, out);
+    observe_reservation(address, reference, backing_fd, offset, READ_ADJACENT, out);
+}
+
+void ud_observe_spaced_exclusive(const void *address, const void *reference,
+                                 int backing_fd, off_t offset,
+                                 struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_SPACED, out);
 }
 
 void ud_observe_execution(const void *address, const void *reference,
                           int backing_fd, off_t offset,
                           struct ud_exclusive_observation *out)
 {
-    observe_reservation(address, reference, backing_fd, offset, 1, out);
+    observe_reservation(address, reference, backing_fd, offset, EXECUTE_CANARY, out);
 }
 
 void ud_observe_reader(const void *address, int backing_fd, off_t offset,

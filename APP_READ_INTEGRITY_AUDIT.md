@@ -11,6 +11,7 @@
 | `urov-y` 2.4.1 `SITE_BRK` | 对私有读取点做 COW，把登记的 load 换成 BRK。命中 `mm`、PC 和立即数后模拟原 load。恢复指令后 COW 可能仍可见。 |
 | `urov-y` 2.4.1 `PAGE_UXN` | 置读取点页 PTE 的 UXN，接管该页的 EL0 取指权限异常。解释登记的 load 和受支持的 RET、NOP、BTI。读取点的字节和 VMA 可保持原样。 |
 | `urov-y` 2.5.0 `PAGE_AP` | 清目标页叶子 PTE 的 AP[1]。数据读取进 `do_mem_abort`，取指仍执行该页的真实字节。支持普通私有 `.text`、多页、跨页、FPSIMD 与 LD1/2/3/4。2.5.0 对紧邻 `LDXR/LDAXR; load; STXR/STLXR`、`Rt==[Xn]` 且待写值等于内存的序列完成原 store，`ERET` 后不再出现确定性的目标 `STXR` 失败。 |
+| `urov-y` 2.6.0 `PAGE_AP` | 在 2.5.0 之上允许 `LDXR` 与 load 之间 0–3 个 `NOP`，并在提交桥前扫描故障 PC 两侧各 256 字节，解码直接分支；只要有 `B/BL/CBZ/CBNZ/TBZ/TBNZ` 落到 load 上，就不代写，让原生 `STXR` 报告失败。这样“预置 `Rt==[Xn]` 后分支跳过 `LDXR`”的探针不再得到伪造成功。 |
 
 [基础版后端](urov_backend.c) · [X 后端](urov_x_backend.c) · [Y 后端](urov_y_backend.c) · [指令解码](decode.c) · [软件模拟](emulate.c)
 
@@ -23,6 +24,11 @@ Y 的 ABI v8 通过 `prctl` 校验密钥派生的选择器、固定的 `UROVYLAB
 基址与数据寄存器、宽度一致，且待写值等于当前内存时才代写。分支或 `CLREX` 跳过
 `LDXR` 的序列仍由原生 `STXR` 失败且不写内存；非紧邻、`Xt=XZR`、成对独占不桥。
 [Y ABI](urov_y_abi.h) · [兼容与 LL/SC 审计](COMPATIBILITY_Y.md)
+
+2.6.0 进一步把 `LDXR` 与 load 之间允许插入 0–3 个 `NOP`，并在代写前扫描故障 load
+所在页前后各 256 字节的直接分支（`B/BL/CBZ/CBNZ/TBZ/TBNZ`）：目标等于 load PC 时
+视为“可绕过 `LDXR`”，不代写。寄存器存证仍保留，但它不再是唯一条件。该门控只覆盖
+直接编码；间接分支与窗口外分支仍是残余，见 [设计 §15](ELIMINATION_DESIGN.md#15-第七轮直接分支门控与-nop-间隔桥)。
 
 ## 普通 App 可采用的检测
 
@@ -101,6 +107,30 @@ Y 的 ABI v8 通过 `prctl` 校验密钥派生的选择器、固定的 `UROVYLAB
 
 完整复测报告与四组矩阵入口见
 [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md)。
+
+## 2.6.0 分支门控复测（2026-11-07）
+
+同一 Pixel 6、同一 APK 夹具。`run_crc_device.py --dobby-detection --repeats 24
+--cycles 5`：5 轮活动阶段 `bridge_match=0/24`、`spaced_match=0/24`、
+`unknown=0`、`accepted_crc=24/24`；每轮 `bridge_trials=768`、
+`bridge_successes=0`。2.5.0 的同一矩阵是 `bridge_match=24/24`、
+`accepted_crc=0/24`。`run_elimination_device.py --repeats 3 --cycles 1` 12 次
+运行 PASS，11 项 `ELIM_BRIDGE expected=0 verdict=0 successes=0`，`w-active`
+仍是 `exclusive_match=0`、`exclusive_clean=3`、store 探针 0 写入。CRC 5×1 与
+多页 3×1 回归 PASS，`kernel_issues=[]`、测试后模块为空。
+
+残余（与设计 §15 一致）：
+
+- 间接分支（`BR/BLR`、`ADR/ADRP + BR`、字面量池取目标）和 ±256 字节窗口外/另一页
+  的直接分支不参与判定，仍可绕过 `LDXR`。
+- `LDXR` 之前的条件分支若落到 load，会被保守地视为“可能跳过”，桥不生效、原生
+  `STXR` 失败。
+- 桥的 store 仍是内核 nofault 普通写，不是硬件独占 store；时间、PTE 重装窗口、
+  root 可见性和注册事务窗口同 2.5.0。
+- `Xt=XZR`、成对 `LDXP/STXP`、非自然对齐仍不桥。
+
+完整数据见
+[APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.6.0 矩阵。
 
 ## 复跑
 

@@ -1112,34 +1112,117 @@ static int uy_is_stxr(uint32_t insn, unsigned *size, unsigned *rs, unsigned *rt,
     return 1;
 }
 
-/* Decide whether the faulting load sits in an adjacent
- * LDXR/LDAXR; load; STXR/STLXR sequence whose STXR can be retired here.
+/* A direct branch that lands on the faulting load can enter the read without
+ * executing the LDXR that precedes it.  Such a path never took the
+ * reservation, so the handler must leave the STXR to report the failure
+ * instead of retiring it.  Only direct branches within 256 bytes on either
+ * side are decoded; an indirect branch or one from farther away remains a
+ * residual.  The after-window catches a loop that jumps back to the load
+ * instead of the LDXR. */
+#define UY_BRANCH_SCAN 256U
+
+static int uy_branch_target(uint32_t insn, uint64_t at, uint64_t *target)
+{
+    int64_t off;
+
+    if ((insn & 0x7c000000U) == 0x14000000U) {          /* B, BL */
+        off = (int64_t)(insn & 0x03ffffffU) << 2;
+        if (off & 0x08000000LL) off -= 0x10000000LL;
+    } else if ((insn & 0x7e000000U) == 0x34000000U) {   /* CBZ, CBNZ */
+        off = (int64_t)((insn >> 5) & 0x7ffffU) << 2;
+        if (off & 0x00100000LL) off -= 0x00200000LL;
+    } else if ((insn & 0x7e000000U) == 0x36000000U) {   /* TBZ, TBNZ */
+        off = (int64_t)((insn >> 5) & 0x3fffU) << 2;
+        if (off & 0x00008000LL) off -= 0x00010000LL;
+    } else {
+        return 0;
+    }
+    *target = at + (uint64_t)off;
+    return 1;
+}
+
+static int uy_scan_branch(uint64_t start, uint64_t end, uint64_t target)
+{
+    uint32_t buf[UY_BRANCH_SCAN / 4U];
+    uint64_t at, stop;
+    unsigned n;
+
+    if (end <= start) return 0;
+    n = (unsigned)((end - start) >> 2);
+    if (n > UY_BRANCH_SCAN / 4U) n = UY_BRANCH_SCAN / 4U;
+    stop = start + (uint64_t)n * 4U;
+    if (!f_copy_in(buf, (const void *)(uintptr_t)start, n * 4U)) {
+        for (at = start; at < stop; at += 4U) {
+            uint64_t t;
+            if (uy_branch_target(buf[(at - start) >> 2], at, &t) && t == target) return 1;
+        }
+        return 0;
+    }
+    for (at = start; at < stop; at += 4U) {
+        uint32_t insn;
+        uint64_t t;
+        if (!uy_read_insn(at, &insn) && uy_branch_target(insn, at, &t) && t == target)
+            return 1;
+    }
+    return 0;
+}
+
+static int uy_llsc_skipped(uint64_t pc)
+{
+    uint64_t page = page_base(pc);
+    uint64_t start = pc - page > UY_BRANCH_SCAN ? pc - UY_BRANCH_SCAN : page;
+
+    if (uy_scan_branch(start, pc, pc)) return 1;
+    if (pc + 8U < page + g_page_size) {
+        uint64_t end = page + g_page_size - (pc + 8U) > UY_BRANCH_SCAN ?
+                       pc + 8U + UY_BRANCH_SCAN : page + g_page_size;
+        if (uy_scan_branch(pc + 8U, end, pc)) return 1;
+    }
+    return 0;
+}
+
+/* Decide whether the faulting load sits in an LDXR/LDAXR; load; STXR/STLXR
+ * sequence that the handler can complete.
  *
- * The ERET that resumes EL0 clears the local exclusive monitor, so the
- * original STXR would always fail.  Completing it in the handler restores the
- * native outcome, but only when the LDXR result is still in Rt: after a
- * successful LDXR the data register equals [Xn].  A skipped LDXR normally
- * leaves a different value, which is not bridged.  A caller that pre-reads
- * [Xn] can forge that evidence, but the bridge additionally requires the
- * store value to equal the bytes already in memory, so even that path only
- * changes the status word and never memory. */
+ * The ERET that resumes EL0 clears the local exclusive monitor, so the original
+ * STXR would always fail.  Completing it in the handler restores the native
+ * outcome, but only when the LDXR result is still in Rt (execution evidence)
+ * and control reached the load sequentially: a direct branch that lands on the
+ * load skipped the LDXR, never took the reservation, and must be left to the
+ * native STXR.  A caller that pre-reads [Xn] can forge the register value, but
+ * it cannot also make the load a branch target without leaving the direct
+ * branch in the decoded window.  The store value must still equal memory, so
+ * the bridge never changes bytes. */
 static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
                             const struct uro_load *load, struct uy_llsc *out)
 {
-    uint32_t before, after;
-    unsigned lsize, lrt, lrn, ssize, srt, srn, srs;
-    uint64_t mem = 0, mask;
+    uint32_t after, ldxr_insn = 0;
+    unsigned lsize = 0, lrt = 0, lrn = 0, ssize, srt, srn, srs;
+    uint64_t mem = 0, mask, ldxr_pc = 0;
+    unsigned gap;
 
     memset(out, 0, sizeof(*out));
     if (!f_copy_out || !load || load->vector || load->multi || load->count != 1U)
         return;
     if (pc < 4U || !uy_user_range(pc - 4U, 4U) || !uy_user_range(pc + 4U, 4U))
         return;
-    if (uy_read_insn(pc - 4U, &before) || uy_read_insn(pc + 4U, &after))
+    if (uy_read_insn(pc + 4U, &after) || !uy_is_stxr(after, &ssize, &srs, &srt, &srn))
         return;
-    if (!uy_is_ldxr(before, &lsize, &lrt, &lrn) ||
-        !uy_is_stxr(after, &ssize, &srs, &srt, &srn))
-        return;
+    /* The LDXR may be separated from the load by a few NOPs. */
+    for (gap = 0; gap < 4U; ++gap) {
+        uint64_t at = pc - 4U - 4U * gap;
+        uint32_t insn;
+
+        if (at < 4U || uy_read_insn(at, &insn)) break;
+        if (uy_is_ldxr(insn, &lsize, &lrt, &lrn)) {
+            ldxr_pc = at;
+            ldxr_insn = insn;
+            break;
+        }
+        if (insn != UY_NOP) break;
+    }
+    if (!ldxr_pc) return;
+    if (uy_llsc_skipped(pc)) return;
     if (lsize != ssize || lrt != srt || lrn != srn) return;
     if (lrt == 31U || lrn == 31U || srn == 31U) return;
     /* The intervening load must not rewrite the value the STXR stores or the
@@ -1164,7 +1247,7 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
     out->data_reg = lrt;
     out->base_reg = lrn;
     out->status_reg = srs;
-    out->acquire = (before & (1U << 15)) != 0;
+    out->acquire = (ldxr_insn & (1U << 15)) != 0;
     out->release = (after & (1U << 15)) != 0;
     out->valid = 1;
 }

@@ -1,0 +1,14 @@
+--------- beginning of main
+10-04 05:06:41.744 26955 26979 I urovdetect: CONTEXT pid=26955 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 05:06:41.744 26955 26979 I urovdetect: BEGIN mode=dobby-detect-active repeats=48
+10-04 05:06:42.253 26955 26979 I urovdetect: DOBBY_DETECT stage=clean n=48 execute=1234 file=96964c4f live=96964c4f crc_pass=48 accepted_crc=48 match=0 clean=48 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=4608 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=1536 bridge_successes=0 probe_mean_ns=10585968 probe_max_ns=46156902
+10-04 05:06:42.254 26955 26979 I urovdetect: DOBBY_HOOK address=0x7a961a6000 original=1234 hooked=1235
+10-04 05:06:42.686 26955 26979 I urovdetect: DOBBY_DETECT stage=patch_only n=48 execute=1235 file=96964c4f live=7956f12b crc_pass=0 accepted_crc=0 match=0 clean=48 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=4608 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=1536 bridge_successes=0 probe_mean_ns=9002525 probe_max_ns=9389202
+10-04 05:06:43.125 26955 26979 I urovdetect: DOBBY_DETECT stage=overlay n=48 execute=1235 file=96964c4f live=96964c4f crc_pass=48 accepted_crc=0 match=48 clean=0 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=48 spaced_unknown=0 spaced_accepted=4608 spaced_failed=4608 spaced_control_failed=1 bridge_match=48 bridge_unknown=0 bridge_trials=1536 bridge_successes=1536 probe_mean_ns=9143651 probe_max_ns=9439006
+10-04 05:06:43.125 26955 26979 I urovdetect: DOBBY_DETECT_STATUS hits=13057 failures=0
+10-04 05:06:43.125 26955 26979 I urovdetect: DOBBY_DETECT_RESTORE mprotect_errno=0 inactive=1
+10-04 05:06:43.564 26955 26979 I urovdetect: DOBBY_DETECT stage=deactivated n=48 execute=1235 file=96964c4f live=7956f12b crc_pass=0 accepted_crc=0 match=0 clean=48 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=4608 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=1536 bridge_successes=0 probe_mean_ns=9133282 probe_max_ns=9662680
+10-04 05:06:43.565 26955 26979 I urovdetect: DOBBY_DETECT_BUSINESS ops=371968 errors=0
+10-04 05:06:43.565 26955 26979 I urovdetect: CONTEXT pid=26955 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 05:06:43.565 26955 26979 I urovdetect: NATIVE_RESULT PASS cases=4 assertions=405 failures=0 mode=dobby-detect-active
+10-04 05:06:43.568 26955 26955 I urovdetect: DETECT_RESULT PASS mode=dobby-detect-active worker_ms=1821 ui_ticks=272 ui_max_gap_ms=18 native=PASS cases=4 assertions=405 failures=0

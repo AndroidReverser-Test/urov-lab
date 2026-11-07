@@ -962,3 +962,112 @@ python .\kpms\urov-lab\tools\run_elimination_device.py `
 把“AP 必然让 `STXR` 失败”当作预期，2.5.0 起该特征不存在。`w-active` 的 AP
 期望也从 `UD_MATCH` 改为 `UD_NO_MATCH`；`ud_observe_unreserved_store` 仍要求
 `UD_NO_MATCH` 且零写入。
+
+## 15. 第七轮：直接分支门控与 NOP 间隔桥
+
+### 15.1 触发本轮的特征
+
+`APP_READ_INTEGRITY_RESULTS.md` 的“普通 App 无密钥复核”新增
+`ud_observe_unreserved_status()`：
+
+```asm
+clrex
+b 1f
+ldxr x9, [x1]        ; never executed
+1: ldrb w10, [x0]    ; target page, AP[1] cleared -> data abort
+stxr w8, x9, [x1]    ; Rt was pre-set to [x1]
+```
+
+2.5.0 的桥只用寄存器状态判断 `LDXR` 是否执行：`Rt == [Xn]`。调用者在跳过 `LDXR`
+之前把 `Rt` 预置为 `[Xn]`，即可让桥代写同一值、`Ws=0`，探针得到 MATCH。同一份报告
+还把 `LDXR; NOP; LDRB; STXR` 列为形状残余。
+
+本轮先尝试“在 EL1 重放 `STXR` 探测本地独占监视器”：用 `pgtable_entry()` 走页表
+得到 `[Xn]` 的物理地址，再在 KernelPatch 线性映射别名上执行同一宽度、同一值的
+`stxr`。设备上别名内容与用户页逐字节一致（校准读数比对通过），但真实 `LDXR`
+之后的 `stxr` 仍稳定返回 1：数据异常进入 handler 之前本地监视器已经不可用。监视器
+不能提供执行存证，本轮改为从控制流取证。
+
+### 15.2 机制
+
+`uy_llsc_prepare()` 在原有约束（宽度、`Rn`/`Rt` 一致、自然对齐、`Rt == [Xn]`、
+待写值等于内存）之上增加：
+
+1. **NOP 间隔**：从故障 PC 向前最多 4 条指令内查找 `LDXR/LDAXR`，只允许中间是
+   `NOP`；覆盖 `LDXR; NOP; LDRB; STXR` 形状。
+2. **直接分支门控**：扫描故障 load 所在页前后各 256 字节，解码
+   `B/BL/CBZ/CBNZ/TBZ/TBNZ`；若任一直接分支的目标等于 load PC，说明该路径可以
+   绕过 `LDXR` 进入 load，handler 不设置 `valid`，PC 停在 `STXR` 上由原生指令
+   报告失败。扫描只读，越界/未映射段自动截断。
+3. **提交条件不变**：模拟 load 成功后 `copy_to_user_nofault` 写入同一值、`Ws=0`、
+   `PC += 4`；写入失败时 PC 仍停在 `STXR`。`STLXR` 的 release 用 `dmb ishst`
+   近似，`LDAXR` 的 acquire 用 `dmb ishld`。
+
+| 序列 | 控制流 | 原生 `STXR` | 2.6.0 |
+| --- | --- | --- | --- |
+| 紧邻 / `NOP` 间隔，顺序到达 | 经过 `LDXR` | 成功 | 代写同一值，`Ws=0`（等价） |
+| 直接分支跳到 load | 跳过 `LDXR` | 失败 | 不桥，原生失败 |
+| `Rt` 预置但顺序到达 | 经过 `LDXR` | 成功 | 代写（等价；只改 `Ws`） |
+| `Rt` 预置且分支跳过 | 跳过 `LDXR` | 失败 | **不桥**（本轮消除） |
+| 间接分支跳到 load | 跳过 `LDXR` | 失败 | 门控不覆盖，仍是残余 |
+| `Xt=XZR` / 成对 / 非自然对齐 | — | 由原生决定 | 不桥 |
+
+### 15.3 为什么没有引入新的可观察量
+
+- 没有新增 hook、syscall 表项、PTE/VMA/代码字节改动；门控只“少写一次”，不改变
+  任何已有可见状态。
+- 扫描只读代码页（代码页本身被注册时改用注册快照），不触碰目标页，不产生新的
+  uaccess 失败路径。
+- 监视器实验只用于选型；最终代码不含 `STXR` 探测、线性映射别名或额外页表操作。
+- `ctl0 status` 字段、ABI v8 布局和 `hooks=0x7f` 不变。
+
+### 15.4 残余特征与限制（诚实清单）
+
+1. **间接分支**：`BR/BLR`、`ADR/ADRP + BR`、从字面量池取目标等间接控制流不在
+   解码范围，仍可跳过 `LDXR` 并触发代写。
+2. **窗口外分支**：直接分支在故障 PC 的 ±256 字节之外或另一页时不参与判定。
+3. **保守误伤**：`LDXR` 之前的条件分支若落到 load（条件不成立时本来会顺序执行
+   `LDXR`），被视为“可能跳过”，桥不生效、原生 `STXR` 失败。这是门控的代价。
+4. **桥的语义**：store 仍是内核 nofault 普通写，不是硬件独占 store；多线程争用
+   同一 scratch、`STLXR` 的 release 顺序和 store 原子性不完全等价原生。
+5. **时间**：每次桥接候选额外扫描两个 256 字节窗口；仍每次读取一次同步异常。
+6. **PTE 重装窗口、root 可见性、注册事务窗口**：同 §10.7 / §14.5。
+7. **合作模型**：`caller_count > 0` 时窗口内/外读者差异仍是有意保留的 API 语义。
+
+### 15.5 真机验证
+
+Pixel 6（oriole，Android 16，6.1.134，KP `0xc00`，4 KiB）。构建
+`urov-y.kpm 32c0eaca05b36e748196406c2cf5066be88f436bf8e487376af424c44b342b9b`、
+`urovdetect.apk 494d942930710447d14cd1087a314b8d4bd11d9c46f4d5695453be44c01be681`。
+
+| 矩阵 | 结果 | 目录 |
+| --- | --- | --- |
+| Dobby 24×5 | PASS；5 轮活动阶段 `bridge_match=0/24`、`spaced_match=0/24`、`accepted_crc=24/24`、`unknown=0`；每轮 `hits=6528`、`failures=0`；`bridge_trials=768`、`bridge_successes=0` | [dobby-detect-20261107-162507](results/dobby-detect-20261107-162507/summary.json) |
+| 消除矩阵 3×1 | PASS，12 次运行；`w-active` 32 个用例、418 条断言；11 项 `ELIM_BRIDGE expected=0 verdict=0 successes=0`；`exclusive_match=0`、`exclusive_clean=3`；store 探针 0 写入 | [eliminate-20261107-162803](results/eliminate-20261107-162803/summary.json) |
+| CRC 矩阵 5×1 | PASS，9 次运行（BRK/UXN/AP/AP-all/text/libc/big） | [crc-20261107-162542](results/crc-20261107-162542/summary.json) |
+| 多页/LD1/跨页/SRC_FILE | PASS，5 次运行 | [multipage-20261107-162615](results/multipage-20261107-162615/summary.json) |
+
+四个矩阵测试前后 boot ID 相同，`kernel_issues=[]`，测试后 `kpm list` 为空。
+`w-active` 的 `ELIM_TIMING mode=ap site_call_ns=283`，与 2.5.0 同量级；
+`ELIM_RESIDUAL mode=ap` 的 `site_live_word == site_file_word`、`site_cow_private=0`、
+`private_dirty_kb=anonymous_kb=0` 保持不变。
+
+### 15.6 构建与验证入口
+
+```powershell
+.\kpms\urov-lab\build.ps1
+.\kpms\urov-lab\apps\urov-detect\build.ps1
+python .\kpms\urov-lab\tools\run_crc_device.py `
+  --serial <SERIAL> --key <KP-SUPERKEY> --dobby-detection --repeats 24 --cycles 5
+python .\kpms\urov-lab\tools\run_elimination_device.py `
+  --serial <SERIAL> --key <KP-SUPERKEY> --repeats 3 --cycles 1
+python .\kpms\urov-lab\tools\run_crc_device.py `
+  --serial <SERIAL> --key <KP-SUPERKEY> --repeats 5 --cycles 1
+python .\kpms\urov-lab\tools\run_multipage_device.py `
+  --serial <SERIAL> --key <KP-SUPERKEY> --skip-install --repeats 3 --cycles 1
+```
+
+`dobby_crc_fixture.inc` 的 overlay 阶段现在要求 `spaced_match=0` 且
+`bridge_match=0`；`uy_fixture.inc` 的 `expected_bridge` 与逐 CPU 调用都改为
+`UD_NO_MATCH`。`ud_observe_unreserved_store`（哨兵变体）仍要求 `UD_NO_MATCH` 且
+零写入。

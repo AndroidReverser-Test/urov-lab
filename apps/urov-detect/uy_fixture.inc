@@ -7,8 +7,8 @@
  * as the business call windows.
  *
  * Expected result against urov-y:
- *   - ud_observe_exclusive() sees the reservation lost in PAGE_AP; BRK
- *     and UXN leave the unregistered direct-read sequence native.
+ *   - ud_observe_unreserved_status() sees no PAGE_AP store after CLREX: the
+ *     load is a direct branch target, so the bridge refuses to retire it.
  *   - ud_observe_reader() outside the business window returns original bytes.
  *   - ud_observe_execution() on the canary matches only in active PAGE_UXN.
  *   - ud_observe_unreserved_store() confirms STXR never writes without an
@@ -163,6 +163,24 @@ static void elimination_exec_case(const char *name, const struct page *reference
         (unsigned long long)total_ns, (unsigned long long)max_ns);
 }
 
+static void elimination_bridge_case(const char *name, const struct page *page,
+                                    enum ud_verdict expected)
+{
+    const unsigned delta = 8;
+    const void *target = page->address + page->entry + delta;
+    const void *control = (const uint8_t *)(uintptr_t)&ud_payload + delta;
+    struct ud_store_observation obs;
+    errno = EDOM;
+    ud_observe_unreserved_status(target, control, page->fd,
+                                 page->file_offset + page->entry + delta, &obs);
+    REQUIRE(errno == EDOM && obs.verdict == expected && obs.completed == UD_STORE_TRIALS,
+            "UY bridge %s expected=%d verdict=%d trials=%u error=%d",
+            name, expected, obs.verdict, obs.completed, obs.error);
+    LOG("ELIM_BRIDGE name=%s expected=%d verdict=%d trials=%u successes=%u elapsed_ns=%llu",
+        name, expected, obs.verdict, obs.completed, obs.unexpected_stores,
+        (unsigned long long)obs.elapsed_ns);
+}
+
 static void elimination_each_cpu(const struct page *page, enum ud_verdict expected,
                                   int test_store)
 {
@@ -183,8 +201,12 @@ static void elimination_each_cpu(const struct page *page, enum ud_verdict expect
             continue;
         }
         snprintf(name, sizeof(name), "active_cpu_%d", cpu);
-        if (test_store) store_case(name, page, 8, 3, expected);
-        else elimination_exec_case(name, page, 3, expected);
+        if (test_store) {
+            store_case(name, page, 8, 3, expected);
+            elimination_bridge_case(name, page, UD_NO_MATCH);
+        } else {
+            elimination_exec_case(name, page, 3, expected);
+        }
         ++tested;
     }
     REQUIRE(!sched_setaffinity(0, sizeof(available), &available) && tested > 0,
@@ -407,6 +429,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     enum ud_verdict expected_exclusive = UD_NO_MATCH;
     /* A failed native STXR must not write the sentinel. */
     enum ud_verdict expected_store = UD_NO_MATCH;
+    enum ud_verdict expected_bridge = UD_NO_MATCH;
     unsigned base_dirty = 0, base_anon = 0;
     const uint64_t fake = UINT64_C(0x8877665544332211);
 
@@ -505,6 +528,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     before = st;
     store_case("active_changed", &p, 8, repeats, expected_store);
     store_case("active_outside_window", &p, 96, repeats, expected_store);
+    elimination_bridge_case("active_changed", &p, expected_bridge);
     if (mode == UROV_Y_MODE_PAGE_AP) elimination_each_cpu(&p, expected_store, 1);
     same_session = !uy_status(&ctx, &st) && st.state == UROV_Y_ACTIVE &&
         st.mode == before.mode && st.generation == before.generation && st.value == before.value &&
@@ -547,6 +571,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     elimination_case("active_equal_value", &p, 8, repeats, expected_exclusive);
     elimination_exec_case("active_equal_value", &reference, repeats, expected_exec);
     store_case("active_equal_value", &p, 8, repeats, expected_store);
+    elimination_bridge_case("active_equal_value", &p, expected_bridge);
 
     REQUIRE(!uy_status(&ctx, &st) && st.state == UROV_Y_ACTIVE &&
             st.generation == generation + 2 && st.failures == 0 &&
@@ -585,6 +610,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     elimination_case("deactivated", &p, 8, repeats, UD_NO_MATCH);
     elimination_exec_case("deactivated", &reference, repeats, UD_NO_MATCH);
     store_case("deactivated", &p, 8, repeats, UD_NO_MATCH);
+    elimination_bridge_case("deactivated", &p, UD_NO_MATCH);
 
 out:
     if (have_thread) {
