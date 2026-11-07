@@ -379,10 +379,10 @@ static int run_active(const char *key, unsigned mode)
     CHECK(uy_business_ldr(p.address + WIN) == fake_b, "business caller after SET");
     CHECK(uy_site_ldr(p.address + WIN) == original, "direct site after SET");
     CHECK(!y_status(&ctx, &st) && st.generation == 2 && st.state == UROV_Y_ACTIVE &&
-          st.mode == mode && st.hits > 0 && st.replays > 0,
-          "STATUS gen=%llu hits=%llu replays=%llu state=%u mode=%u",
+          st.mode == mode && st.hits > 0 && st.replays > 0 && st.failures == 0,
+          "STATUS gen=%llu hits=%llu replays=%llu state=%u mode=%u failures=%llu",
           (unsigned long long)st.generation, (unsigned long long)st.hits,
-          (unsigned long long)st.replays, st.state, st.mode);
+          (unsigned long long)st.replays, st.state, st.mode, (unsigned long long)st.failures);
 
     /* A load through the site from an unmapped address must still raise
      * SIGSEGV, like the original instruction would. */
@@ -399,27 +399,9 @@ static int run_active(const char *key, unsigned mode)
     }
     sigaction(SIGSEGV, &old_segv, NULL);
 
-    /* fork window: the child must inherit the original instruction, the parent
-     * must keep the armed site. */
-    {
-        pid_t pid = fork();
-        if (pid == 0) {
-            uint64_t child_business = uy_business_ldr(p.address + WIN);
-            uint64_t child_direct = uy_site_ldr(p.address + WIN);
-            _exit(child_business == original && child_direct == original ? 0 : 7);
-        }
-        CHECK(pid > 0, "fork pid=%d errno=%d", (int)pid, errno);
-        if (pid > 0) {
-            int status = 0;
-            CHECK(waitpid(pid, &status, 0) == pid, "waitpid errno=%d", errno);
-            CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0,
-                  "child status=0x%x", status);
-        }
-        CHECK(uy_business_ldr(p.address + WIN) == fake_b, "parent site lost after fork");
-        CHECK(uy_site_ldr(p.address + WIN) == original, "parent direct after fork");
-    }
-
-    CHECK(!y_status(&ctx, &st) && st.state == UROV_Y_ACTIVE && st.failures == 0,
+    /* BRK and UXN see the rejected load. AP leaves this unrelated fault to Linux. */
+    CHECK(!y_status(&ctx, &st) && st.state == UROV_Y_ACTIVE &&
+          st.failures == (mode == UROV_Y_MODE_PAGE_AP ? 0U : 1U),
           "STATUS before deactivate state=%u failures=%llu", st.state,
           (unsigned long long)st.failures);
 
@@ -443,6 +425,27 @@ static int run_active(const char *key, unsigned mode)
     printf("TRAP_CALL mode=%s restored_ns=%llu\n",
            mode_name(mode), (unsigned long long)call_cost_ns(&p, 200));
     CHECK(!y_status(&ctx, &st) && st.state == UROV_Y_INACTIVE, "STATUS after deactivate");
+
+    /* A fork creating a new mm ends the session before it copies the mapping. */
+    CHECK(y_register(&ctx, &p, fake_a, mode) == 0, "fork REGISTER failed");
+    CHECK(uy_business_ldr(p.address + WIN) == fake_a, "fork session did not arm");
+    {
+        pid_t pid = fork();
+        if (pid == 0) {
+            uint64_t child_business = uy_business_ldr(p.address + WIN);
+            uint64_t child_direct = uy_site_ldr(p.address + WIN);
+            _exit(child_business == original && child_direct == original ? 0 : 7);
+        }
+        CHECK(pid > 0, "fork pid=%d errno=%d", (int)pid, errno);
+        if (pid > 0) {
+            int status = 0;
+            CHECK(waitpid(pid, &status, 0) == pid, "waitpid errno=%d", errno);
+            CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                  "child status=0x%x", status);
+        }
+    }
+    CHECK(uy_business_ldr(p.address + WIN) == original, "parent site not restored after fork");
+    CHECK(!y_status(&ctx, &st) && st.state == UROV_Y_INACTIVE, "fork left session live");
 
     /* Mapping gate: a mapping change that overlaps the target page ends the
      * session silently and then behaves natively. */

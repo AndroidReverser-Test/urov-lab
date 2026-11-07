@@ -154,11 +154,8 @@ static void test_geometry(void)
     puts("TCR: 4 KiB, 16 KiB, mismatched depths, LPA2 and mismatched granules PASS");
 }
 
-static void test_saved_btf(const char *path, const char *fault, int expected_args,
-                           int expected_pgd, int expected_vma_flags)
+static void *read_saved_btf(const char *path, struct kclf_btf *btf, struct uy_layout *layout)
 {
-    struct uy_layout layout;
-    struct kclf_btf btf;
     FILE *file = fopen(path, "rb");
     long size;
     void *data;
@@ -170,15 +167,55 @@ static void test_saved_btf(const char *path, const char *fault, int expected_arg
     assert(data && fread(data, 1, (size_t)size, file) == (size_t)size);
     fclose(file);
 
-    assert(uy_btf_open(&btf, data, (size_t)size - 1));
-    assert(!uy_btf_open(&btf, data, (size_t)size));
-    assert(!uy_layout_from_btf(&layout, &btf));
+    assert(uy_btf_open(btf, data, (size_t)size - 1));
+    assert(!uy_btf_open(btf, data, (size_t)size));
+    assert(!uy_layout_from_btf(layout, btf));
+    assert(layout->task_fpsimd >= 0 && layout->mmap_lock >= 0 && layout->vma_pgoff_ok);
+    return data;
+}
+
+static void test_saved_btf(const char *path, const char *fault, int expected_args,
+                           int expected_pgd, int expected_vma_flags)
+{
+    struct uy_layout layout;
+    struct kclf_btf btf;
+    void *data = read_saved_btf(path, &btf, &layout);
+
     assert(layout.mm_pgd == expected_pgd && layout.vma_flags == expected_vma_flags);
-    assert(layout.task_fpsimd >= 0 && layout.mmap_lock >= 0 && layout.vma_pgoff_ok);
     assert(uy_mm_fault_argc(&btf, fault, 0) == expected_args);
     assert(uy_symbol_abi(&btf, "do_mem_abort", "vlsr"));
     assert(uy_foll_force(&btf, 0x10) == 0x10);
     printf("%s: MM, VMA and FPSIMD layouts; %s/%d PASS\n", path, fault, expected_args);
+    free(data);
+}
+
+/* Check the ABI paths used by the public Android 6.12 and 6.18 GKI builds. */
+static void test_gki_btf(const char *path)
+{
+    struct uy_layout layout;
+    struct kclf_btf btf;
+    void *data = read_saved_btf(path, &btf, &layout);
+    const char *brk = "do_el0_brk64", *brk_shape = "vsr";
+    const char *save = "fpsimd_save_and_flush_current_state";
+
+    if (!kclf_btf_func_proto(&btf, brk)) {
+        brk = "brk_handler";
+        brk_shape = "ilsr";
+    }
+    if (!kclf_btf_func_proto(&btf, save)) save = "fpsimd_signal_preserve_current_state";
+    assert(uy_btf_signature(&btf, kclf_btf_func_proto(&btf, brk), brk_shape));
+    assert(uy_btf_signature(&btf, kclf_btf_func_proto(&btf, save), "v"));
+    assert(uy_btf_signature(&btf, kclf_btf_func_proto(&btf, "fpsimd_update_current_state"), "vf"));
+    assert(uy_btf_signature(&btf, kclf_btf_func_proto(&btf, "do_mem_abort"), "vllr"));
+    assert(uy_btf_signature(&btf, kclf_btf_func_proto(&btf, "vmalloc_noprof"), "pl"));
+    assert(uy_btf_signature(&btf, kclf_btf_func_proto(&btf, "down_write"), "vp"));
+    assert(uy_btf_signature(&btf, kclf_btf_func_proto(&btf, "up_write"), "vp"));
+    assert(uy_mm_fault_argc(&btf, "handle_mm_fault", 0) == 4);
+    assert(uy_access_vm_argc(&btf, "access_remote_vm", 0) == 5);
+    assert(uy_foll_force(&btf, 0) == 8);
+    printf("%s: MM/VMA/FPSIMD layouts (pgd=%d mmap_lock=%d fpsimd=%d), "
+           "handle_mm_fault/4 %s %s rwsem vmalloc_noprof PASS\n",
+           path, layout.mm_pgd, layout.mmap_lock, layout.task_fpsimd, brk, save);
     free(data);
 }
 
@@ -188,6 +225,14 @@ int main(int argc, char **argv)
     test_gup_flags();
     test_build_id();
     test_geometry();
+    if (argc > 1 && !strcmp(argv[1], "--gki")) {
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s --gki gki-6.x.btf [gki-6.x.btf ...]\n", argv[0]);
+            return 2;
+        }
+        for (int i = 2; i < argc; ++i) test_gki_btf(argv[i]);
+        return 0;
+    }
     if (argc > 3) {
         fprintf(stderr, "Usage: %s [fuxi-5.15.74.btf [oriole-6.1.134.btf]]\n", argv[0]);
         return 2;

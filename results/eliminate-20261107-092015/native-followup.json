@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "kernel": "5.15.74-android13-8-00049-g8945ccdb2203-ab9500309",
+  "kpm_sha256": "12159c2ab417b34569aabc6c586388b33a4041c793919dc4889e2549c039d423",
+  "test_sha256": "7ef6007fffd3d309c92fca746f0ee48672138005f447d15d05c9d92125927290",
+  "runs": {
+    "clean": "PASS cases=1 assertions=2 failures=0",
+    "brk": "TRAP mode=brk site_word=d42d6c60 dirty_kb=20 base_dirty_kb=20 anon_kb=4 base_anon_kb=0\r\nTRAP_CALL mode=brk active_ns=231\r\nTRAP_CALL mode=brk restored_ns=3\r\nPASS cases=1 assertions=35 failures=0",
+    "page": "TRAP mode=page site_word=f9400000 dirty_kb=20 base_dirty_kb=20 anon_kb=0 base_anon_kb=0\r\nTRAP_CALL mode=page active_ns=403\r\nTRAP_CALL mode=page restored_ns=2\r\nPASS cases=1 assertions=35 failures=0",
+    "ap": "TRAP mode=ap site_word=f9400000 dirty_kb=20 base_dirty_kb=20 anon_kb=0 base_anon_kb=0\r\nTRAP_CALL mode=ap active_ns=483\r\nTRAP_CALL mode=ap restored_ns=2\r\nPASS cases=1 assertions=35 failures=0"
+  },
+  "final_modules": "",
+  "same_boot": true
+}

@@ -162,8 +162,9 @@ UROV-LAB 是一个适用于 Android arm64 的独立 KPM：把一个一页只读�
 2.4.0 在加载时适配 Android ARM64 的 5.4 及之后的 5.x/6.x 内核接口。
 默认从运行内核读取 BTF；没有内置 BTF 时可用 `btf=/path` 提供同一内核构建的
 外置 BTF 包，模块会核对 GNU Build ID。异常、远程内存和映射锁接口根据实际符号与
-BTF 选择。`QUERY` 报告基础页大小、页数配额和可用模式。当前版和历史版本的设备数据分开
-记录，详见 [UROV-Y 兼容性与审计](COMPATIBILITY_Y.md)。
+BTF 选择。`QUERY` 报告基础页大小、页数配额和可用模式。2.4.0 已在小米 13 的 5.15.74
+内核通过 App 验收，并通过 AOSP 6.12.18 / 6.18.16 实际镜像的 BTF 静态检查。
+旧版 KernelPatch 使用 App 先注销、宿主再卸载的流程。[UROV-Y 兼容性与审计](COMPATIBILITY_Y.md)。
 
 ## 构建
 

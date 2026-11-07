@@ -236,6 +236,10 @@ def main():
 
         kp("kpm", "load", staged[-1], f"key={module_key}")
         loaded = "urov-y"
+        if args.active_unload:
+            info = kp("kpm", "info", loaded)
+            if not re.search(r"^callback_context=sleepable-v2$", info, re.M):
+                raise RuntimeError("active unload requires a loader reporting sleepable-v2")
         report["loaded_status"] = kp("kpm", "ctl0", "urov-y", "status")
         if "hooks=0x7f" not in report["loaded_status"]:
             raise RuntimeError("urov-y hooks incomplete")
@@ -451,7 +455,10 @@ def main():
                 for field in execution_fields:
                     execution[scope][field] += int(case[field])
             for case in run.get("store_checks", []):
-                scope = "ap_active" if run.get("mode") in ("w-active", "w-hold") else "controls"
+                mode = run.get("mode")
+                ap_active = ((mode == "w-active" and case["name"].startswith("active_")) or
+                             (mode in ("w-hold", "w-quiesce") and case["name"] == "hold_active"))
+                scope = "ap_active" if ap_active else "controls"
                 for field in store_fields:
                     stores[scope][field] += int(case[field])
         report["totals"] = totals
