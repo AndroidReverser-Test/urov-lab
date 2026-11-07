@@ -14,6 +14,7 @@
 | `urov-y` 2.6.0 `PAGE_AP` | 在 2.5.0 之上允许 `LDXR` 与 load 之间 0–3 个 `NOP`，并在提交桥前扫描故障 PC 两侧各 256 字节，解码直接分支；只要有 `B/BL/CBZ/CBNZ/TBZ/TBNZ` 落到 load 上，就不代写，让原生 `STXR` 报告失败。这样“预置 `Rt==[Xn]` 后分支跳过 `LDXR`”的探针不再得到伪造成功。 |
 | `urov-y` 2.9.0 `PAGE_AP` | 在 2.8.0 基础上把“是否顺序到达 load”从单页扫描改为 `REGISTER` 期全进程直接分支目标位图：清 `AP[1]` 之前枚举会话 `mm` 的所有可读可执行 VMA，按 4 字节指令记录 `B/BL/B.cond/CBZ/CBNZ/TBZ/TBNZ` 的静态目标；故障时只查 `[LDXR+4, load]`。2.8.0 的跨页探针不再命中，读取路径耗时不变。 |
 | `urov-y` 2.10.0 `PAGE_AP` | 在 2.9.0 基础上补齐两条仍可命中的读路径：同 `mm` 的 `process_vm_readv` 由 syscall after hook 按同一镜像/快照规则重写调用者缓冲区；`LDXR XZR; load; STXR XZR` 在目标字为零时由桥完成 no-op store。分支目标图覆盖 `VM_EXEC`-only VMA，未驻留代码页在首次 fault-in 时补扫，`mmap`/`mprotect`/`mremap` 新增可执行范围在返回 EL0 前补扫，任何无法读取的可达页使 map incomplete 并关闭桥；间接分支门控同时比较 PAC/MTE 掩码后的值。 |
+| `urov-y` 2.11.0 `PAGE_AP` | 在 2.10.0 基础上把同 `mm` 的 `process_vm_readv` 覆盖扩到 Linux 允许的全部 iovec（`UIO_MAXIOV=1024`），用逐项游标避免 32 KiB 栈数组；pid 不是自身 tid/tgid 时在 RCU 下用 `find_task_by_vpid` 比较 `task->mm`，覆盖同线程组兄弟 tid 与 `CLONE_VM` 兄弟进程。ABI、`hooks=0x7f` 和计数器不变。 |
 
 [基础版后端](urov_backend.c) · [X 后端](urov_x_backend.c) · [Y 后端](urov_y_backend.c) · [指令解码](decode.c) · [软件模拟](emulate.c)
 
@@ -346,12 +347,58 @@ VMA，把每个 `B/BL/B.cond/CBZ/CBNZ/TBZ/TBNZ` 的静态目标写入按 VMA 划
    fail-closed；`REGISTER` 之后原地写入且不再 `mprotect` 的匿名可执行映射，
    以及已扫描页内的自修改代码不会被补扫。W^X 流程由 mprotect after hook 覆盖。
 3. 只接管同 `mm`、同进程的 `process_vm_readv`；`/proc/self/mem`、ptrace、
-   跨进程读写和 iovec 数超过 64 的调用仍看到真实字节。
+   跨进程读写和 iovec 数超过 64 的调用仍看到真实字节。（2.11.0 已消除
+   iovec 计数和兄弟 tid，见下节。）
 4. `REGISTER` 的一次全进程扫描仍是控制面成本（本矩阵 70 ms），不在读取循环。
 5. XZR 桥只对零目标 no-op；`caller_count > 0` 的窗口语义不变。
 
 完整数据和复跑命令见
 [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.10.0 节。
+
+## 2.11.0 完整 iovec 与同 mm pid 复核（2026-11-07）
+
+同一 Pixel 6、`6.1.134-android14-11`、4 KiB、KernelPatch `0xc00`。构建
+`urov-y.kpm 8d0eb588...`、`urovdetect.apk a4db1178...`。2.10.0 的活动矩阵里
+普通 CRC 已通过，但检测器仍能用两条同 `mm` 路径拿到真实字节：
+
+1. **65 项向量读。** hook 对 `iovcnt > 64` 直接返回；首项带长度、后 64 项为
+   零的调用仍只复制 64 字节，但 GUP 视图保持改码页。2.10.0 为 480/480
+   `MATCH`、`accepted_crc=0`。
+2. **兄弟 tid。** hook 只接受当前 tid/tgid；把 `process_vm_readv()` 的目标
+   pid 指向同一线程组的兄弟 tid 时，syscall 成功但 hook 返回，GUP 仍是真实页。
+
+2.11.0 的读取路径：
+
+- **完整 iovec。** `UY_VM_IOV_MAX` 对齐 `UIO_MAXIOV=1024`；用 `uy_iov_load()`
+  逐项复制 iovec，以两个游标按 syscall 返回值推进，零长度项跳过。没有 32 KiB
+  栈数组，也没有读取路径分配。
+- **同 mm pid。** pid 不是自身 tid/tgid 时，在 RCU 下用 `find_task_by_vpid()`
+  取任务并比较 `task->mm`；同线程组兄弟和 `CLONE_VM` 兄弟都重写，外部 `mm`
+  保留 GUP 字节。符号缺失时回退到旧门控。
+- **输出面不变。** ABI v8、`hooks=0x7f`、计数器、返回码均未改；没有新增
+  hook、文件、线程或定时器。
+
+夹具同步：`ud_observe_live()` 仍用 65 项；新增 1024 项、兄弟 tid 和四项不同
+边界拆分的逐字节对照。`crc-ap-all` 的内核期望改为镜像，重注册检查改为
+`UD_NO_MATCH`。
+
+真机结果：
+
+- Dobby 48×10：10 个活动进程各 `accepted_crc=48/48`，合计 480/480；
+  `views=0/480`、`iov65` 全部等于文件、`iov1024_match=1`、
+  `sibling_match=1`、`split_match=1`；`zero_match=0`、`cross_page=0`、
+  bridge/NOP/间接 store 均 0。
+- CRC 5×1：9 次运行 PASS；`crc-ap-all` 的 `direct=window=file`，
+  `crc-ap` 的 `direct=0c7da8a0`、`window=f50bcaf6`，全部 `bridge=0/5`。
+- 消除矩阵 3×1：11 次运行 PASS；`w-active` 539 条断言，XZR `match=0`，
+  `ELIM_TIMING mode=ap site_call_ns=285`。
+- 多页 3×1：5 次运行 PASS。测试后 `kpm list` 为空、boot ID 不变、无内核
+  BUG/Oops/挂起。
+
+残余（2.11.0）：`/proc/self/mem`、ptrace、跨进程读写仍看到真实字节；
+`madvise` 撤销、`mlock` 拒绝、PTE 重装窗口、单次同步异常和非硬件独占 store
+仍在；兄弟 tid 路径依赖可选的 `find_task_by_vpid`。完整数据和复跑命令见
+[APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.11.0 节。
 
 ## 复跑
 

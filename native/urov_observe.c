@@ -60,9 +60,12 @@ static uint64_t now_ns(void)
 
 static int read_live(const uint8_t *address, uint8_t *bytes, size_t size)
 {
-    struct iovec local = { .iov_base = bytes, .iov_len = size };
+    /* A count above the legacy 64-entry module cap, with zero-length tail
+     * entries so the transfer itself is still exactly size bytes. */
+    struct iovec local[65] = {{ .iov_base = bytes, .iov_len = size }};
     struct iovec remote = { .iov_base = (void *)address, .iov_len = size };
-    ssize_t got = process_vm_readv(getpid(), &local, 1, &remote, 1, 0);
+    ssize_t got = process_vm_readv(getpid(), local, sizeof(local) / sizeof(local[0]),
+                                   &remote, 1, 0);
 
     if (got < 0) return errno;
     return (size_t)got == size ? 0 : EIO;
@@ -152,6 +155,13 @@ static unsigned zero_exclusive_once(const void *address, uint64_t *scratch, unsi
 }
 
 static const uint64_t scratch_initial = UINT64_C(0x5a5a5a5aa5a5a5a5);
+
+static unsigned nonzero_exclusive_once(const void *address, uint64_t *scratch, unsigned *byte)
+{
+    *scratch = scratch_initial;
+    unsigned status = zero_exclusive_once(address, scratch, byte);
+    return *scratch == (status ? scratch_initial : 0) ? status : 2U;
+}
 
 enum unreserved_branch {
     UNRESERVED_TO_LOAD,     /* direct branch to the LDRB */
@@ -353,7 +363,7 @@ static unsigned execution_once(const void *address, uint64_t *scratch, unsigned 
     return failed;
 }
 
-enum reservation_probe { READ_ADJACENT, READ_SPACED, READ_ZERO, EXECUTE_CANARY };
+enum reservation_probe { READ_ADJACENT, READ_SPACED, READ_ZERO, READ_NONZERO, EXECUTE_CANARY };
 
 static void observe_reservation(const void *address, const void *reference,
                                 int backing_fd, off_t offset, enum reservation_probe probe,
@@ -366,6 +376,7 @@ static void observe_reservation(const void *address, const void *reference,
     if (execute) sample = execution_once;
     if (probe == READ_SPACED) sample = spaced_exclusive_once;
     if (probe == READ_ZERO) sample = zero_exclusive_once;
+    if (probe == READ_NONZERO) sample = nonzero_exclusive_once;
     /* Keep the scratch away from normal stack writes and compiler spills.
      * The caller does not share this stack storage with other threads.
      */
@@ -392,8 +403,9 @@ static void observe_reservation(const void *address, const void *reference,
     /* Warm both addresses and the exclusive code, outside the measured window. */
     for (unsigned i = 0; i < 8; ++i) {
         unsigned a, b;
-        (void)sample(reference, scratch, &a);
-        (void)sample(address, scratch, &b);
+        unsigned control_status = sample(reference, scratch, &a);
+        unsigned target_status = sample(address, scratch, &b);
+        if (control_status > 1U || target_status > 1U) { out->error = EPROTO; goto done; }
         if (a != b || (i && a != baseline_byte)) { out->error = EAGAIN; goto done; }
         baseline_byte = a;
     }
@@ -405,6 +417,9 @@ static void observe_reservation(const void *address, const void *reference,
             unsigned before = sample(reference, scratch, &a);
             unsigned tested = sample(address, scratch, &b);
             unsigned after_control = sample(reference, scratch, &c);
+            if (before > 1U || tested > 1U || after_control > 1U) {
+                out->error = EPROTO; goto done;
+            }
             if (a != baseline_byte || b != a || c != a) { out->error = EAGAIN; goto done; }
             if (before || after_control) { ++out->control_failed; continue; }
             ++accepted;
@@ -454,6 +469,13 @@ void ud_observe_zero_exclusive(const void *address, const void *reference,
                                struct ud_exclusive_observation *out)
 {
     observe_reservation(address, reference, backing_fd, offset, READ_ZERO, out);
+}
+
+void ud_observe_nonzero_exclusive(const void *address, const void *reference,
+                                  int backing_fd, off_t offset,
+                                  struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_NONZERO, out);
 }
 
 void ud_observe_execution(const void *address, const void *reference,

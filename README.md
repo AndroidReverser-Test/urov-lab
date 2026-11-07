@@ -1,15 +1,27 @@
 # UROV-LAB
 
-`urov-y` 2.10.0 在同进程读路径上补齐两项仍可命中的检测：**同 `mm` 的
-`process_vm_readv`** 由 syscall after hook 按镜像/快照规则重写调用者缓冲区，
-**`LDXR XZR; load; STXR XZR`** 在目标字为零时由 LL/SC 桥完成 no-op store。分支
-目标图覆盖 `VM_EXEC`-only VMA，未驻留代码页在首次 fault-in 时补扫，
-`mmap`/`mprotect`/`mremap` 新增可执行范围在返回 EL0 前补扫；不可读的可达页使
-map incomplete 并关闭桥。ABI v8、`ctl0` 字段和 `hooks=0x7f` 不变。
+`urov-y` 2.11.0 把同 `mm` 的 `process_vm_readv` 覆盖扩到 Linux 允许的全部
+1024 项 iovec，并在 2.10.0 的镜像/快照规则上补齐同 mm 兄弟 tid。**同 `mm`
+的 `process_vm_readv`** 由 syscall after hook 按镜像/快照规则重写调用者
+缓冲区，**`LDXR XZR; load; STXR XZR`** 在目标字为零时由 LL/SC 桥完成 no-op
+store。分支目标图覆盖 `VM_EXEC`-only VMA，未驻留代码页在首次 fault-in 时
+补扫，`mmap`/`mprotect`/`mremap` 新增可执行范围在返回 EL0 前补扫；不可读的
+可达页使 map incomplete 并关闭桥。ABI v8、`ctl0` 字段和 `hooks=0x7f` 不变。
 2.8.0 将 `prctl` 的 magic 固定为 `UROVYLAB`，保留 ABI v8 请求布局和 MAC 校验。
 2.4.0 的参数校验、并发镜像发布和陷阱撤销适配继续用于 Android ARM64 的 5.4 起的 5.x 和 6.x 内核，
 支持 4 KiB 及符合条件的 16 KiB 页表。实测、支持边界和复跑命令见
 [UROV-Y 兼容性与审计](COMPATIBILITY_Y.md)。下方日期条目保留各历史版本的行为和证据。
+
+2026-11-07 第十一轮消除：`urov-y` 2.11.0 把同 `mm` 的
+`process_vm_readv` 覆盖从 64 项扩到 Linux 允许的全部 1024 项 iovec，用逐项
+游标避免 32 KiB 栈数组；pid 不是自身 tid/tgid 时在 RCU 下用
+`find_task_by_vpid` 比较 `task->mm`，覆盖同线程组兄弟 tid 和 `CLONE_VM`
+兄弟进程。ABI v8、`ctl0`、`hooks=0x7f` 和计数器不变。Dobby 48×10 活动阶段
+`views=0/480`、`accepted_crc=48/48`（合计 480）、`iov1024_match=1`、
+`sibling_match=1`、`split_match=1`；CRC 5×1、消除 3×1、多页 3×1 均 PASS。
+构建 `urov-y.kpm 8d0eb588...`、`urovdetect.apk a4db1178...`。残余见
+[结果 2.11.0](APP_READ_INTEGRITY_RESULTS.md) 与
+[设计 §19](ELIMINATION_DESIGN.md#19-第十一轮完整-iovec-窗口与同-mm-pid-解析)。
 
 2026-11-07 第十轮消除：`urov-y` 2.10.0 让 Dobby 活动矩阵的
 `process_vm_readv` 双读与 XZR 独占序列同时归零，`accepted_crc=8/8`。构建

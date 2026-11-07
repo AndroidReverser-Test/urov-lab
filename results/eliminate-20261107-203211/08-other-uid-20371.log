@@ -1,0 +1,9 @@
+--------- beginning of main
+10-04 11:07:20.533 20371 20394 I urovdetect: CONTEXT pid=20371 uid=10285 selinux=u:r:untrusted_app:s0:c29,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 11:07:20.533 20371 20394 I urovdetect: BEGIN mode=z-observer repeats=12
+10-04 11:07:20.655 20371 20394 I urovdetect: ELIM_EXEC name=unregistered n=12 expected=0 match=0 clean=12 unknown=0 accepted=1152 failed=0 control_failed=0 total_ns=116030763 max_ns=21956014
+10-04 11:07:20.700 20371 20394 I urovdetect: ELIM_STORE name=unregistered n=12 expected=0 match=0 clean=12 unknown=0 completed=384 stores=0 total_ns=41886762 max_ns=4174357
+10-04 11:07:20.715 20371 20394 I urovdetect: ELIM_BRIDGE name=unregistered expected=0 verdict=0 trials=32 successes=0 elapsed_ns=3054077 nop_expected=0 nop_verdict=0 nop_trials=32 nop_successes=0 nop_elapsed_ns=3034872 indirect_verdict=0 indirect_trials=32 indirect_successes=0 indirect_elapsed_ns=2990804 cross_page_expected=0 cross_page_verdict=0 cross_page_trials=32 cross_page_successes=0 cross_page_elapsed_ns=3012532
+10-04 11:07:20.715 20371 20394 I urovdetect: CONTEXT pid=20371 uid=10285 selinux=u:r:untrusted_app:s0:c29,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 11:07:20.715 20371 20394 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=63 failures=0 mode=z-observer
+10-04 11:07:20.887 20371 20371 I urovdetect: DETECT_RESULT PASS mode=z-observer worker_ms=351 ui_ticks=128 ui_max_gap_ms=19 native=PASS cases=2 assertions=63 failures=0

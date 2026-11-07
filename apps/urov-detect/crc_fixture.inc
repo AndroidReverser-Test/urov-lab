@@ -76,6 +76,49 @@ static int crc_deactivate(const struct crc_patch_api *api, const char *key)
     return !rc && q.state == UROV_Y_INACTIVE && q.session == 0;
 }
 
+/* UROV-Y 2.10.0's target check rejects VM_LOCKED on the tested kernel.
+ * The request supplies ground truth. Lock only the owned, idle RX page. */
+static bool crc_lock_guard(const struct crc_patch_api *api, const char *key,
+                           const void *page, const uint8_t image[CRC_PAYLOAD_SIZE],
+                           unsigned mode, int all_callers, int repeats, const char *name)
+{
+    uint32_t expected_crc = crc_read_code(page, uy_business_ldrb);
+    uint32_t expected_return = crc_execute(page);
+    uint64_t begin = now_ns();
+    int lock_error = mlock(page, UROV_Y_PAGE) ? errno : 0;
+    uint64_t lock_ns = now_ns() - begin;
+    REQUIRE(!lock_error, "CRC %s mlock errno=%d", name, lock_error);
+    if (lock_error) return false;
+
+    struct urov_y_request q;
+    long rc = crc_register(api, key, page, image, mode, all_callers, &q);
+    int register_error = rc ? errno : 0;
+    q = uy_req(UROV_Y_STATUS);
+    q.session = 1;
+    bool inactive = !api->control(key, &q) && q.state == UROV_Y_INACTIVE;
+    if (!rc) (void)crc_deactivate(api, key);
+
+    struct ud_mapping map;
+    bool rx = !ud_mapping_at("/proc/self/maps", page, &map) &&
+              map.readable && !map.writable && map.executable;
+    int stable = 0;
+    if (inactive && rx) {
+        for (int i = 0; i < repeats; ++i) {
+            stable += crc_execute(page) == expected_return &&
+                      crc_read_code(page, uy_business_ldrb) == expected_crc;
+        }
+    }
+    int unlock_error = munlock(page, UROV_Y_PAGE) ? errno : 0;
+    bool passed = rc == -1 && register_error == EINVAL && inactive && rx &&
+                  stable == repeats && !unlock_error;
+    REQUIRE(passed, "CRC %s locked page verification", name);
+    LOG("CRC_LOCK_GUARD name=%s mode=%u all_callers=%d bytes=%u lock_ns=%llu "
+        "register_errno=%d inactive=%d rx=%d stable=%d n=%d unlock_errno=%d",
+        name, mode, all_callers, UROV_Y_PAGE, (unsigned long long)lock_ns,
+        register_error, inactive, rx, stable, repeats, unlock_error);
+    return passed;
+}
+
 static void crc_reject_mapping(const struct crc_patch_api *api, const char *key,
                                const void *address, const uint8_t *original,
                                const char *name)
@@ -115,6 +158,8 @@ static void crc_ap_page_case(const char *name, const struct crc_patch_api *api,
     int active = 0;
 
     ++g_cases;
+    if (!crc_lock_guard(api, key, address, fake, UROV_Y_MODE_PAGE_AP, 0, repeats, name))
+        return;
     if (ud_mapping_at("/proc/self/smaps", address, &before) ||
         uy_mapping_private_kb(address, &dirty, &anon)) {
         REQUIRE(0, "CRC %s mapping errno=%d", name, errno);
@@ -143,18 +188,7 @@ static void crc_ap_page_case(const char *name, const struct crc_patch_api *api,
         "site=%08x window=%08x bridge_match=0 bridge_clean=%d bridge_unknown=0",
         name, repeats, execute, clean_crc, patched_crc, direct, site, window, repeats);
 
-    q = uy_req(UROV_Y_REGISTER);
-    q.address = (uintptr_t)address;
-    q.mode = UROV_Y_MODE_PAGE_AP;
-    q.offset = 0;
-    q.length = sizeof(q.value);
-    memcpy(&q.value, fake, sizeof(q.value));
-    q.site_count = 1;
-    q.sites[0] = (uintptr_t)&uy_site_ldrb;
-    q.caller_count = 1;
-    q.caller_start[0] = (uintptr_t)&uy_business_ldrb;
-    q.caller_end[0] = (uintptr_t)uy_business_ldrb_end;
-    long rc = api->control(key, &q);
+    long rc = crc_register(api, key, address, fake, UROV_Y_MODE_PAGE_AP, 0, &q);
     active = rc == 0;
     REQUIRE(active && q.state == UROV_Y_ACTIVE && q.session == 1 &&
             q.mode == UROV_Y_MODE_PAGE_AP,
@@ -272,7 +306,7 @@ static void crc_text_case(const struct crc_patch_api *api, const char *key,
         return;
     }
     LOG("CRC_TEXT address=%p lib=%s span=%llu offset=%llx shared=%d maywrite=%d",
-        text, dladdr(text, &info) ? info.dli_fname : "?", 
+        text, dladdr(text, &info) ? info.dli_fname : "?",
         (unsigned long long)(m.end - m.start), (unsigned long long)m.offset,
         m.shared, m.maywrite);
     REQUIRE(((uintptr_t)text & (UROV_Y_PAGE - 1U)) == 0, "CRC text page alignment");
@@ -771,25 +805,18 @@ static void crc_stage(const char *name, const struct page *target, const struct 
     uint32_t live_crc = patched ? patched_crc : clean_crc;
     uint32_t direct_expected = all_callers ? clean_crc : live_crc;
     uint32_t window_expected = active_mode ? clean_crc : live_crc;
+    /* With no caller window every reader and the kernel-assisted view see the
+     * registered image; the reference bytes are the original page.  With a
+     * window the GUP view follows the snapshot outside it. */
+    const struct page *expected_page = all_callers ? target : backing;
     unsigned match = 0, clean = 0, unknown = 0;
     unsigned direct_match = 0, window_match = 0, live_unknown = 0;
     uint32_t direct = 0, site = 0, window = 0, returned = 0, kernel = 0;
     uint8_t expected[CRC_PAYLOAD_SIZE];
-    uint8_t kernel_expected[CRC_PAYLOAD_SIZE];
 
     ++g_cases;
-    if (app_pread(backing->fd, backing->file_offset, expected, sizeof(expected))) {
+    if (app_pread(expected_page->fd, expected_page->file_offset, expected, sizeof(expected))) {
         REQUIRE(0, "CRC %s backing read", name);
-        return;
-    }
-    memcpy(kernel_expected, expected, sizeof(expected));
-    /* 2.10.0 serves the same-mm process_vm_readv path from the overlay too.
-     * In the no-window (all-callers) case both the EL0 reader and the GUP
-     * reader therefore see the image, so the expected kernel bytes are the
-     * clean image source rather than the patched backing page. */
-    if (all_callers &&
-        app_pread(target->fd, target->file_offset, kernel_expected, sizeof(kernel_expected))) {
-        REQUIRE(0, "CRC %s image read", name);
         return;
     }
     for (int i = 0; i < repeats; ++i) {
@@ -806,13 +833,10 @@ static void crc_stage(const char *name, const struct page *target, const struct 
         direct_match += direct_live.verdict == UD_MATCH;
         window_match += window_live.verdict == UD_MATCH;
         live_unknown += direct_live.verdict == UD_UNKNOWN || window_live.verdict == UD_UNKNOWN;
-        /* The GUP view is no longer a differential: it follows the same caller
-         * window rule as an EL0 read (all-callers => image, window => the
-         * fixture's frame chain is outside the business window => snapshot). */
         REQUIRE(direct_live.verdict == UD_NO_MATCH &&
                 window_live.verdict == (active_mode && !all_callers ? UD_MATCH : UD_NO_MATCH) &&
-                !memcmp(direct_live.kernel_bytes, kernel_expected, sizeof(expected)) &&
-                !memcmp(window_live.kernel_bytes, kernel_expected, sizeof(expected)),
+                !memcmp(direct_live.kernel_bytes, expected, sizeof(expected)) &&
+                !memcmp(window_live.kernel_bytes, expected, sizeof(expected)),
                 "CRC %s live views direct=%d error=%d window=%d error=%d kernel=%08x",
                 name, direct_live.verdict, direct_live.error, window_live.verdict,
                 window_live.error, kernel);
@@ -862,6 +886,19 @@ static void crc_overlay_signals(const struct page *target, const struct page *pa
     REQUIRE(obs.verdict == changed_byte && (changed_byte != UD_UNKNOWN || obs.error == EAGAIN),
             "CRC changed byte probe verdict=%d errno=%d", obs.verdict, obs.error);
     LOG("CRC_CHANGED_BYTE probe=%d error=%d completed=%u", obs.verdict, obs.error, obs.completed);
+}
+
+static bool crc_revoke(const struct crc_patch_api *api, const char *key,
+                       const struct page *target, unsigned mode)
+{
+    int advice_error = uy_invalid_advice(target->address, UROV_Y_PAGE);
+    struct urov_y_request q = uy_req(UROV_Y_STATUS);
+    q.session = 1;
+    bool restored = !api->control(key, &q) && q.state == UROV_Y_INACTIVE;
+    REQUIRE(advice_error == EINVAL && restored,
+            "CRC invalid advice recovery errno=%d state=%u", advice_error, q.state);
+    LOG("CRC_RESTORE mode=%u madvise_errno=%d inactive=%d", mode, advice_error, restored);
+    return restored;
 }
 
 static void crc_injection(const char *mode_name, const char *key, int repeats,
@@ -982,16 +1019,27 @@ static void crc_injection(const char *mode_name, const char *key, int repeats,
         LOG("CRC_OVERLAY mode=%u generation=%llu hits=%llu replays=%llu failures=%llu", q.mode,
             (unsigned long long)q.generation, (unsigned long long)q.hits,
             (unsigned long long)q.replays, (unsigned long long)q.failures);
-        int advice_error = uy_invalid_advice(target.address, UROV_Y_PAGE);
-        q = uy_req(UROV_Y_STATUS);
-        q.session = 1;
-        bool restored = !api.control(key, &q) && q.state == UROV_Y_INACTIVE;
-        REQUIRE(advice_error == EINVAL && restored,
-                "CRC invalid advice recovery errno=%d state=%u", advice_error, q.state);
-        LOG("CRC_RESTORE mode=%u madvise_errno=%d inactive=%d", mode, advice_error, restored);
-        if (!restored) goto done;
+        if (!crc_revoke(&api, key, &target, mode)) goto done;
         active = 0;
         crc_stage("deactivated", &target, &patched, *clean_crc, *patched_crc, repeats, 0, 0);
+        if (!crc_lock_guard(&api, key, target.address, original, mode, all_callers, repeats,
+                            "shared_alias")) goto done;
+
+        if (all_callers) {
+            rc = crc_register(&api, key, target.address, original, mode, all_callers, &q);
+            active = rc == 0;
+            REQUIRE(active && q.state == UROV_Y_ACTIVE, "CRC re-register rc=%ld errno=%d", rc, errno);
+            if (!active) goto done;
+            struct ud_live_observation live;
+            ud_observe_live(target.address, sizeof(original), patched.fd, patched.file_offset,
+                            copy_scalar, &live);
+            REQUIRE(live.verdict == UD_NO_MATCH &&
+                    !memcmp(live.user_bytes, original, sizeof(original)) &&
+                    !memcmp(live.kernel_bytes, original, sizeof(original)),
+                    "CRC re-registered overlay verdict=%d errno=%d", live.verdict, live.error);
+            LOG("CRC_REREGISTER state=%u match=%d", q.state, live.verdict);
+            active = !crc_revoke(&api, key, &target, mode);
+        }
     }
     REQUIRE(!app_pread(target.fd, target.file_offset, after, sizeof(after)) &&
             !memcmp(original, after, sizeof(after)), "CRC original file bytes changed");

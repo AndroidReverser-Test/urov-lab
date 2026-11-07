@@ -325,15 +325,16 @@ static int uy_mapping_private_kb(const void *addr, unsigned *dirty, unsigned *an
 
 /* Verify the read value and the architectural reservation result. */
 static void elimination_case(const char *name, const struct page *p, unsigned delta,
-                             int repeats, enum ud_verdict expected_zero)
+                             int repeats, enum ud_verdict expected_nonzero)
 {
     const uint8_t *at = p->address + p->entry + delta;
     const uint8_t *reference = (const uint8_t *)(uintptr_t)&ud_payload + delta;
     const off_t offset = p->file_offset + p->entry + delta;
-    struct ud_exclusive_observation ex = {0}, zero = {0};
+    struct ud_exclusive_observation ex = {0}, zero = {0}, nonzero = {0};
     struct ud_reader_observation rd = {0};
     unsigned exclusive_matches = 0, exclusive_clean = 0, exclusive_unknown = 0;
     unsigned zero_matches = 0, zero_clean = 0, zero_unknown = 0;
+    unsigned nonzero_matches = 0, nonzero_clean = 0, nonzero_unknown = 0;
     unsigned reader_matches = 0, reader_clean = 0, reader_unknown = 0;
     unsigned accepted = 0, failed = 0, control_failed = 0;
     unsigned failures_before = g_fail;
@@ -365,7 +366,7 @@ static void elimination_case(const char *name, const struct page *p, unsigned de
         control_failed += ex.control_failed;
         ud_observe_zero_exclusive(at, reference, p->fd, offset, &zero);
         REQUIRE(errno == EDOM, "%s XZR probe changed errno", name);
-        REQUIRE(zero.reservation_loss == expected_zero ||
+        REQUIRE(zero.reservation_loss == UD_NO_MATCH ||
                 (zero.reservation_loss == UD_UNKNOWN && zero.error == EAGAIN),
                 "%s XZR verdict=%d accepted=%u failed=%u control=%u error=%d", name,
                 zero.reservation_loss, zero.accepted, zero.target_failed,
@@ -373,6 +374,16 @@ static void elimination_case(const char *name, const struct page *p, unsigned de
         zero_matches += zero.reservation_loss == UD_MATCH;
         zero_clean += zero.reservation_loss == UD_NO_MATCH;
         zero_unknown += zero.reservation_loss == UD_UNKNOWN;
+        ud_observe_nonzero_exclusive(at, reference, p->fd, offset, &nonzero);
+        REQUIRE(errno == EDOM, "%s nonzero XZR probe changed errno", name);
+        REQUIRE(nonzero.reservation_loss == expected_nonzero ||
+                (nonzero.reservation_loss == UD_UNKNOWN && nonzero.error == EAGAIN),
+                "%s nonzero XZR verdict=%d accepted=%u failed=%u control=%u error=%d", name,
+                nonzero.reservation_loss, nonzero.accepted, nonzero.target_failed,
+                nonzero.control_failed, nonzero.error);
+        nonzero_matches += nonzero.reservation_loss == UD_MATCH;
+        nonzero_clean += nonzero.reservation_loss == UD_NO_MATCH;
+        nonzero_unknown += nonzero.reservation_loss == UD_UNKNOWN;
         errno = EDOM;
         ud_observe_reader(at, p->fd, offset, uy_site_ldr, &rd);
         REQUIRE(errno == EDOM, "%s reader changed errno", name);
@@ -400,19 +411,23 @@ static void elimination_case(const char *name, const struct page *p, unsigned de
             oldmap.dontcopy == newmap.dontcopy && oldmap.randomread == newmap.randomread &&
             oldmap.maywrite == newmap.maywrite, "%s VMA changed", name);
     REQUIRE(!exclusive_matches, "%s unexpected adjacent reservation loss", name);
-    REQUIRE(expected_zero == UD_MATCH ? zero_matches > 0 && !zero_clean :
-            zero_clean > 0 && !zero_matches, "%s inconclusive XZR result matches=%u clean=%u",
+    REQUIRE(zero_clean > 0 && !zero_matches, "%s inconclusive XZR result matches=%u clean=%u",
             name, zero_matches, zero_clean);
+    REQUIRE(expected_nonzero == UD_MATCH ? nonzero_matches > 0 && !nonzero_clean :
+            nonzero_clean > 0 && !nonzero_matches,
+            "%s inconclusive nonzero XZR result matches=%u clean=%u",
+            name, nonzero_matches, nonzero_clean);
     REQUIRE(reader_matches == 0, "%s reader matched %u times", name, reader_matches);
     LOG("ELIM_CASE name=%s result=%s n=%d exclusive_match=%u exclusive_clean=%u "
         "exclusive_unknown=%u accepted=%u failed=%u control_failed=%u "
         "reader_match=%u reader_clean=%u reader_unknown=%u direct=0x%llx file=0x%llx "
-        "zero_match=%u zero_clean=%u zero_unknown=%u",
+        "zero_match=%u zero_clean=%u zero_unknown=%u "
+        "nonzero_match=%u nonzero_clean=%u nonzero_unknown=%u",
         name, failures_before == g_fail ? "PASS" : "FAIL", repeats,
         exclusive_matches, exclusive_clean, exclusive_unknown, accepted, failed,
         control_failed, reader_matches, reader_clean, reader_unknown,
         (unsigned long long)rd.direct_value, (unsigned long long)rd.file_value,
-        zero_matches, zero_clean, zero_unknown);
+        zero_matches, zero_clean, zero_unknown, nonzero_matches, nonzero_clean, nonzero_unknown);
 }
 
 /* No key: the module is loaded but cannot be addressed; the same observation
@@ -480,10 +495,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     struct ud_reader_observation rd;
     struct urov_y_request st = {0}, before = {0};
     enum ud_verdict expected_exec = mode == UROV_Y_MODE_PAGE_UXN ? UD_MATCH : UD_NO_MATCH;
-    /* 2.10.0: the adjacent LDXR XZR;load;STXR XZR sequence is completed like
-     * the value-carrying form, so the reserved stack word keeps its native
-     * success and the probe reports the clean result in every mode. */
-    enum ud_verdict expected_zero = UD_NO_MATCH;
+    enum ud_verdict expected_nonzero = mode == UROV_Y_MODE_PAGE_AP ? UD_MATCH : UD_NO_MATCH;
     /* A failed native STXR must not write the sentinel. */
     enum ud_verdict expected_store = UD_NO_MATCH;
     enum ud_verdict expected_cross_page = UD_NO_MATCH;
@@ -566,8 +578,8 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     }
 
     /* Only an actual data-abort path loses this reservation. */
-    elimination_case("active_page", &p, 8, repeats, expected_zero);
-    elimination_case("active_outside_window", &p, 96, repeats, expected_zero);
+    elimination_case("active_page", &p, 8, repeats, expected_nonzero);
+    elimination_case("active_outside_window", &p, 96, repeats, expected_nonzero);
 
     REQUIRE(!uy_status(&ctx, &before) && before.state == UROV_Y_ACTIVE,
             "UY status before execution probe");
@@ -623,10 +635,10 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     REQUIRE(!uy_set_page(&ctx, generation, UINT64_C(0x0f0e0d0c0b0a0908)),
             "UY SET errno=%d", errno);
     REQUIRE(uy_business_ldr(at) == UINT64_C(0x0f0e0d0c0b0a0908), "UY SET not visible");
-    elimination_case("active_after_set", &p, 8, repeats, expected_zero);
+    elimination_case("active_after_set", &p, 8, repeats, expected_nonzero);
     REQUIRE(!uy_set_page(&ctx, generation + 1, disk), "UY SET identity errno=%d", errno);
     REQUIRE(uy_business_ldr(at) == disk, "UY identity SET not visible");
-    elimination_case("active_equal_value", &p, 8, repeats, expected_zero);
+    elimination_case("active_equal_value", &p, 8, repeats, expected_nonzero);
     elimination_exec_case("active_equal_value", &reference, repeats, expected_exec);
     store_case("active_equal_value", &p, 8, repeats, expected_store);
     elimination_bridge_case("active_equal_value", &p, 8, expected_cross_page);

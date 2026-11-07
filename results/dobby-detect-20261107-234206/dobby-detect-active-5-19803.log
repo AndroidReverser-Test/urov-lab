@@ -1,0 +1,32 @@
+--------- beginning of main
+10-04 14:17:01.122 19803 19828 I urovdetect: CONTEXT pid=19803 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 14:17:01.122 19803 19828 I urovdetect: BEGIN mode=dobby-detect-active repeats=48
+10-04 14:17:01.123 19803 19828 I urovdetect: DOBBY_DETECT_MANY stage=clean n=1024 got=32 match=1 errno=0
+10-04 14:17:01.123 19803 19828 I urovdetect: DOBBY_DETECT_SIBLING stage=clean tid=19857 got=32 match=1 errno=0
+10-04 14:17:01.123 19803 19828 I urovdetect: DOBBY_DETECT_SPLIT stage=clean got=32 match=1 errno=0
+10-04 14:17:02.253 19803 19828 I urovdetect: DOBBY_DETECT stage=clean n=48 execute=1234 file=96964c4f live=96964c4f crc_pass=48 accepted_crc=48 match=0 clean=48 unknown=0 adjacent_match=0 adjacent_unknown=1 spaced_match=0 spaced_unknown=0 spaced_accepted=4608 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=1536 bridge_successes=0 nop_match=0 nop_trials=1536 nop_successes=0 ind_match=0 ind_trials=1536 ind_successes=0 cross_page_trials=1536 cross_page_successes=0 probe_mean_ns=3185123 probe_max_ns=5759115
+10-04 14:17:02.253 19803 19828 I urovdetect: DOBBY_DETECT_LIVE stage=clean n=48 match=0 unknown=0 kernel_file=48 kernel_crc=96964c4f single_crc=96964c4f zero_match=0 zero_clean=48 zero_unknown=0 mean_ns=339691 max_ns=2030354
+10-04 14:17:02.254 19803 19828 I urovdetect: DOBBY_HOOK address=0x79829f9000 original=1234 hooked=1235
+10-04 14:17:02.254 19803 19828 I urovdetect: DOBBY_DETECT_MANY stage=patch_only n=1024 got=32 match=1 errno=0
+10-04 14:17:02.254 19803 19828 I urovdetect: DOBBY_DETECT_SIBLING stage=patch_only tid=19857 got=32 match=1 errno=0
+10-04 14:17:02.254 19803 19828 I urovdetect: DOBBY_DETECT_SPLIT stage=patch_only got=32 match=1 errno=0
+10-04 14:17:03.346 19803 19828 I urovdetect: DOBBY_DETECT stage=patch_only n=48 execute=1235 file=96964c4f live=48ef9169 crc_pass=0 accepted_crc=0 match=0 clean=48 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=4608 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=1536 bridge_successes=0 nop_match=0 nop_trials=1536 nop_successes=0 ind_match=0 ind_trials=1536 ind_successes=0 cross_page_trials=1536 cross_page_successes=0 probe_mean_ns=3197711 probe_max_ns=3467448
+10-04 14:17:03.346 19803 19828 I urovdetect: DOBBY_DETECT_LIVE stage=patch_only n=48 match=0 unknown=0 kernel_file=0 kernel_crc=48ef9169 single_crc=48ef9169 zero_match=0 zero_clean=47 zero_unknown=1 mean_ns=311043 max_ns=350749
+10-04 14:17:03.423 19803 19828 I urovdetect: DOBBY_ARM register_ns=75367636
+10-04 14:17:03.423 19803 19828 I urovdetect: DOBBY_DETECT_MANY stage=overlay n=1024 got=32 match=1 errno=0
+10-04 14:17:03.423 19803 19828 I urovdetect: DOBBY_DETECT_SIBLING stage=overlay tid=19857 got=32 match=1 errno=0
+10-04 14:17:03.423 19803 19828 I urovdetect: DOBBY_DETECT_SPLIT stage=overlay got=32 match=1 errno=0
+10-04 14:17:04.527 19803 19828 I urovdetect: DOBBY_DETECT stage=overlay n=48 execute=1235 file=96964c4f live=96964c4f crc_pass=48 accepted_crc=48 match=0 clean=48 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=4608 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=1536 bridge_successes=0 nop_match=0 nop_trials=1536 nop_successes=0 ind_match=0 ind_trials=1536 ind_successes=0 cross_page_trials=1536 cross_page_successes=0 probe_mean_ns=3234892 probe_max_ns=3455363
+10-04 14:17:04.527 19803 19828 I urovdetect: DOBBY_DETECT_LIVE stage=overlay n=48 match=0 unknown=0 kernel_file=48 kernel_crc=96964c4f single_crc=96964c4f zero_match=0 zero_clean=48 zero_unknown=0 mean_ns=335829 max_ns=445597
+10-04 14:17:04.527 19803 19828 I urovdetect: DOBBY_DETECT_STATUS hits=24224 failures=0
+10-04 14:17:04.529 19803 19828 I urovdetect: DOBBY_DETECT_RESTORE outside_errno=22 outside_active=1 madvise_errno=22 inactive=1 vma_preserved=1
+10-04 14:17:04.530 19803 19828 I urovdetect: DOBBY_DETECT_MANY stage=deactivated n=1024 got=32 match=1 errno=0
+10-04 14:17:04.530 19803 19828 I urovdetect: DOBBY_DETECT_SIBLING stage=deactivated tid=19857 got=32 match=1 errno=0
+10-04 14:17:04.530 19803 19828 I urovdetect: DOBBY_DETECT_SPLIT stage=deactivated got=32 match=1 errno=0
+10-04 14:17:05.628 19803 19828 I urovdetect: DOBBY_DETECT stage=deactivated n=48 execute=1235 file=96964c4f live=48ef9169 crc_pass=0 accepted_crc=0 match=0 clean=48 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=4608 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=1536 bridge_successes=0 nop_match=0 nop_trials=1536 nop_successes=0 ind_match=0 ind_trials=1536 ind_successes=0 cross_page_trials=1536 cross_page_successes=0 probe_mean_ns=3215484 probe_max_ns=3437988
+10-04 14:17:05.628 19803 19828 I urovdetect: DOBBY_DETECT_LIVE stage=deactivated n=48 match=0 unknown=0 kernel_file=0 kernel_crc=48ef9169 single_crc=48ef9169 zero_match=0 zero_clean=48 zero_unknown=0 mean_ns=306187 max_ns=338338
+10-04 14:17:05.629 19803 19828 I urovdetect: DOBBY_DETECT_GUARD filter_errno=0 thread_errno=0 register_errno=1 existing_thread_errno=1 inactive=1 nnp_before=0 nnp_after=1
+10-04 14:17:05.629 19803 19828 I urovdetect: DOBBY_DETECT_BUSINESS ops=915072 errors=0
+10-04 14:17:05.630 19803 19828 I urovdetect: CONTEXT pid=19803 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 14:17:05.630 19803 19828 I urovdetect: NATIVE_RESULT PASS cases=4 assertions=820 failures=0 mode=dobby-detect-active
+10-04 14:17:05.632 19803 19803 I urovdetect: DETECT_RESULT PASS mode=dobby-detect-active worker_ms=4508 ui_ticks=532 ui_max_gap_ms=19 native=PASS cases=4 assertions=820 failures=0

@@ -149,6 +149,7 @@ typedef void (*void_fn)(void);
 
 typedef void *(*get_task_mm_t)(void *task);
 typedef void (*mmput_t)(void *mm);
+typedef void *(*find_task_by_vpid_t)(int pid);
 typedef void *(*find_vma_t)(void *mm, unsigned long addr);
 typedef void (*mmap_write_fn)(void *);
 typedef int (*force_sig_fault_t)(int sig, int code, void *addr);
@@ -237,6 +238,7 @@ static void *f_do_mem_abort;
 static void *f_handle_mm_fault;
 static get_task_mm_t f_get_task_mm;
 static mmput_t f_mmput;
+static find_task_by_vpid_t f_find_task_by_vpid;
 static find_vma_t f_find_vma;
 static mmap_write_fn f_mmap_write_lock;
 static mmap_write_fn f_mmap_write_unlock;
@@ -2476,12 +2478,20 @@ static void uy_prctl_before(hook_fargs6_t *args, void *udata)
  * after hook rewrites only the bytes that overlap a registered page.  The
  * caller's buffer was filled by the kernel a moment earlier, so the copy is
  * bounded by the syscall's own return value and by the iovec array it
- * validated.  No ABI field, status bit or counter is added. */
+ * validated.
+ *
+ * The walk covers every iovec count Linux accepts (UIO_MAXIOV = 1024).  A
+ * fixed-size array cannot grow to that bound on the KPM stack, so one entry
+ * at a time is copied and only the entries that carry bytes are touched.
+ * The target pid is resolved to a task and accepted when that task shares
+ * the session mm: the caller's own tid/tgid and a CLONE_VM sibling are the
+ * same address space, while a truly foreign mm keeps the bytes GUP
+ * produced.  No ABI field, status bit or counter is added. */
 #ifndef __NR_process_vm_readv
 #define __NR_process_vm_readv 270
 #endif
 
-#define UY_VM_IOV_MAX 64U
+#define UY_VM_IOV_MAX 1024U
 #define UY_VM_CHUNK 256U
 
 struct uy_iovec {
@@ -2514,24 +2524,42 @@ static void uy_vm_overlay(uint64_t local, uint64_t remote, uint64_t len, int all
     }
 }
 
+static int uy_iov_load(uint64_t vec, uint64_t index, struct uy_iovec *out)
+{
+    uint64_t at = vec + index * sizeof(*out);
+
+    return f_copy_in(out, (const void *)(uintptr_t)at, sizeof(*out));
+}
+
 static void uy_vm_readv_after(hook_fargs6_t *args, void *udata)
 {
-    struct uy_iovec local[UY_VM_IOV_MAX], remote[UY_VM_IOV_MAX];
+    struct uy_iovec l, r;
     struct pt_regs *regs;
     uint64_t pid, lvec, liovcnt, rvec, riovcnt, ref, left;
-    void *mm;
-    unsigned i, li = 0, ri = 0;
-    uint64_t loff = 0, roff = 0;
-    int allow;
+    uint64_t li = 0, ri = 0, loff = 0, roff = 0;
+    void *mm, *task;
+    int allow, have_l = 0, have_r = 0;
 
     (void)udata;
     if ((long)args->ret <= 0 || !f_copy_out) return;
     mm = mm_of_task(current);
     if (!mm || mm != __atomic_load_n(&g_owner, __ATOMIC_ACQUIRE)) return;
-    /* Only the caller's own address space is overlaid.  A cross-process read
-     * reaches a different mm and must keep the bytes GUP produced. */
+    /* The caller's own address space is overlaid.  A pid that names another
+     * thread of the same mm (a CLONE_VM sibling, including a different
+     * thread group) reaches the same pages through GUP; resolve it exactly
+     * as process_vm_readv did and compare the mm.  A truly foreign mm must
+     * keep the bytes the kernel copied. */
     pid = sys_arg(args, 0);
-    if (!pid || (pid != uy_task_pid() && pid != uy_task_tgid())) return;
+    if (pid != uy_task_pid() && pid != uy_task_tgid()) {
+        int same = 0;
+
+        if (!f_find_task_by_vpid || !f_rcu_lock) return;
+        f_rcu_lock();
+        task = f_find_task_by_vpid((int)pid);
+        if (task && mm_of_task(task) == mm) same = 1;
+        f_rcu_unlock();
+        if (!same) return;
+    }
     lvec = sys_arg(args, 1);
     liovcnt = sys_arg(args, 2);
     rvec = sys_arg(args, 3);
@@ -2541,14 +2569,6 @@ static void uy_vm_readv_after(hook_fargs6_t *args, void *udata)
     if (!uy_user_range(lvec, liovcnt * sizeof(struct uy_iovec)) ||
         !uy_user_range(rvec, riovcnt * sizeof(struct uy_iovec)))
         return;
-    for (i = 0; i < liovcnt; ++i)
-        if (f_copy_in(&local[i], (const void *)(uintptr_t)(lvec + sizeof(local[i]) * i),
-                      sizeof(local[i])))
-            return;
-    for (i = 0; i < riovcnt; ++i)
-        if (f_copy_in(&remote[i], (const void *)(uintptr_t)(rvec + sizeof(remote[i]) * i),
-                      sizeof(remote[i])))
-            return;
 
     ref = session_get_mm(mm);
     if (!ref) return;
@@ -2557,21 +2577,31 @@ static void uy_vm_readv_after(hook_fargs6_t *args, void *udata)
             (g_sess.caller_count == 0U || (regs && caller_allowed_deep(regs)));
     left = (uint64_t)(long)args->ret;
     while (left && li < liovcnt && ri < riovcnt) {
-        uint64_t lrem = local[li].len - loff;
-        uint64_t rrem = remote[ri].len - roff;
-        uint64_t seg = lrem < rrem ? lrem : rrem;
+        uint64_t lrem, rrem, seg;
 
+        if (!have_l) {
+            if (uy_iov_load(lvec, li, &l)) goto out;
+            have_l = 1;
+        }
+        if (!have_r) {
+            if (uy_iov_load(rvec, ri, &r)) goto out;
+            have_r = 1;
+        }
+        lrem = l.len - loff;
+        rrem = r.len - roff;
+        seg = lrem < rrem ? lrem : rrem;
         if (!seg) {
-            if (!lrem) { ++li; loff = 0; }
-            if (!rrem) { ++ri; roff = 0; }
+            if (!lrem) { ++li; loff = 0; have_l = 0; }
+            if (!rrem) { ++ri; roff = 0; have_r = 0; }
             continue;
         }
         if (seg > left) seg = left;
-        uy_vm_overlay(local[li].base + loff, remote[ri].base + roff, seg, allow);
+        uy_vm_overlay(l.base + loff, r.base + roff, seg, allow);
         loff += seg;
         roff += seg;
         left -= seg;
     }
+out:
     uy_reader_exit(&g_readers, ref);
 }
 
@@ -2835,6 +2865,11 @@ static long resolve_symbols(const struct kclf_btf *btf, int *brk_argc, int *mmf_
 
     f_get_task_mm = (get_task_mm_t)lookup("get_task_mm");
     f_mmput = (mmput_t)lookup("mmput");
+    /* Optional: resolve a pid that names another thread in the same mm.
+     * find_task_by_vpid(pid_t) is a stable built-in entry; BTF may encode
+     * pid_t as a typedef, so the raw symbol is used after a kallsyms hit.
+     * A missing symbol keeps the old pid/tgid-only gate. */
+    f_find_task_by_vpid = (find_task_by_vpid_t)lookup("find_task_by_vpid");
     f_find_vma = (find_vma_t)lookup(vma_name);
     if (!f_find_vma || !uy_symbol_abi(btf, vma_name, "aml")) {
         vma_name = "__find_vma";
@@ -2911,11 +2946,13 @@ static long resolve_symbols(const struct kclf_btf *btf, int *brk_argc, int *mmf_
     }
     if (g_verbose)
         pr_info("urov-y: kver=%x vma=%s lock=%s mm_fault=%s/%d brk=%s/%d "
-                "access=%s/%d read=%s write=%s fpsimd=%s foll_force=0x%x page_shift=%u\n",
+                "access=%s/%d read=%s write=%s find_task=%s fpsimd=%s foll_force=0x%x "
+                "page_shift=%u\n",
                 kver, vma_name, g_use_rwsem ? "rwsem" : "mmap",
                 *mmf_argc ? fault_name : "none", *mmf_argc,
                 *brk_argc ? brk_name : "none", *brk_argc, access_name, access_argc,
                 read_name, f_copy_out ? write_name : "control-gup",
+                f_find_task_by_vpid ? "task" : "none",
                 g_fp_ready ? fp_name : "none", foll_force, g_page_shift);
     return 0;
 }

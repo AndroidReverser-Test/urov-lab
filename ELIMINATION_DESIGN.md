@@ -1322,3 +1322,86 @@ Pixel 6，Android 16，`6.1.134-android14-11`，4 KiB，KernelPatch `0xc00`。
    跨进程读写、`iovcnt > 64` 仍看到真实字节。
 4. `REGISTER` 的一次全进程扫描仍是控制面成本（本矩阵 70 ms）。
 5. XZR 桥只对零目标 no-op；`caller_count > 0` 的窗口语义不变。
+
+## 19. 第十一轮：完整 iovec 窗口与同 mm pid 解析
+
+### 19.1 触发本轮的特征
+
+2.10.0 的 Dobby 活动矩阵里普通 CRC 已经通过，但 `urovdetect` 仍能稳定判定：
+
+1. **65 项向量读。** `uy_vm_readv_after()` 对任一侧 `iovcnt > 64` 直接返回。
+   65 个本地 iovec 只给首项长度、其余为零时，内核仍只复制 1–64 字节；GUP
+   视图保持改码后的真实页，EL0 读者得到镜像，两路稳定不同即 `MATCH`。
+   2.10.0 为 480/480，`accepted_crc=0`。
+2. **同 mm 兄弟 tid。** 同一 hook 只接受 `pid == current tid/tgid`；把
+   `process_vm_readv()` 的目标 pid 指向同一线程组的兄弟 tid，syscall 成功，
+   但 hook 直接返回，GUP 仍是真实页。2.10.0 未把这个形状写进夹具。
+
+### 19.2 方案
+
+2.11.0 只改读取路径：
+
+1. **计数上限对齐 Linux。** `UY_VM_IOV_MAX` 从 64 改为 `UIO_MAXIOV`（1024）。
+   合法 syscall 的 iovcnt 不会超过它；超过时 Linux 在进入 hook 前已经返回
+   `EINVAL`，因此不存在 64/1024 之间的可探测阈值。
+2. **流式游标。** 不使用 `struct uy_iovec local[1024]`（16 KiB）和
+   `remote[1024]`（再 16 KiB）：KPM 栈放不下，动态分配又会把分配器行为带进
+   syscall 返回路径。新增 `uy_iov_load()`，每次只 `copy_from_user` 一个
+   iovec，以 `li/ri` 和 `loff/roff` 两个游标推进。`left` 仍是 syscall
+   返回的成功字节数；零长度项直接跳过，65 项技巧只读第一项。
+3. **同 mm pid 解析。** pid 不是当前 tid/tgid 时，在 RCU 读锁内调用
+   `find_task_by_vpid(pid)`，仅当 `task->mm` 等于会话 `mm` 时重写。覆盖
+   同线程组兄弟 tid 和 `CLONE_VM` 兄弟进程；外部 `mm` 保持 GUP 字节。
+   `find_task_by_vpid` 是可选的 kallsyms 命中；缺失时回退到旧的 tid/tgid
+   门控。该符号在 BTF 里把 `pid_t` 记为 typedef，因此直接按 kallsyms 地址
+   调用，不再做 BTF 形状校验；原型稳定为 `struct task_struct *(pid_t)`。
+4. **夹具同步。** `ud_observe_live()` 仍用 65 项；新增一次 1024 项
+   （`DOBBY_DETECT_MANY`）、兄弟 tid（`DOBBY_DETECT_SIBLING`）和四项不同
+   边界（`DOBBY_DETECT_SPLIT`）的逐字节对照。`crc-ap-all` 的内核期望改为
+   镜像，重注册检查改为 `UD_NO_MATCH`。
+
+被否决的方案：
+
+- **只把 64 改成 256/1024 的固定栈数组。** 1024 项两侧各 16 KiB，超过 KPM
+  栈预算；256 仍留下可探测的 257 项缺口。
+- **在 after hook 里 `kvmalloc` 复制 iovec。** 把分配失败、睡眠和新的内存
+  压力带进 syscall 返回路径；读取路径应保持无分配。
+- **按 `/proc/<pid>/task` 反查兄弟线程。** 需要文件系统和权限，慢且可观察。
+
+### 19.3 为什么没有引入新的可观察量
+
+- ABI v8、`ctl0`、`hooks=0x7f`、计数器与返回码不变；没有新增 hook、文件、
+  线程、定时器或状态位。
+- 1024 是 Linux 自己的 `UIO_MAXIOV`；合法调用在 1–1024 范围内都走同一条
+  路径，超过 1024 的调用根本不会成功。
+- 65 项技巧只读取首项，没有把 64 个零长度头复制进内核；读取循环的额外工作
+  与实际承载字节的 iovec 数成正比。
+- 兄弟 tid 查询只在 pid 非自身时发生；外部 `mm` 的 `process_vm_readv` 数据
+  不变，只多一次任务查找。
+- 夹具的 `MATCH`/CRC 期望调整属于测试代码；模块输出面没有新增字段。
+
+### 19.4 真机验证
+
+Pixel 6，Android 16，`6.1.134-android14-11`，4 KiB，KernelPatch `0xc00`。
+构建 `urov-y.kpm 8d0eb588...`、`urovdetect.apk a4db1178...`。
+
+| 矩阵 | 结果 | 目录 |
+| --- | --- | --- |
+| Dobby 48×10 | PASS；10 个活动进程各 `accepted_crc=48/48`，合计 480/480；`views=0/480`、`iov65` 全部等于文件、`iov1024_match=1`、`sibling_match=1`、`split_match=1`；`zero_match=0`、`cross_page=0`、bridge/NOP/间接 store 均 0 | [dobby-detect-20261107-234206](results/dobby-detect-20261107-234206/summary.json) |
+| CRC 5×1 | PASS，9 次运行；`crc-ap-all` 的 `direct=window=file`，`crc-ap` 的 `direct=0c7da8a0`、`window=f50bcaf6`，全部 `bridge=0/5` | [crc-20261107-234320](results/crc-20261107-234320/summary.json) |
+| 消除矩阵 3×1 | PASS，11 次运行；`w-active` 539 条断言，XZR `match=0`，桥/NOP/间接/跨页 store 均 0；`ELIM_TIMING mode=ap site_call_ns=285` | [eliminate-20261107-234340](results/eliminate-20261107-234340/summary.json) |
+| 多页 3×1 | PASS，5 次运行 | [multipage-20261107-234434](results/multipage-20261107-234434/summary.json) |
+
+所有矩阵结束后 `kpm list` 为空、boot ID 不变，增量内核日志未匹配崩溃、挂起
+或 BUG。
+
+### 19.5 残余
+
+1. 仍只接管同 `mm` 的 `process_vm_readv`；`/proc/self/mem`、ptrace、跨进程
+   读写仍看到真实字节。
+2. 兄弟 tid 路径依赖可选的 `find_task_by_vpid`；符号缺失时回退到 tid/tgid
+   门控，不阻止加载。
+3. 每次 EL0 读取仍一次同步异常；PTE 重装窗口、root 可见性、注册事务窗口、
+   桥的非硬件独占 store 仍在。
+4. `madvise` 撤销和 `mlock` 拒绝注册仍是既有会话控制，本轮未改。
+5. `caller_count > 0` 的窗口内/外读者差异仍是 API 语义。

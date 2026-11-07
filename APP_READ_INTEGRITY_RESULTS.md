@@ -2,6 +2,156 @@
 
 本文按最新复核在前排列。
 
+## 2.11.0 全 iovec 窗口、同 mm pid 解析与 1024 项边界
+
+2026-11-07 在 Pixel 6（Android 16，`6.1.134-android14-11`，4 KiB，KernelPatch
+`0xc00`）复核。检测、业务读者、1024 项读取、四项拆分读取和兄弟线程读取都在
+`untrusted_app` 中执行，`CapEff=0`、`Seccomp=2`、SELinux Enforcing。夹具使用
+认证请求建立会话并核对真值，检测函数只接收地址、读者和映射身份所需的参数。
+
+```text
+urov-y.kpm      8d0eb588010cc2bb8df5791c3f650e48cf6efcefe407689c40e7a73b4b3c9a20
+urovdetect.apk  a4db11783c8bc15d8274c4bdafad877079964f1d87c7664e4feb5db7260ce8fc
+```
+
+### 当前实现
+
+2.10.0 的 `process_vm_readv` after hook 在任一侧 `iovcnt > 64` 时直接返回。
+65 个本地 iovec 只给首项长度、其余长度为零时，内核仍只复制 1–64 字节；这条
+GUP 路径保持改码后的真实页，而 EL0 读者得到镜像，Dobby 活动阶段因此
+`MATCH=480/480`、`accepted_crc=0`。同一个 hook 还只接受调用者自己的 tid/tgid，
+同一 `mm` 的兄弟线程 tid 仍能看到真实字节。
+
+2.11.0 只改读取路径：
+
+- **完整 iovec 窗口。** `UY_VM_IOV_MAX` 提到 Linux 的 `UIO_MAXIOV`（1024）。
+  两个 1024 项数组放不进 KPM 栈，因此用 `uy_iov_load()` 逐项
+  `copy_from_user`，以 local/remote 两个游标按 syscall 返回值推进；零长度项
+  跳过，只访问承载字节的项。65 项技巧只读第一项，没有新增每样本成本。
+  `iovcnt > 1024` 的调用在进入 hook 前已被 Linux 以 `EINVAL` 拒绝。
+- **同 mm pid 解析。** pid 不是当前 tid/tgid 时，在 RCU 下用
+  `find_task_by_vpid()` 解析任务，仅当 `task->mm` 等于会话 `mm` 才重写。覆盖
+  同线程组兄弟 tid 和 `CLONE_VM` 兄弟进程；真正的外部 `mm` 保留 GUP 字节。
+  符号缺失时回退到旧的 tid/tgid 门控。
+- **不新增 ABI。** ABI v8、`ctl0`、`hooks=0x7f`、计数器语义不变；没有新增
+  syscall hook、文件、线程、定时器或返回码。`find_task_by_vpid` 只在 pid
+  非自身时查询。
+
+### 夹具与期望
+
+- `ud_observe_live()` 仍用 65 项本地 iovec；新增一次 1024 项读取
+  （`DOBBY_DETECT_MANY`）、兄弟 tid 读取（`DOBBY_DETECT_SIBLING`）和四项不同
+  边界的拆分读取（`DOBBY_DETECT_SPLIT`），三者都与实际 EL0 读者逐字节比较。
+- `crc-ap-all` 的内核视图期望从“改码页”改为“镜像页”；重注册检查也要求
+  `UD_NO_MATCH` 且用户/内核都是原始页。这是夹具对已消除特征的同步调整，不是
+  模块新增的输出。
+
+### 真机结果
+
+| 矩阵 | 结果 | 目录 |
+| --- | --- | --- |
+| Dobby 48×10 | PASS；10 个活动进程各 `accepted_crc=48/48`，合计 480/480；`views=0/480`、`iov65` 全部等于文件、`iov1024_match=1`、`sibling_match=1`、`split_match=1`；`zero_match=0`、`cross_page=0`、bridge/NOP/间接 store 均 0 | [dobby-detect-20261107-234206](results/dobby-detect-20261107-234206/summary.json) |
+| CRC 5×1 | PASS，9 次运行；`crc-ap-all` 的 `direct=window=file`，`crc-ap` 的 `direct=0c7da8a0`、`window=f50bcaf6`，全部 `bridge=0/5` | [crc-20261107-234320](results/crc-20261107-234320/summary.json) |
+| 消除矩阵 3×1 | PASS，11 次运行；`w-active` 539 条断言，XZR `match=0`，桥/NOP/间接/跨页 store 均 0；`ELIM_TIMING mode=ap site_call_ns=285` | [eliminate-20261107-234340](results/eliminate-20261107-234340/summary.json) |
+| 多页 3×1 | PASS，5 次运行（`mp-multi`/`mp-ld1`/`mp-cross`/`mp-srcpage`/`mp-audit`） | [multipage-20261107-234434](results/multipage-20261107-234434/summary.json) |
+
+测试前后 boot ID 一致，`kpm list` 为空，增量内核日志未匹配崩溃、挂起或 BUG。
+所有矩阵结束后模块未常驻。
+
+### 残余（2.11.0）
+
+1. 仍只接管同 `mm` 的 `process_vm_readv`；`/proc/self/mem`、ptrace 和跨进程
+   `process_vm_readv`/`process_vm_writev` 仍看到真实字节。生产 CRC 若走这些
+   路径，需要各自的控制面。
+2. `madvise` 撤销会话、`mlock` 拒绝注册、root 可见性、PTE 重装窗口、每次读取
+   一次同步异常、以及桥的非硬件独占 store 仍在；这些是会话与体系结构的既有
+   边界，本轮未改。
+3. 兄弟 tid 路径依赖可选的 `find_task_by_vpid` 和 RCU 读取；符号缺失时回退到
+   tid/tgid 门控，不阻止模块加载。
+4. 1024 是 Linux `UIO_MAXIOV`；不存在低于它的计数阈值可用来区分 hook 前后。
+5. `caller_count > 0` 的窗口内/外读者差异仍是有意保留的 API 语义；
+   `process_vm_readv` 按 syscall 的帧链选择镜像或快照。
+
+### 复跑
+
+使用与本节 SHA-256 一致的 `out/urov-y.kpm` 和
+`apps/urov-detect/out/urovdetect.apk`。
+
+```powershell
+./kpms/urov-lab/build.ps1
+./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --dobby-detection --repeats 48 --cycles 10
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --skip-install --repeats 5 --cycles 1
+python ./kpms/urov-lab/tools/run_elimination_device.py --serial $Serial --key $KpKey --skip-install --skip-x-control --repeats 3 --cycles 1
+python ./kpms/urov-lab/tools/run_multipage_device.py --serial $Serial --key $KpKey --skip-install --repeats 3 --cycles 1
+```
+
+## 2.10.0 普通 App 的 65 项向量读、会话撤销和锁页防护（历史）
+
+2026-11-07 在 Pixel 6（Android 16，`6.1.134-android14-11`，4 KiB，
+KernelPatch `0xc00`）复核。KPM 与下一节是同一构建，本文档顶部 2.11.0 是后续
+消除版本。检测、业务读者、`madvise` 与 `mlock` 均在 `untrusted_app` 中执行，
+`CapEff=0`、`Seccomp=2`、SELinux Enforcing。
+
+```text
+urov-y.kpm      8e3ad63b39d938a78dd851b54abd79cad3892e4ecbd234d8f45f058afc943110
+urovdetect.apk  9aec504b82a599f462dd3d9259476fcc8952f66acf6abdeeb7b61cd1d7da5867
+```
+
+### 当前实现（2.10.0）
+
+`REGISTER` 校验由装载密钥派生的 `prctl` 选择器和请求 MAC，将单一活动会话绑定到
+调用者的 `mm`。它为登记的 RX 页保存注册快照，再把调用者提供的字节合入镜像。
+故障处理器按 `x30` 或最多 16 层 `x29` 帧链选择视图。窗口内读镜像，窗口外读
+注册快照，`caller_count=0` 时全部读镜像。模拟器提交读值、地址回写和 PC。
+缺页回调重装活动的页陷阱，重叠映射操作先恢复原指令或页权限。
+
+| 模式 | 接管点 | 普通 App 可核对的证据 |
+| --- | --- | --- |
+| `SITE_BRK` | 读取指令 COW 后换成 `BRK` | 实际业务读者与内核视图的字节差异，已知读取点指令字与发布 ELF 的差异 |
+| `PAGE_UXN` | 读取指令所在页置 UXN，由 EL0 取指异常进入模拟 | 实际业务读者与内核视图的字节差异，同页自有 canary 的配对取指 |
+| `PAGE_AP` | 清目标页叶 PTE 的 AP[1]，数据读触发权限异常，取指仍来自实际代码 | 业务读者与 65 项向量读的字节差异，非零 XZR 独占序列可佐证等值覆盖 |
+
+### 检测
+
+**主信号是稳定的字节差异。** 2.10.0 的 `process_vm_readv` after hook 对本进程的
+常规读取缓冲区重写镜像或快照，但任一侧向量数大于 64 时直接返回。65 个本地
+`iovec` 中只给首项设置长度，其余置零，实际仍只读目标的 1–64 字节。Linux 的
+向量上限是 1024，原调用通过 GUP 取得实际页。先用 65 项读一次，再走两次真实
+业务读路径，最后用 65 项重读。两路各自稳定、RX 映射与后备文件身份稳定且字节
+不同才报告 `MATCH`。短读、失败、文件偏移错配和不稳定样本报告 `UNKNOWN`。
+
+**AP 等值覆盖用独占状态佐证。** 在非零的线程私有栈槽上执行
+`LDXR XZR; LDRB; STXR Ws, XZR`。普通路径的 `STXR` 可成功并写零。AP 数据异常
+返回后独占预约丢失，2.10.0 的桥只允许原值已经是零的 XZR 写回，所以目标组
+失败并保留非零值。每次以同文件、同偏移的独立 RX 别名做前后对照。
+
+### 处置与业务接入
+
+- **阻止伪值进入判定。** 在 worker 上低频检查生命周期固定的自有 RX 页，每次取
+  一页内最多 64 字节，按字节核对发布基准。`MATCH` 和 `UNKNOWN` 时不采信业务
+  读者的完整性结果。
+- **终止已确认的覆盖。** 在受控、页对齐的自有页调用
+  `madvise(page, page_size, -1)`。Y 在 Linux 校验 advice 之前恢复整个重叠会话，
+  Linux 随后返回 `EINVAL`。
+- **阻止选定页重新注册。** 在受控 RX 页首次注册前调用 `mlock(page, page_size)`。
+  锁成功后针对该页的 `REGISTER` 会返回 `EINVAL`。
+
+### 真机结果（2.10.0）
+
+Dobby 共 13 个进程，10 个活动进程每阶段 48 次。`1 iovec` 列与 EL0 读值一致。
+
+| 阶段 | 样本 | 执行返回 | 1 iovec CRC32 | 65 iovec CRC32 | `MATCH` | 采信 CRC |
+| --- | ---: | --- | --- | --- | ---: | ---: |
+| 原始代码 | 624 | `0x1234` | `96964c4f` | `96964c4f` | 0 | 624 |
+| 仅 Dobby 改码 | 624 | `0x1235` | `0e1aba24` | `0e1aba24` | 0 | 0 |
+| 改码 + `PAGE_AP` 全读者覆盖 | 480 | `0x1235` | `96964c4f` | `0e1aba24` | **480** | **0** |
+| 撤销覆盖后 | 480 | `0x1235` | `0e1aba24` | `0e1aba24` | 0 | 0 |
+
+上表的 65 项差异就是 2.11.0 消除的现役特征；2.11.0 之后同阶段
+`views=0/480`、`accepted_crc=48/48`。单页锁定拒绝 18/18 次有效注册，重叠的
+无效 `madvise` 10/10 次恢复，非重叠对照 10/10 次保持活动。
+
 ## 2.10.0 同进程内核辅助读与 XZR 独占序列
 
 2026-11-07，在 Pixel 6（Android 16，`6.1.134-android14-11`，4 KiB，

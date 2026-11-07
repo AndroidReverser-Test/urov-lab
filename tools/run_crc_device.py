@@ -125,6 +125,18 @@ def main():
                           re.findall(r"DOBBY_DETECT_LIVE [^\n]+", logs)]
             if [view["stage"] for view in live_views] != expected:
                 raise IncompleteLog(f"{label}: missing live view records in {log_path.name}")
+            many_views = [dict(KV.findall(line)) for line in
+                          re.findall(r"DOBBY_DETECT_MANY [^\n]+", logs)]
+            if [view["stage"] for view in many_views] != expected:
+                raise IncompleteLog(f"{label}: missing 1024-iovec records in {log_path.name}")
+            sibling_views = [dict(KV.findall(line)) for line in
+                             re.findall(r"DOBBY_DETECT_SIBLING [^\n]+", logs)]
+            if [view["stage"] for view in sibling_views] != expected:
+                raise IncompleteLog(f"{label}: missing sibling-tid records in {log_path.name}")
+            split_views = [dict(KV.findall(line)) for line in
+                           re.findall(r"DOBBY_DETECT_SPLIT [^\n]+", logs)]
+            if [view["stage"] for view in split_views] != expected:
+                raise IncompleteLog(f"{label}: missing split-iovec records in {log_path.name}")
         if dobby and active and ("DOBBY_DETECT_RESTORE " not in logs or
                                  "DOBBY_DETECT_GUARD " not in logs):
             raise IncompleteLog(f"{label}: missing recovery or guard records in {log_path.name}")
@@ -144,14 +156,23 @@ def main():
         report["runs"].append({"label": label, "mode": mode, "uid": int(uid[1]), "pid": pid,
                                "log": log_path.name, "result": result[0], "stages": stages,
                                "details": re.findall(r"(?:CRC_(?:REJECT|PRIVATE|REMAP|MAP|OVERLAY|SITE|"
-                                                     r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC|BIG|BIG_OVERLAY|BIG_VMA|MIXED|SET|RESTORE)"
-                                                     r"|ELIM_EXEC|DOBBY_DETECT_(?:STATUS|RESTORE|GUARD|BUSINESS)) [^\n]+", logs)})
+                                                     r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC|BIG|BIG_OVERLAY|BIG_VMA|MIXED|"
+                                                     r"SET|RESTORE|REREGISTER|LOCK_GUARD)"
+                                                     r"|ELIM_EXEC|DOBBY_DETECT_(?:STATUS|RESTORE|GUARD|BUSINESS|MANY|SIBLING|SPLIT)) [^\n]+", logs)})
         if dobby:
             report["runs"][-1]["live_views"] = live_views
+            report["runs"][-1]["many_views"] = many_views
+            report["runs"][-1]["sibling_views"] = sibling_views
+            report["runs"][-1]["split_views"] = split_views
             last = stages[2] if active else stages[-1]
             live = live_views[2] if active else live_views[-1]
+            many = many_views[2] if active else many_views[-1]
+            sibling = sibling_views[2] if active else sibling_views[-1]
+            split = split_views[2] if active else split_views[-1]
             print(f"{label} PASS execute={last['execute']} file={last['file']} live={last['live']} "
-                  f"kernel={live['kernel_crc']} views={live['match']}/{live['n']} "
+                  f"iov1={live['single_crc']} iov65={live['kernel_crc']} "
+                  f"iov1024_match={many['match']} sibling_match={sibling['match']} "
+                  f"split_match={split['match']} views={live['match']}/{live['n']} "
                   f"xzr={live['zero_match']}/{live['n']} cross_page={last['match']}/{last['n']} "
                   f"accepted_crc={last['accepted_crc']}", flush=True)
             return

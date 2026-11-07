@@ -1,0 +1,64 @@
+[ 1314.259920] type=1400 audit(1759558535.352:356): avc:  denied  { getopt } for  comm="binder:1297_3" scontext=u:r:system_server:s0 tcontext=u:r:shell:s0 tclass=unix_stream_socket permissive=0
+[ 1316.278940] [06:15:37.373929][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 1317.170242] logbuffer_pcie1: [ 1798] OC Initial Status check: 0x5FC(0xf0)
+[ 1317.170458] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 1317.203820] logbuffer_pcie1: [ 1799] D state: 0, LTSSM: 0
+[ 1317.204158] logbuffer_pcie1: [ 1800] L0(0x11)
+[ 1317.207964] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 1317.208419] [06:15:38.303412][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 1318.177974] [06:15:39.272964][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 1318.343294] logbuffer_pcie1: [ 1801] OC Initial Status check: 0x5FC(0xf0)
+[ 1318.343471] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 1318.376103] logbuffer_pcie1: [ 1802] D state: 0, LTSSM: 0
+[ 1318.376421] logbuffer_pcie1: [ 1803] L0(0x11)
+[ 1318.380112] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 1318.380520] [06:15:39.475514][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 1319.031134] [06:15:40.126131][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 1319.429211] logbuffer_pcie1: [ 1804] OC Initial Status check: 0x5FC(0xf0)
+[ 1319.429573] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 1319.462957] logbuffer_pcie1: [ 1805] D state: 0, LTSSM: 0
+[ 1319.463290] logbuffer_pcie1: [ 1806] L0(0x11)
+[ 1319.466983] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 1319.467399] [06:15:40.562392][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 1320.747828] max1720x i2c-max1720x_fg: 0x524D 06:3C02 FF:3EB8 1F:04DA 05:04E6 10:0820 35:082B 23:07B1 4C:052A 4D:0540 45:00E2 46:16F3 0C:0000 3D:1008 28:247E 39:0C02 29:C623 0F:04DA 4A:04DF 09:C8E2 0A:02AB 38:0F20 17:3231 CC:2486000
+[ 1320.748857] google,charger google,charger: chg_psy_changed name=maxfg evt=0
+[ 1320.784662] healthd: battery l=62 v=4017 t=34.8 h=2 st=2 c=213437 fc=3938000 cc=783 chg=u
+[ 1322.297856] [06:15:43.392846][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 1322.469025] logbuffer_pcie1: [ 1807] OC Initial Status check: 0x5FC(0xf0)
+[ 1322.469382] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 1322.502271] logbuffer_pcie1: [ 1808] D state: 0, LTSSM: 0
+[ 1322.502591] logbuffer_pcie1: [ 1809] L0(0x11)
+[ 1322.507774] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 1322.508222] [06:15:43.603215][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 1324.464471] servicemanager: Caller(pid=1297,uid=1000,sid=u:r:system_server:s0) Since 'artd' could not be found trying to start it as a lazy AIDL service. (if it's not configured to be a lazy service, it may be stuck starting or still starting).
+[ 1324.467164] init: starting service 'artd'...
+[ 1324.477376] init: Activation of cgroup controller +memory failed in path /sys/fs/cgroup/system/uid_1082: Invalid argument
+[ 1324.482372] init: ... started service 'artd' has pid 18399
+[ 1324.482427] init: Control message: Processed ctl.interface_start for 'aidl/artd' from pid: 539 (/system/bin/servicemanager)
+[ 1324.499618] libbinder.BpBinder: onLastStrongRef automatically unlinking death recipients: 
+[ 1324.501457] servicemanager: Notifying artd they do (previously: don't) have clients when we now have a record of a client
+[ 1324.807189] logd: start watching /data/system/packages.list ...
+[ 1324.819355] logd: ReadPackageList, total packages: 292
+[ 1324.882648] type=1400 audit(1759558545.976:357): avc:  denied  { getopt } for  comm="binder:1297_3" scontext=u:r:system_server:s0 tcontext=u:r:shell:s0 tclass=unix_stream_socket permissive=0
+[ 1324.882796] type=1400 audit(1759558545.976:358): avc:  denied  { getopt } for  comm="binder:1297_3" scontext=u:r:system_server:s0 tcontext=u:r:shell:s0 tclass=unix_stream_socket permissive=0
+[ 1324.882867] type=1400 audit(1759558545.976:359): avc:  denied  { getopt } for  comm="binder:1297_3" scontext=u:r:system_server:s0 tcontext=u:r:shell:s0 tclass=unix_stream_socket permissive=0
+[ 1325.012961] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 1325.134396] servicemanager: Caller(pid=18456,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 1325.134978] servicemanager: Caller(pid=18456,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 1325.135159] servicemanager: Caller(pid=18456,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found mapper/pixel in device VINTF manifest.
+[ 1325.249771] logd: logdr: UID=2000 GID=2000 PID=18516 n tail=0 logMask=99 pid=18456 start=0ns deadline=0ns
+[ 1325.509926] logd: logdr: UID=2000 GID=2000 PID=18549 n tail=0 logMask=99 pid=18456 start=0ns deadline=0ns
+[ 1325.777413] logd: logdr: UID=2000 GID=2000 PID=18553 n tail=0 logMask=99 pid=18456 start=0ns deadline=0ns
+[ 1325.987645] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 1326.068689] logd: logdr: UID=2000 GID=2000 PID=18557 n tail=0 logMask=99 pid=18456 start=0ns deadline=0ns
+[ 1326.084518] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 1326.195399] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 1326.294205] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 1326.353425] logd: logdr: UID=2000 GID=2000 PID=18562 n tail=0 logMask=99 pid=18456 start=0ns deadline=0ns
+[ 1326.396555] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 1326.510133] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 1326.654261] logd: logdr: UID=2000 GID=2000 PID=18566 n tail=0 logMask=99 pid=18456 start=0ns deadline=0ns
+[ 1326.716471] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 1326.815157] type=1400 audit(1759558547.908:360): avc:  denied  { search } for  comm="HwBinder:612_1" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 1326.815292] type=1400 audit(1759558547.908:361): avc:  denied  { search } for  comm="HwBinder:612_1" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 1326.889062] [+] KP I commit_common_su: pid: 18579, tgid: 18579, to_uid: 0, sctx: , via_hook: 1

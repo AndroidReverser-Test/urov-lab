@@ -1,6 +1,15 @@
 # UROV-LAB 当前进度
 
-更新于 2026-11-05（Asia/Shanghai）。
+更新于 2026-11-07（Asia/Shanghai）。
+
+> 2026-11-07 补充：`urov-y` 2.10.0 用同进程 `process_vm_readv` after hook 补齐
+> GUP 读路径，但任一侧 iovec 数超过 64 时直接返回。2.11.0 把计数上限对齐
+> `UIO_MAXIOV=1024`，用逐项游标覆盖全部合法 iovec；pid 不是自身 tid/tgid 时
+> 在 RCU 下用 `find_task_by_vpid` 比较 `task->mm`，覆盖同 mm 兄弟 tid。
+> Dobby 48×10 活动阶段 `views=0/480`、`accepted_crc=48/48`（合计 480）、
+> `iov1024_match=1`、`sibling_match=1`、`split_match=1`。见
+> [ELIMINATION_DESIGN.md §19](ELIMINATION_DESIGN.md#19-第十一轮完整-iovec-窗口与同-mm-pid-解析)
+> 与 [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.11.0 节。
 
 > 2026-11-07：`urov-y` 2.8.0 移除 `SRC_FILE`，所有页镜像统一由 `SRC_USER`
 > 提供（每页一次最多一页）；Dobby/多页/CRC/消除矩阵已复跑。2.7.0 的整页直接

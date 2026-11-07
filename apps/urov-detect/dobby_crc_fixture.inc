@@ -3,6 +3,7 @@
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
+#include <sys/uio.h>
 
 /* Keep the patch and AP trap on a dedicated ELF text page on 4 KiB and
  * 16 KiB kernels. The payload is eight instructions (32 bytes). */
@@ -208,20 +209,12 @@ static void *dobby_existing_registrant(void *arg)
     return NULL;
 }
 
-static bool dobby_restore_and_block(const struct uy_ctx *ctx, const uint8_t *text,
-                                    const void *reference, size_t page_size)
+static bool dobby_restore(const struct uy_ctx *ctx, const uint8_t *text,
+                          const void *reference, size_t page_size)
 {
-    struct dobby_registration_retry retry = { .ctx = ctx, .text = text, .error = -1 };
     struct urov_y_request status = {0};
     struct ud_mapping before, after;
-    pthread_t thread;
-    int barrier_error = pthread_barrier_init(&retry.start, NULL, 2);
-    int thread_error = barrier_error ? barrier_error :
-        pthread_create(&thread, NULL, dobby_existing_registrant, &retry);
 
-    int nnp_before = prctl(PR_GET_NO_NEW_PRIVS, 0UL, 0UL, 0UL, 0UL);
-    int filter_error = dobby_block_registration();
-    int nnp_after = prctl(PR_GET_NO_NEW_PRIVS, 0UL, 0UL, 0UL, 0UL);
     int outside_error = uy_invalid_advice(reference, page_size);
     bool still_active = !uy_status(ctx, &status) && status.state == UROV_Y_ACTIVE;
 
@@ -238,8 +231,23 @@ static bool dobby_restore_and_block(const struct uy_ctx *ctx, const uint8_t *tex
     LOG("DOBBY_DETECT_RESTORE outside_errno=%d outside_active=%d madvise_errno=%d "
         "inactive=%d vma_preserved=%d", outside_error, still_active, restore_error, inactive,
         preserved);
+    return inactive;
+}
 
-    retry.attempt = !filter_error && inactive;
+static void dobby_check_registration_guard(const struct uy_ctx *ctx, const uint8_t *text)
+{
+    struct dobby_registration_retry retry = { .ctx = ctx, .text = text, .error = -1 };
+    struct urov_y_request status = {0};
+    pthread_t thread;
+    int barrier_error = pthread_barrier_init(&retry.start, NULL, 2);
+    int thread_error = barrier_error ? barrier_error :
+        pthread_create(&thread, NULL, dobby_existing_registrant, &retry);
+
+    int nnp_before = prctl(PR_GET_NO_NEW_PRIVS, 0UL, 0UL, 0UL, 0UL);
+    int filter_error = dobby_block_registration();
+    int nnp_after = prctl(PR_GET_NO_NEW_PRIVS, 0UL, 0UL, 0UL, 0UL);
+
+    retry.attempt = !filter_error;
     int local_error = retry.attempt ? dobby_retry_register(ctx, text) : -1;
     if (!thread_error) {
         pthread_barrier_wait(&retry.start);
@@ -252,13 +260,12 @@ static bool dobby_restore_and_block(const struct uy_ctx *ctx, const uint8_t *tex
     LOG("DOBBY_DETECT_GUARD filter_errno=%d thread_errno=%d register_errno=%d "
         "existing_thread_errno=%d inactive=%d nnp_before=%d nnp_after=%d",
         filter_error, thread_error, local_error, retry.error, idle, nnp_before, nnp_after);
-    return idle;
 }
 
 /* Sample an unchanged byte outside the Dobby patch on the same target page.
  * The observer gets only an address, a reference mapping and a file offset. */
 static void dobby_detection_stage(const char *name, const uint8_t *text,
-                                  const struct page *reference, int repeats,
+                                  const struct page *reference, pid_t sibling, int repeats,
                                   const uint8_t file[DOBBY_CRC_BYTES], uint32_t expected_return,
                                   bool expect_crc_pass, enum ud_verdict expected_live)
 {
@@ -279,17 +286,78 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
     unsigned zero_match = 0, zero_clean = 0, zero_unknown = 0;
     uint64_t total_ns = 0, max_ns = 0;
     uint64_t live_total_ns = 0, live_max_ns = 0;
-    uint32_t live_crc = 0, kernel_crc = 0, returned = 0;
+    uint32_t live_crc = 0, kernel_crc = 0, single_crc = 0, returned = 0;
+    uint8_t many_bytes[DOBBY_CRC_BYTES] = {0};
+    uint8_t scalar_bytes[DOBBY_CRC_BYTES] = {0};
+    struct iovec many_local[1024] = {{
+        .iov_base = many_bytes, .iov_len = sizeof(many_bytes)
+    }};
+    struct iovec many_remote = { .iov_base = (void *)text, .iov_len = sizeof(many_bytes) };
+
+    /* The largest iovec count Linux accepts: one byte-carrying entry followed
+     * by zero-length entries.  This is the 1024 boundary of the same read. */
+    copy_scalar(scalar_bytes, text, sizeof(scalar_bytes));
+    errno = 0;
+    ssize_t many_got = process_vm_readv(getpid(), many_local, 1024, &many_remote, 1, 0);
+    REQUIRE(many_got == (ssize_t)sizeof(many_bytes) &&
+            !memcmp(many_bytes, scalar_bytes, sizeof(many_bytes)),
+            "Dobby %s 1024 iovec got=%zd errno=%d", name, many_got, errno);
+    LOG("DOBBY_DETECT_MANY stage=%s n=1024 got=%zd match=%u errno=%d",
+        name, many_got, !memcmp(many_bytes, scalar_bytes, sizeof(many_bytes)), errno);
+
+    /* A pid that names another thread of this mm must follow the same overlay
+     * as the caller's own tgid.  The business thread is alive for every stage. */
+    uint8_t sibling_bytes[DOBBY_CRC_BYTES] = {0};
+    struct iovec sibling_local = { .iov_base = sibling_bytes, .iov_len = sizeof(sibling_bytes) };
+    struct iovec sibling_remote = { .iov_base = (void *)text, .iov_len = sizeof(sibling_bytes) };
+    errno = 0;
+    ssize_t sibling_got = process_vm_readv(sibling, &sibling_local, 1, &sibling_remote, 1, 0);
+    REQUIRE(sibling_got == (ssize_t)sizeof(sibling_bytes) &&
+            !memcmp(sibling_bytes, scalar_bytes, sizeof(sibling_bytes)),
+            "Dobby %s sibling tid=%d got=%zd errno=%d", name, sibling, sibling_got, errno);
+    LOG("DOBBY_DETECT_SIBLING stage=%s tid=%d got=%zd match=%u errno=%d",
+        name, sibling, sibling_got, !memcmp(sibling_bytes, scalar_bytes, sizeof(sibling_bytes)),
+        errno);
+
+    /* Split the same 32 bytes across four local and four remote iovecs with
+     * different boundaries, so the module's streaming cursor must advance on
+     * both sides and preserve every offset. */
+    uint8_t split_bytes[4][8] = {{0}};
+    struct iovec split_local[4] = {
+        { .iov_base = split_bytes[0], .iov_len = 8 },
+        { .iov_base = split_bytes[1], .iov_len = 8 },
+        { .iov_base = split_bytes[2], .iov_len = 8 },
+        { .iov_base = split_bytes[3], .iov_len = 8 },
+    };
+    struct iovec split_remote[4] = {
+        { .iov_base = (void *)text, .iov_len = 4 },
+        { .iov_base = (void *)(text + 4), .iov_len = 12 },
+        { .iov_base = (void *)(text + 16), .iov_len = 8 },
+        { .iov_base = (void *)(text + 24), .iov_len = 8 },
+    };
+    errno = 0;
+    ssize_t split_got = process_vm_readv(getpid(), split_local, 4, split_remote, 4, 0);
+    REQUIRE(split_got == (ssize_t)sizeof(split_bytes) &&
+            !memcmp(split_bytes, scalar_bytes, sizeof(split_bytes)),
+            "Dobby %s split iovec got=%zd errno=%d", name, split_got, errno);
+    LOG("DOBBY_DETECT_SPLIT stage=%s got=%zd match=%u errno=%d",
+        name, split_got, !memcmp(split_bytes, scalar_bytes, sizeof(split_bytes)), errno);
 
     ++g_cases;
     for (int i = 0; i < repeats; ++i) {
         struct ud_live_observation live;
         struct ud_exclusive_observation adjacent, spaced, zero;
         struct ud_store_observation bridge, nop, indirect, cross_page;
+        uint8_t single[DOBBY_CRC_BYTES] = {0};
+        struct iovec local = { .iov_base = single, .iov_len = sizeof(single) };
+        struct iovec remote = { .iov_base = (void *)text, .iov_len = sizeof(single) };
         errno = EDOM;
         ud_observe_live(text, DOBBY_CRC_BYTES, reference->fd, text_offset, copy_scalar, &live);
         REQUIRE(live.verdict == expected_live, "Dobby %s live views=%d error=%d", name,
                 live.verdict, live.error);
+        REQUIRE(process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == (ssize_t)sizeof(single) &&
+                !memcmp(single, live.user_bytes, sizeof(single)), "Dobby %s single iovec", name);
+        single_crc = (uint32_t)crc32(0, single, sizeof(single));
         live_match += live.verdict == UD_MATCH;
         live_unknown += live.verdict == UD_UNKNOWN;
         bool file_ok = live.verdict != UD_UNKNOWN &&
@@ -354,8 +422,7 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
             name, ind_match, ind_successes);
     REQUIRE(!unknown && !matched,
             "Dobby %s read path match=%u unknown=%u", name, matched, unknown);
-    REQUIRE(expected_live == UD_MATCH ? zero_match > 0 && !zero_clean :
-            zero_clean > 0 && !zero_match, "Dobby %s XZR match=%u clean=%u unknown=%u",
+    REQUIRE(zero_clean > 0 && !zero_match, "Dobby %s XZR match=%u clean=%u unknown=%u",
             name, zero_match, zero_clean, zero_unknown);
     REQUIRE(accepted_crc == (expect_crc_pass && expected_live == UD_NO_MATCH ? (unsigned)repeats : 0),
             "Dobby %s accepted_crc=%u", name, accepted_crc);
@@ -373,8 +440,8 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
         (unsigned long long)(total_ns / repeats),
         (unsigned long long)max_ns);
     LOG("DOBBY_DETECT_LIVE stage=%s n=%d match=%u unknown=%u kernel_file=%u kernel_crc=%08x "
-        "zero_match=%u zero_clean=%u zero_unknown=%u mean_ns=%llu max_ns=%llu",
-        name, repeats, live_match, live_unknown, kernel_file, kernel_crc,
+        "single_crc=%08x zero_match=%u zero_clean=%u zero_unknown=%u mean_ns=%llu max_ns=%llu",
+        name, repeats, live_match, live_unknown, kernel_file, kernel_crc, single_crc,
         zero_match, zero_clean, zero_unknown,
         (unsigned long long)(live_total_ns / repeats), (unsigned long long)live_max_ns);
 }
@@ -400,14 +467,18 @@ static void dobby_detection_fixture(const char *key, int repeats)
     }
     have_thread = pthread_create(&thread, NULL, business_main, &business) == 0;
     REQUIRE(have_thread, "Dobby detection business thread");
-    dobby_detection_stage("clean", text, &reference, repeats, file, DOBBY_ORIGINAL, true, UD_NO_MATCH);
+    pid_t sibling = have_thread ? pthread_gettid_np(thread) : 0;
+    REQUIRE(sibling > 0, "Dobby detection business tid");
+    dobby_detection_stage("clean", text, &reference, sibling, repeats, file, DOBBY_ORIGINAL, true,
+                          UD_NO_MATCH);
 
     dobby_setup_error = dobby_crc_setup((void *)text, (size_t)page_size);
     if (dobby_setup_error) {
         REQUIRE(0, "Dobby detection setup errno=%d", dobby_setup_error);
         goto close_reference;
     }
-    dobby_detection_stage("patch_only", text, &reference, repeats, file, DOBBY_HOOKED, false, UD_NO_MATCH);
+    dobby_detection_stage("patch_only", text, &reference, sibling, repeats, file, DOBBY_HOOKED,
+                          false, UD_NO_MATCH);
     struct ud_mapping map;
     REQUIRE(!madvise((void *)text, (size_t)page_size, MADV_RANDOM) &&
             uy_invalid_advice(text, (size_t)page_size) == EINVAL &&
@@ -426,12 +497,8 @@ static void dobby_detection_fixture(const char *key, int repeats)
     if (!error) LOG("DOBBY_ARM register_ns=%llu", (unsigned long long)arm_ns);
     if (!error) {
         struct urov_y_request status = {0};
-        /* 2.10.0: the same-mm process_vm_readv path is served the overlay, so
-         * the independent kernel view is no longer a differential.  The
-         * expected observation is the native one (NO_MATCH), and the accepted
-         * CRC is the positive control that the overlay is still live. */
-        dobby_detection_stage("overlay", text, &reference, repeats, file, DOBBY_HOOKED, true,
-                              UD_NO_MATCH);
+        dobby_detection_stage("overlay", text, &reference, sibling, repeats, file, DOBBY_HOOKED,
+                              true, UD_NO_MATCH);
         REQUIRE(!uy_status(&ctx, &status) && status.state == UROV_Y_ACTIVE && status.reserved == 1 &&
                 status.hits >= (uint64_t)repeats * DOBBY_CRC_BYTES && !status.failures,
                 "Dobby detection overlay hits=%llu failures=%llu",
@@ -439,14 +506,17 @@ static void dobby_detection_fixture(const char *key, int repeats)
         LOG("DOBBY_DETECT_STATUS hits=%llu failures=%llu",
             (unsigned long long)status.hits, (unsigned long long)status.failures);
 
-        if (dobby_restore_and_block(&ctx, text, reference.address, (size_t)page_size)) cleanup = false;
+        if (dobby_restore(&ctx, text, reference.address, (size_t)page_size)) cleanup = false;
     }
     if (cleanup && uy_deactivate(&ctx)) {
         REQUIRE(0, "Dobby detection DEACTIVATE errno=%d", errno);
         goto close_reference;
     }
-    if (!error)
-        dobby_detection_stage("deactivated", text, &reference, repeats, file, DOBBY_HOOKED, false, UD_NO_MATCH);
+    if (!error) {
+        dobby_detection_stage("deactivated", text, &reference, sibling, repeats, file, DOBBY_HOOKED,
+                              false, UD_NO_MATCH);
+        dobby_check_registration_guard(&ctx, text);
+    }
 
 close_reference:
     if (have_thread) {

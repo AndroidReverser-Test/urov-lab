@@ -1,0 +1,22 @@
+--------- beginning of main
+10-04 14:05:49.134 11215 11239 I urovdetect: CONTEXT pid=11215 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 14:05:49.134 11215 11239 I urovdetect: BEGIN mode=crc-ap-all repeats=5
+10-04 14:05:49.135 11215 11239 I urovdetect: CRC_FIXTURE dlopen=1 mode=crc-ap-all all_callers=1
+10-04 14:05:49.136 11215 11239 I urovdetect: CRC_QUERY authenticated=1 state=0
+10-04 14:05:49.210 11215 11239 I urovdetect: CRC_STAGE name=clean n=5 execute=1234 file=f50bcaf6 backing=f50bcaf6 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=5 bridge_unknown=0 kernel=f50bcaf6 direct_match=0 window_match=0 live_unknown=0
+10-04 14:05:49.210 11215 11239 I urovdetect: CRC_REMAP same_va=1 original_offset=159744 patched_offset=163840
+10-04 14:05:49.213 11215 11239 I urovdetect: CRC_MAP original_identity=-1 error=116
+10-04 14:05:49.273 11215 11239 I urovdetect: CRC_STAGE name=patch_only n=5 execute=1235 file=f50bcaf6 backing=0c7da8a0 direct=0c7da8a0 site=0c7da8a0 window=0c7da8a0 bridge_match=0 bridge_clean=5 bridge_unknown=0 kernel=0c7da8a0 direct_match=0 window_match=0 live_unknown=0
+10-04 14:05:49.397 11215 11239 I urovdetect: CRC_STAGE name=overlay n=5 execute=1235 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=5 bridge_unknown=0 kernel=f50bcaf6 direct_match=0 window_match=0 live_unknown=0
+10-04 14:05:49.397 11215 11239 I urovdetect: CRC_SITE file=39400000 live=39400000 differs=0
+10-04 14:05:49.412 11215 11239 I urovdetect: ELIM_EXEC name=crc_overlay n=5 expected=0 match=0 clean=4 unknown=1 accepted=448 failed=1 control_failed=0 total_ns=14156290 max_ns=3228393
+10-04 14:05:49.415 11215 11239 I urovdetect: CRC_CHANGED_BYTE probe=-1 error=11 completed=0
+10-04 14:05:49.415 11215 11239 I urovdetect: CRC_OVERLAY mode=3 generation=1 hits=461 replays=0 failures=0
+10-04 14:05:49.415 11215 11239 I urovdetect: CRC_RESTORE mode=3 madvise_errno=22 inactive=1
+10-04 14:05:49.472 11215 11239 I urovdetect: CRC_STAGE name=deactivated n=5 execute=1235 file=f50bcaf6 backing=0c7da8a0 direct=0c7da8a0 site=0c7da8a0 window=0c7da8a0 bridge_match=0 bridge_clean=5 bridge_unknown=0 kernel=0c7da8a0 direct_match=0 window_match=0 live_unknown=0
+10-04 14:05:49.474 11215 11239 I urovdetect: CRC_LOCK_GUARD name=shared_alias mode=3 all_callers=1 bytes=4096 lock_ns=7406 register_errno=22 inactive=1 rx=1 stable=5 n=5 unlock_errno=0
+10-04 14:05:49.543 11215 11239 I urovdetect: CRC_REREGISTER state=1 match=0
+10-04 14:05:49.543 11215 11239 I urovdetect: CRC_RESTORE mode=3 madvise_errno=22 inactive=1
+10-04 14:05:49.543 11215 11239 I urovdetect: CONTEXT pid=11215 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 14:05:49.543 11215 11239 I urovdetect: NATIVE_RESULT PASS cases=5 assertions=87 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0 mode=crc-ap-all
+10-04 14:05:49.547 11215 11215 I urovdetect: DETECT_RESULT PASS mode=crc-ap-all worker_ms=409 ui_ticks=133 ui_max_gap_ms=21 native=PASS cases=5 assertions=87 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0

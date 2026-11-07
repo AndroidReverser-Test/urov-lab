@@ -1,0 +1,9 @@
+--------- beginning of main
+10-04 14:19:02.932 22871 22895 I urovdetect: CONTEXT pid=22871 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 14:19:02.932 22871 22895 I urovdetect: BEGIN mode=mp-cross repeats=3
+10-04 14:19:02.933 22871 22895 I urovdetect: MP_QUERY caps=0x73f max_pages=682 page_shift=12 abi=8
+10-04 14:19:03.055 22871 22895 I urovdetect: MP_CROSS register=1 pages=2 generation=1
+10-04 14:19:03.055 22871 22895 I urovdetect: MP_CROSS_DONE reads=ldp_page1_page2/ld1_page1_page2/ld1_tail/uncovered_page0 n=3
+10-04 14:19:03.056 22871 22895 I urovdetect: CONTEXT pid=22871 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 14:19:03.056 22871 22895 I urovdetect: NATIVE_RESULT PASS cases=1 assertions=19 failures=0 mode=mp-cross
+10-04 14:19:03.285 22871 22871 I urovdetect: DETECT_RESULT PASS mode=mp-cross worker_ms=351 ui_ticks=128 ui_max_gap_ms=16 native=PASS cases=1 assertions=19 failures=0

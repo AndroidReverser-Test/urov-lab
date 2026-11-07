@@ -40,11 +40,14 @@ struct ud_live_observation {
 };
 
 /* Compare the actual reader with a kernel copy of this process's mapped page.
- * Enable only on Android profiles verified to allow process_vm_readv.
- * Retain the immutable RX mapping, fd and side-effect-free reader for the
- * call. Use a worker and sample at most 64 bytes within one page. MATCH
- * requires two stable but different views. UNKNOWN covers read errors and
- * unstable samples. Use the returned bytes only for MATCH or NO_MATCH.
+ * The kernel copy uses 65 local iovecs: a count above the legacy 64-entry
+ * module cap, and still one valid transfer because the remaining entries are
+ * zero length. Enable only on Android profiles verified to allow
+ * process_vm_readv. Retain the immutable RX mapping, fd and side-effect-free
+ * reader for the call. Use a worker and sample at most 64 bytes within one
+ * page. MATCH requires two stable but different views. UNKNOWN covers read
+ * errors and unstable samples. Use the returned bytes only for MATCH or
+ * NO_MATCH.
  */
 void ud_observe_live(const uint8_t *address, size_t size, int backing_fd, off_t offset,
                      ud_bytes_reader reader, struct ud_live_observation *out);
@@ -81,6 +84,13 @@ void ud_observe_spaced_exclusive(const void *address, const void *reference,
 void ud_observe_zero_exclusive(const void *address, const void *reference,
                                int backing_fd, off_t offset,
                                struct ud_exclusive_observation *out);
+
+/* Same controls as ud_observe_exclusive, with XZR and a nonzero private
+ * scratch word. Check the STXR status and the scratch value together.
+ * The UROV-Y 2.10.0 PAGE_AP bridge only emulates XZR stores to zero words. */
+void ud_observe_nonzero_exclusive(const void *address, const void *reference,
+                                  int backing_fd, off_t offset,
+                                  struct ud_exclusive_observation *out);
 
 /* Same retained RX mappings, offset and worker-thread requirements as above.
  * CLREX clears the reservation and a branch skips the LDXR next to the LDRB.
