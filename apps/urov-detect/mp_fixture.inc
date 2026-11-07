@@ -14,6 +14,7 @@
 static unsigned mp_page_size;
 
 #include <stddef.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 
 /* 24 contiguous pages for the multi-page case, one page for the structure
@@ -314,6 +315,150 @@ static void mp_multi_case(const struct uy_ctx *ctx, int repeats)
     REQUIRE(!mp_memcmp(mp_out, mp_original, total),
             "MP multi deactivation did not restore the pages");
     LOG("MP_MULTI_DONE pages=%u restored=1", MP_MULTI_PAGES);
+}
+
+/* ------------------------------------------------------ production reader */
+
+/* A process that is not dumpable cannot open /proc/self/mem; enable it for the
+ * length of one read and restore the previous value. */
+static int mp_mem_read(const void *at, uint8_t *out, size_t n)
+{
+    int saved = prctl(PR_GET_DUMPABLE, 0UL, 0UL, 0UL, 0UL);
+    int fd, error = 0;
+    size_t done = 0;
+
+    if (prctl(PR_SET_DUMPABLE, 1UL, 0UL, 0UL, 0UL)) return errno;
+    fd = open("/proc/self/mem", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        error = errno;
+    } else {
+        while (done < n) {
+            ssize_t got = pread(fd, out + done, n - done,
+                                (off_t)((uintptr_t)at + done));
+            if (got <= 0) {
+                error = got < 0 ? errno : EIO;
+                break;
+            }
+            done += (size_t)got;
+        }
+        close(fd);
+    }
+    (void)prctl(PR_SET_DUMPABLE, saved > 0 ? 1UL : 0UL, 0UL, 0UL, 0UL);
+    return error;
+}
+
+/* Production-style pass: a whole multi-page code segment registered with no
+ * caller window, then read back through every path an in-process CRC can use:
+ * scalar EL0 loads, libc memcpy, process_vm_readv, /proc/self/mem and a forked
+ * child.  All of them must observe the registered image. */
+static void mp_prod_case(const struct uy_ctx *ctx, int repeats)
+{
+    static struct uy_page_desc desc[MP_MULTI_PAGES];
+    static uint8_t out[MP_MULTI_PAGES * UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
+    struct urov_y_request q;
+    size_t total = (size_t)MP_MULTI_PAGES * mp_page_size;
+    uint32_t want, crc;
+    unsigned i, paths = 0;
+    int rc, active = 0, mem_error = 0, child_ok = 0, fatal = 0;
+
+    ++g_cases;
+    if (sysconf(_SC_PAGESIZE) != (long)mp_page_size ||
+        (uintptr_t)mp_multi_blob % mp_page_size ||
+        (uintptr_t)(mp_multi_blob_end - mp_multi_blob) < (uintptr_t)total) {
+        REQUIRE(0, "MP prod blob shape start=%p span=%lld",
+                mp_multi_blob, (long long)(mp_multi_blob_end - mp_multi_blob));
+        return;
+    }
+    mp_memcpy(mp_original, mp_multi_blob, total);
+    mp_pattern(mp_fake, total, 0x5c);
+    REQUIRE(mp_first_diff(mp_original, mp_fake, total) < total,
+            "MP prod fake image equals the target pages");
+    want = (uint32_t)crc32(0, mp_fake, total);
+    for (i = 0; i < MP_MULTI_PAGES; ++i) {
+        memset(&desc[i], 0, sizeof(desc[i]));
+        desc[i].base = (uintptr_t)mp_multi_blob + (size_t)i * mp_page_size;
+        desc[i].fake_addr = (uintptr_t)mp_fake + (size_t)i * mp_page_size;
+        desc[i].fake_off = 0;
+        desc[i].fake_len = mp_page_size;
+        desc[i].flags = UROV_Y_PAGE_SRC_USER;
+    }
+    rc = uy_register_pages(ctx, desc, MP_MULTI_PAGES, 0, 0, &q);
+    active = rc == 0;
+    REQUIRE(active && q.state == UROV_Y_ACTIVE && q.caller_count == 0 &&
+            q.page_count == MP_MULTI_PAGES,
+            "MP prod register rc=%d errno=%d state=%u callers=%u pages=%u",
+            rc, errno, q.state, q.caller_count, q.page_count);
+    if (!active) return;
+    LOG("MP_PROD pages=%u bytes=%zu image_crc=%08x", MP_MULTI_PAGES, total, want);
+
+    for (int r = 0; r < repeats && !fatal; ++r) {
+        /* 1. scalar EL0 loads, the common CRC loop shape */
+        memset(out, 0, total);
+        for (size_t k = 0; k < total; ++k) out[k] = mp_multi_blob[k];
+        crc = (uint32_t)crc32(0, out, total);
+        if (crc != want) {
+            REQUIRE(0, "MP prod scalar crc=%08x want=%08x", crc, want);
+            fatal = 1;
+        }
+        /* 2. libc memcpy */
+        memset(out, 0, total);
+        mp_memcpy(out, mp_multi_blob, total);
+        crc = (uint32_t)crc32(0, out, total);
+        if (crc != want) {
+            REQUIRE(0, "MP prod memcpy crc=%08x want=%08x", crc, want);
+            fatal = 1;
+        }
+        /* 3. process_vm_readv on the owner's own pid */
+        {
+            struct iovec local = { .iov_base = out, .iov_len = total };
+            struct iovec remote = { .iov_base = (void *)mp_multi_blob, .iov_len = total };
+            memset(out, 0, total);
+            ssize_t got = process_vm_readv(getpid(), &local, 1, &remote, 1, 0);
+            crc = got == (ssize_t)total ? (uint32_t)crc32(0, out, total) : 0;
+            if (got != (ssize_t)total || crc != want) {
+                REQUIRE(0, "MP prod vm_readv got=%zd errno=%d crc=%08x want=%08x",
+                        got, errno, crc, want);
+                fatal = 1;
+            }
+        }
+        /* 4. /proc/self/mem: GUP, no EL0 abort */
+        memset(out, 0, total);
+        mem_error = mp_mem_read(mp_multi_blob, out, total);
+        if (!mem_error) {
+            crc = (uint32_t)crc32(0, out, total);
+            if (crc != want) {
+                REQUIRE(0, "MP prod /proc/self/mem crc=%08x want=%08x", crc, want);
+                fatal = 1;
+            }
+        }
+        /* 5. a forked child inherits the trap and must see the image */
+        {
+            pid_t child = fork();
+            int status = 0;
+            if (child == 0) {
+                uint8_t first[64];
+                for (unsigned k = 0; k < sizeof(first); ++k)
+                    first[k] = ((const uint8_t *)mp_multi_blob)[k];
+                _exit(!memcmp(first, mp_fake, sizeof(first)) ? 0 : 1);
+            }
+            child_ok = child > 0 && waitpid(child, &status, 0) == child &&
+                       WIFEXITED(status) && WEXITSTATUS(status) == 0;
+            if (!child_ok) {
+                REQUIRE(0, "MP prod fork child saw the live bytes");
+                fatal = 1;
+            }
+        }
+        paths = mem_error ? 4 : 5;
+    }
+    if (mem_error) LOG("MP_PROD_KMEM errno=%d", mem_error);
+
+    rc = uy_deactivate(ctx);
+    REQUIRE(rc == 0, "MP prod deactivate rc=%d errno=%d", rc, errno);
+    memset(out, 0, total);
+    mp_memcpy(out, mp_multi_blob, total);
+    REQUIRE(!mp_memcmp(out, mp_original, total),
+            "MP prod deactivation did not restore the pages");
+    LOG("MP_PROD_DONE paths=%u child_overlay=%d kmem_errno=%d", paths, child_ok, mem_error);
 }
 
 /* ------------------------------------------------------------- LD1 family */
@@ -629,6 +774,10 @@ static void *mp_audit_read(void *arg)
     return NULL;
 }
 
+/* 2.12.0 keeps a PAGE_AP session across an overlapping mprotect that still
+ * asks for read+execute, and across fork(): the child inherits a copy of the
+ * trapped leaf PTE and is served from the same image.  The audit below pins
+ * both behaviours with reads, not with the session state alone. */
 static void mp_audit_case(const struct uy_ctx *ctx)
 {
     struct mp_pair fake = {mp_audit_values[1], mp_audit_values[1]};
@@ -644,7 +793,7 @@ static void mp_audit_case(const struct uy_ctx *ctx)
     pthread_t thread;
     uint64_t generation;
     unsigned invalid = 0, updates = 0;
-    int rc, have_thread, child_ok = 0;
+    int rc, have_thread, child_overlay = 0, mprotect_active = 0;
 
     ++g_cases;
     bad[0].fake_len = mp_page_size + 8;
@@ -696,31 +845,36 @@ static void mp_audit_case(const struct uy_ctx *ctx)
         ++updates;
     }
     rc = mprotect((void *)base, mp_page_size, PROT_READ | PROT_EXEC);
-    REQUIRE(!rc && !uy_status(ctx, &q) && q.state == UROV_Y_INACTIVE,
-            "MP overlapping mprotect did not restore the page rc=%d errno=%d", rc, errno);
     got = mp_audit_site(mp_audit_data);
-    REQUIRE(got.lo == mp_audit_values[0] && got.hi == got.lo, "MP read after mprotect was not native");
+    mprotect_active = !rc && !uy_status(ctx, &q) && q.state == UROV_Y_ACTIVE &&
+                      got.lo == fake.lo && got.hi == fake.hi;
+    REQUIRE(mprotect_active,
+            "MP overlapping mprotect lost the overlay rc=%d errno=%d state=%u",
+            rc, errno, q.state);
     atomic_store(&worker.stop, 1);
     if (have_thread) pthread_join(thread, NULL);
     REQUIRE(atomic_load(&worker.reads) > 0 && !atomic_load(&worker.errors), "MP concurrent read tore");
 
-    rc = uy_register_pages(ctx, &desc, 1, 0, 0, &q);
-    REQUIRE(!rc, "MP fork REGISTER rc=%d errno=%d", rc, errno);
-    if (!rc) {
-        pid_t child = fork();
-        int status;
-        if (child == 0) {
-            struct mp_pair value = mp_audit_site(mp_audit_data);
-            _exit(value.lo == mp_audit_values[0] && value.hi == value.lo ? 0 : 1);
-        }
-        child_ok = child > 0 && waitpid(child, &status, 0) == child &&
-                   WIFEXITED(status) && WEXITSTATUS(status) == 0;
-        REQUIRE(child_ok && !uy_status(ctx, &q) && q.state == UROV_Y_INACTIVE,
-                "MP fork inherited a trap or left the session active");
+    /* A fork inherits a copy of the trapped leaf PTE.  The child must read the
+     * same image as the owner and the parent's session must survive. */
+    struct mp_pair expect = fake;
+    pid_t child = fork();
+    int status = 0;
+    if (child == 0) {
+        struct mp_pair value = mp_audit_site(mp_audit_data);
+        _exit(value.lo == expect.lo && value.hi == expect.hi ? 0 : 1);
     }
+    child_overlay = child > 0 && waitpid(child, &status, 0) == child &&
+                    WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    got = mp_audit_site(mp_audit_data);
+    REQUIRE(child_overlay && !uy_status(ctx, &q) && q.state == UROV_Y_ACTIVE &&
+            got.lo == expect.lo && got.hi == expect.hi,
+            "MP fork child=%d state=%u read=%llx/%llx", child_overlay, q.state,
+            (unsigned long long)got.lo, (unsigned long long)got.hi);
     (void)uy_deactivate(ctx);
-    LOG("MP_AUDIT invalid=%u updates=%u reads=%u errors=%u child_restored=%d",
-        invalid, updates, atomic_load(&worker.reads), atomic_load(&worker.errors), child_ok);
+    LOG("MP_AUDIT invalid=%u updates=%u reads=%u errors=%u mprotect_active=%d "
+        "child_overlay=%d", invalid, updates, atomic_load(&worker.reads),
+        atomic_load(&worker.errors), mprotect_active, child_overlay);
 }
 
 /* --------------------------------------------------------------- dispatch */
@@ -757,5 +911,6 @@ static void mp_fixture(const char *mode, const char *key, int repeats)
     else if (!strcmp(mode, "mp-cross")) mp_cross_case(&ctx, repeats);
     else if (!strcmp(mode, "mp-srcpage")) mp_srcpage_case(&ctx, repeats);
     else if (!strcmp(mode, "mp-audit")) mp_audit_case(&ctx);
+    else if (!strcmp(mode, "mp-prod")) mp_prod_case(&ctx, repeats);
     else REQUIRE(0, "MP unknown mode %s", mode);
 }

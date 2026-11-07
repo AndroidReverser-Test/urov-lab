@@ -201,6 +201,40 @@ static int dobby_retry_register(const struct uy_ctx *ctx, const uint8_t *text)
     return uy_register_pages(ctx, &desc, 1, 0, 0, &q) ? errno : 0;
 }
 
+/* Run after recovery and before installing seccomp, so rejection came from
+ * the locked RX mapping alone in 2.11.0.  2.12.0 accepts VM_LOCKED, so the
+ * same call must now register and serve the image on a locked page. */
+static void dobby_check_page_lock(const struct uy_ctx *ctx, const uint8_t *text, size_t page_size)
+{
+    uint8_t before[DOBBY_CRC_BYTES], after[DOBBY_CRC_BYTES], restored[DOBBY_CRC_BYTES];
+    struct urov_y_request status = {0};
+    struct ud_mapping map;
+    copy_scalar(before, text, sizeof(before));
+    uint64_t begin = now_ns();
+    int lock_error = mlock(text, page_size) ? errno : 0;
+    uint64_t lock_ns = now_ns() - begin;
+    int register_error = lock_error ? -1 : dobby_retry_register(ctx, text);
+    bool active = !uy_status(ctx, &status) && status.state == UROV_Y_ACTIVE;
+    copy_scalar(after, text, sizeof(after));
+    bool overlay = dobby_file_page && !memcmp(after, dobby_file_page, sizeof(after)) &&
+                   memcmp(after, before, sizeof(after)) != 0;
+    bool execute = dobby_crc_payload() == DOBBY_HOOKED;
+    int deactivate_error = register_error ? -1 : (uy_deactivate(ctx) ? errno : 0);
+    copy_scalar(restored, text, sizeof(restored));
+    bool restored_ok = !memcmp(restored, before, sizeof(restored));
+    bool rx = !ud_mapping_at("/proc/self/maps", text, &map) &&
+              map.readable && !map.writable && map.executable;
+    int unlock_error = lock_error ? -1 : (munlock(text, page_size) ? errno : 0);
+    REQUIRE(!lock_error && !unlock_error && !register_error && active && overlay &&
+            execute && !deactivate_error && restored_ok && rx,
+            "Dobby private RX lock guard failed");
+    LOG("DOBBY_DETECT_LOCK bytes=%zu lock_errno=%d lock_ns=%llu register_errno=%d "
+        "active=%d overlay=%d execute=%d rx=%d deactivate_errno=%d restored=%d "
+        "unlock_errno=%d", page_size, lock_error, (unsigned long long)lock_ns,
+        register_error, active, overlay, execute, rx, deactivate_error, restored_ok,
+        unlock_error);
+}
+
 static void *dobby_existing_registrant(void *arg)
 {
     struct dobby_registration_retry *retry = arg;
@@ -209,29 +243,42 @@ static void *dobby_existing_registrant(void *arg)
     return NULL;
 }
 
+/* 2.12.0 no longer lets an invalid madvise end the session: Linux rejects the
+ * advice before changing the VMA, so the gate passes it through.  Only the
+ * authenticated DEACTIVATE restores the live bytes. */
 static bool dobby_restore(const struct uy_ctx *ctx, const uint8_t *text,
                           const void *reference, size_t page_size)
 {
     struct urov_y_request status = {0};
     struct ud_mapping before, after;
+    uint8_t live[DOBBY_CRC_BYTES], file[DOBBY_CRC_BYTES];
+    int deactivate_error;
 
+    copy_scalar(file, reference, sizeof(file));
     int outside_error = uy_invalid_advice(reference, page_size);
     bool still_active = !uy_status(ctx, &status) && status.state == UROV_Y_ACTIVE;
 
     int map_error = ud_mapping_at("/proc/self/smaps", text, &before);
     int restore_error = uy_invalid_advice(text, page_size);
-    bool inactive = !uy_status(ctx, &status) && status.state == UROV_Y_INACTIVE;
+    copy_scalar(live, text, sizeof(live));
+    bool image_kept = !memcmp(live, file, sizeof(live));
     bool preserved = !map_error && !ud_mapping_at("/proc/self/smaps", text, &after) &&
         before.start == after.start && before.end == after.end &&
         before.readable == after.readable && before.writable == after.writable &&
         before.executable == after.executable && before.randomread && after.randomread;
+    deactivate_error = uy_deactivate(ctx) ? errno : 0;
+    copy_scalar(live, text, sizeof(live));
+    bool restored = !deactivate_error && memcmp(live, file, sizeof(live)) != 0;
     REQUIRE(outside_error == EINVAL && still_active && restore_error == EINVAL &&
-            inactive && preserved, "Dobby invalid advice recovery errno=%d state=%u preserved=%d",
-            restore_error, status.state, preserved);
-    LOG("DOBBY_DETECT_RESTORE outside_errno=%d outside_active=%d madvise_errno=%d "
-        "inactive=%d vma_preserved=%d", outside_error, still_active, restore_error, inactive,
-        preserved);
-    return inactive;
+            image_kept && preserved && restored,
+            "Dobby invalid advice errno=%d state=%u image_kept=%d preserved=%d "
+            "deactivate_errno=%d restored=%d",
+            restore_error, status.state, image_kept, preserved, deactivate_error, restored);
+    LOG("DOBBY_DETECT_RESTORE outside_errno=%d still_active=%d madvise_errno=%d "
+        "image_kept=%d vma_preserved=%d deactivate_errno=%d restored=%d",
+        outside_error, still_active, restore_error, image_kept, preserved,
+        deactivate_error, restored);
+    return restored;
 }
 
 static void dobby_check_registration_guard(const struct uy_ctx *ctx, const uint8_t *text)
@@ -262,12 +309,81 @@ static void dobby_check_registration_guard(const struct uy_ctx *ctx, const uint8
         filter_error, thread_error, local_error, retry.error, idle, nnp_before, nnp_after);
 }
 
+/* Permission probe on an ordinary RX page before any registration. The
+ * forked reader has a distinct mm and keeps the app's original credentials. */
+static void dobby_check_kernel_access(const uint8_t *text)
+{
+    int fd = open("/proc/self/mem", O_RDONLY | O_CLOEXEC);
+    int mem_error = fd < 0 ? errno : 0;
+    if (fd >= 0) close(fd);
+    pid_t parent = getpid();
+    pid_t child = fork();
+    int cross_error = child < 0 ? errno : -1;
+    if (!child) {
+        uint8_t byte;
+        struct iovec local = { .iov_base = &byte, .iov_len = 1 };
+        struct iovec remote = { .iov_base = (void *)text, .iov_len = 1 };
+        ssize_t got = process_vm_readv(parent, &local, 1, &remote, 1, 0);
+        _exit(got == 1 ? 0 : (got < 0 ? errno : EIO));
+    }
+    if (child > 0) {
+        int status;
+        pid_t waited;
+        do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+        if (waited == child && WIFEXITED(status)) cross_error = WEXITSTATUS(status);
+    }
+    LOG("DOBBY_DETECT_ACCESS self_mem_open_errno=%d other_mm_read_errno=%d", mem_error, cross_error);
+}
+
+/* A process that is not dumpable cannot open /proc/self/mem.  The fixture
+ * enables it for the length of one read and restores the previous value, so
+ * the kernel-assisted path can be compared with the EL0 view. */
+static int dobby_mem_read(const uint8_t *text, uint8_t *out, size_t n)
+{
+    int saved = prctl(PR_GET_DUMPABLE, 0UL, 0UL, 0UL, 0UL);
+    int fd, error;
+    ssize_t got;
+
+    if (prctl(PR_SET_DUMPABLE, 1UL, 0UL, 0UL, 0UL)) return errno;
+    fd = open("/proc/self/mem", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        error = errno;
+    } else {
+        got = pread(fd, out, n, (off_t)(uintptr_t)text);
+        error = got == (ssize_t)n ? 0 : (got < 0 ? errno : EIO);
+        close(fd);
+    }
+    (void)prctl(PR_SET_DUMPABLE, saved > 0 ? 1UL : 0UL, 0UL, 0UL, 0UL);
+    return error;
+}
+
+/* A forked child is a different mm; its own /proc/self/mem read must still be
+ * overlaid while the session lives (the child inherited the trapped PTE). */
+static void dobby_check_fork_kmem(const uint8_t *text, const uint8_t *image, size_t n)
+{
+    int status = 0, child_ok = 0;
+    pid_t child = fork();
+
+    if (child == 0) {
+        uint8_t got[DOBBY_CRC_BYTES];
+        memset(got, 0, sizeof(got));
+        _exit(!dobby_mem_read(text, got, n) && !memcmp(got, image, n) ? 0 : 1);
+    }
+    if (child > 0)
+        child_ok = waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+                   WEXITSTATUS(status) == 0;
+    REQUIRE(child_ok, "Dobby forked child /proc/self/mem bypassed the overlay");
+    LOG("DOBBY_DETECT_FORK_KMEM stage=overlay match=%d", child_ok);
+}
+
 /* Sample an unchanged byte outside the Dobby patch on the same target page.
  * The observer gets only an address, a reference mapping and a file offset. */
 static void dobby_detection_stage(const char *name, const uint8_t *text,
-                                  const struct page *reference, pid_t sibling, int repeats,
+                                  const struct page *reference, const uint8_t *ap_reference,
+                                  pid_t sibling, int repeats,
                                   const uint8_t file[DOBBY_CRC_BYTES], uint32_t expected_return,
-                                  bool expect_crc_pass, enum ud_verdict expected_live)
+                                  bool expect_crc_pass, enum ud_verdict expected_live,
+                                  bool expect_ap_loss)
 {
     const size_t sample = 64;
     const uint8_t *control = reference->address + reference->entry + sample;
@@ -284,8 +400,11 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
     unsigned cross_page_trials = 0, cross_page_successes = 0;
     unsigned live_match = 0, live_unknown = 0, kernel_file = 0;
     unsigned zero_match = 0, zero_clean = 0, zero_unknown = 0;
+    unsigned ap_match = 0, ap_clean = 0, ap_unknown = 0, ap_accepted_crc = 0;
+    unsigned ap_accepted = 0, ap_failed = 0, ap_control_failed = 0;
     uint64_t total_ns = 0, max_ns = 0;
     uint64_t live_total_ns = 0, live_max_ns = 0;
+    uint64_t ap_total_ns = 0, ap_max_ns = 0;
     uint32_t live_crc = 0, kernel_crc = 0, single_crc = 0, returned = 0;
     uint8_t many_bytes[DOBBY_CRC_BYTES] = {0};
     uint8_t scalar_bytes[DOBBY_CRC_BYTES] = {0};
@@ -297,6 +416,23 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
     /* The largest iovec count Linux accepts: one byte-carrying entry followed
      * by zero-length entries.  This is the 1024 boundary of the same read. */
     copy_scalar(scalar_bytes, text, sizeof(scalar_bytes));
+    /* /proc/self/mem goes through GUP and never takes the EL0 data abort.
+     * 2.12.0 overlays that buffer from the same image, so this reader must
+     * agree with the EL0 view in every stage.  The open is only attempted
+     * with dumpable set; the process is restored immediately. */
+    uint8_t kmem_bytes[DOBBY_CRC_BYTES] = {0};
+    int kmem_error = dobby_mem_read(text, kmem_bytes, sizeof(kmem_bytes));
+    if (!kmem_error)
+        REQUIRE(!memcmp(kmem_bytes, scalar_bytes, sizeof(kmem_bytes)),
+                "Dobby %s /proc/self/mem diverged from the EL0 view", name);
+    LOG("DOBBY_DETECT_KMEM stage=%s errno=%d match=%u", name, kmem_error,
+        kmem_error ? 0 : !memcmp(kmem_bytes, scalar_bytes, sizeof(kmem_bytes)));
+    /* Use a changed byte when visible, so legitimate COW is a negative
+     * control even when the target and its clean alias have different data. */
+    size_t ap_sample = 0;
+    for (size_t i = 0; i < sizeof(scalar_bytes); ++i) {
+        if (scalar_bytes[i] != file[i]) { ap_sample = i; break; }
+    }
     errno = 0;
     ssize_t many_got = process_vm_readv(getpid(), many_local, 1024, &many_remote, 1, 0);
     REQUIRE(many_got == (ssize_t)sizeof(many_bytes) &&
@@ -346,7 +482,7 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
     ++g_cases;
     for (int i = 0; i < repeats; ++i) {
         struct ud_live_observation live;
-        struct ud_exclusive_observation adjacent, spaced, zero;
+        struct ud_exclusive_observation adjacent, spaced, zero, ap;
         struct ud_store_observation bridge, nop, indirect, cross_page;
         uint8_t single[DOBBY_CRC_BYTES] = {0};
         struct iovec local = { .iov_base = single, .iov_len = sizeof(single) };
@@ -374,6 +510,20 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
         ud_observe_exclusive(text + sample, control, reference->fd, offset, &adjacent);
         ud_observe_spaced_exclusive(text + sample, control, reference->fd, offset, &spaced);
         ud_observe_zero_exclusive(text + sample, control, reference->fd, offset, &zero);
+        ud_observe_ap_reservation(text + ap_sample, ap_reference + reference->entry + ap_sample,
+                                  reference->fd, text_offset + (off_t)ap_sample, &ap);
+        REQUIRE(ap.reservation_loss == (expect_ap_loss ? UD_MATCH : UD_NO_MATCH) ||
+                (ap.reservation_loss == UD_UNKNOWN && ap.error == EAGAIN),
+                "Dobby %s AP verdict=%d accepted=%u failed=%u control=%u error=%d", name,
+                ap.reservation_loss, ap.accepted, ap.target_failed, ap.control_failed, ap.error);
+        ap_match += ap.reservation_loss == UD_MATCH;
+        ap_clean += ap.reservation_loss == UD_NO_MATCH;
+        ap_unknown += ap.reservation_loss == UD_UNKNOWN;
+        ap_accepted += ap.accepted;
+        ap_failed += ap.target_failed;
+        ap_control_failed += ap.control_failed;
+        ap_total_ns += ap.elapsed_ns;
+        if (ap.elapsed_ns > ap_max_ns) ap_max_ns = ap.elapsed_ns;
         ud_observe_unreserved_status(text + sample, control, reference->fd, offset, &bridge);
         ud_observe_unreserved_nop_status(text + sample, control, reference->fd, offset, &nop);
         ud_observe_unreserved_indirect_status(text + sample, control, reference->fd, offset,
@@ -408,6 +558,8 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
         unknown += cross_page.verdict == UD_UNKNOWN;
         crc_pass += live_crc == file_crc;
         accepted_crc += live_crc == file_crc && live.verdict == UD_NO_MATCH && file_ok;
+        ap_accepted_crc += live_crc == file_crc && live.verdict == UD_NO_MATCH && file_ok &&
+                           ap.reservation_loss == UD_NO_MATCH;
         total_ns += cross_page.elapsed_ns;
         if (cross_page.elapsed_ns > max_ns) max_ns = cross_page.elapsed_ns;
     }
@@ -426,6 +578,14 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
             name, zero_match, zero_clean, zero_unknown);
     REQUIRE(accepted_crc == (expect_crc_pass && expected_live == UD_NO_MATCH ? (unsigned)repeats : 0),
             "Dobby %s accepted_crc=%u", name, accepted_crc);
+    REQUIRE(ap_match + ap_clean && (!expect_ap_loss || !ap_accepted_crc),
+            "Dobby %s AP policy match=%u clean=%u accepted_crc=%u", name,
+            ap_match, ap_clean, ap_accepted_crc);
+    LOG("DOBBY_DETECT_AP stage=%s n=%d match=%u clean=%u unknown=%u accepted=%u failed=%u "
+        "control_failed=%u bytes_differ=%d accepted_crc=%u mean_ns=%llu max_ns=%llu",
+        name, repeats, ap_match, ap_clean, ap_unknown, ap_accepted, ap_failed, ap_control_failed,
+        scalar_bytes[ap_sample] != file[ap_sample], ap_accepted_crc,
+        (unsigned long long)(ap_total_ns / repeats), (unsigned long long)ap_max_ns);
     LOG("DOBBY_DETECT stage=%s n=%d execute=%04x file=%08x live=%08x crc_pass=%u "
         "accepted_crc=%u match=%u clean=%u unknown=%u adjacent_match=%u adjacent_unknown=%u "
         "spaced_match=%u spaced_unknown=%u spaced_accepted=%u spaced_failed=%u "
@@ -451,6 +611,7 @@ static void dobby_detection_fixture(const char *key, int repeats)
     const uint8_t *text = (const uint8_t *)(uintptr_t)&dobby_crc_payload;
     const long page_size = sysconf(_SC_PAGESIZE);
     struct page reference;
+    const uint8_t *ap_reference = MAP_FAILED;
     struct business business = { .fn = ud_payload };
     pthread_t thread;
     bool have_thread = false;
@@ -465,20 +626,30 @@ static void dobby_detection_fixture(const char *key, int repeats)
         REQUIRE(0, "Dobby detection file read failed");
         goto close_reference;
     }
+    ap_reference = mmap(NULL, (size_t)page_size, PROT_READ, MAP_PRIVATE,
+                        reference.fd, reference.file_offset);
+    REQUIRE(ap_reference != MAP_FAILED, "Dobby AP read-only alias errno=%d", errno);
+    if (ap_reference == MAP_FAILED) goto close_reference;
+    struct ud_exclusive_observation wrong_reference;
+    ud_observe_ap_reservation(text, reference.address + reference.entry, reference.fd,
+                               reference.file_offset + reference.entry, &wrong_reference);
+    REQUIRE(wrong_reference.reservation_loss == UD_UNKNOWN && wrong_reference.error == EACCES,
+            "Dobby AP accepted an executable reference");
+    if (!key) dobby_check_kernel_access(text);
     have_thread = pthread_create(&thread, NULL, business_main, &business) == 0;
     REQUIRE(have_thread, "Dobby detection business thread");
     pid_t sibling = have_thread ? pthread_gettid_np(thread) : 0;
     REQUIRE(sibling > 0, "Dobby detection business tid");
-    dobby_detection_stage("clean", text, &reference, sibling, repeats, file, DOBBY_ORIGINAL, true,
-                          UD_NO_MATCH);
+    dobby_detection_stage("clean", text, &reference, ap_reference, sibling, repeats, file, DOBBY_ORIGINAL, true,
+                          UD_NO_MATCH, false);
 
     dobby_setup_error = dobby_crc_setup((void *)text, (size_t)page_size);
     if (dobby_setup_error) {
         REQUIRE(0, "Dobby detection setup errno=%d", dobby_setup_error);
         goto close_reference;
     }
-    dobby_detection_stage("patch_only", text, &reference, sibling, repeats, file, DOBBY_HOOKED,
-                          false, UD_NO_MATCH);
+    dobby_detection_stage("patch_only", text, &reference, ap_reference, sibling, repeats, file, DOBBY_HOOKED,
+                          false, UD_NO_MATCH, false);
     struct ud_mapping map;
     REQUIRE(!madvise((void *)text, (size_t)page_size, MADV_RANDOM) &&
             uy_invalid_advice(text, (size_t)page_size) == EINVAL &&
@@ -497,10 +668,12 @@ static void dobby_detection_fixture(const char *key, int repeats)
     if (!error) LOG("DOBBY_ARM register_ns=%llu", (unsigned long long)arm_ns);
     if (!error) {
         struct urov_y_request status = {0};
-        dobby_detection_stage("overlay", text, &reference, sibling, repeats, file, DOBBY_HOOKED,
-                              true, UD_NO_MATCH);
+        dobby_detection_stage("overlay", text, &reference, ap_reference, sibling, repeats, file, DOBBY_HOOKED,
+                              true, UD_NO_MATCH, true);
+        dobby_check_fork_kmem(text, dobby_file_page, DOBBY_CRC_BYTES);
         REQUIRE(!uy_status(&ctx, &status) && status.state == UROV_Y_ACTIVE && status.reserved == 1 &&
-                status.hits >= (uint64_t)repeats * DOBBY_CRC_BYTES && !status.failures,
+                status.generation == 1 && status.hits >= (uint64_t)repeats * DOBBY_CRC_BYTES &&
+                !status.failures,
                 "Dobby detection overlay hits=%llu failures=%llu",
                 (unsigned long long)status.hits, (unsigned long long)status.failures);
         LOG("DOBBY_DETECT_STATUS hits=%llu failures=%llu",
@@ -513,8 +686,9 @@ static void dobby_detection_fixture(const char *key, int repeats)
         goto close_reference;
     }
     if (!error) {
-        dobby_detection_stage("deactivated", text, &reference, sibling, repeats, file, DOBBY_HOOKED,
-                              false, UD_NO_MATCH);
+        dobby_detection_stage("deactivated", text, &reference, ap_reference, sibling, repeats, file, DOBBY_HOOKED,
+                              false, UD_NO_MATCH, false);
+        dobby_check_page_lock(&ctx, text, (size_t)page_size);
         dobby_check_registration_guard(&ctx, text);
     }
 
@@ -527,6 +701,8 @@ close_reference:
         LOG("DOBBY_DETECT_BUSINESS ops=%llu errors=%d",
             (unsigned long long)atomic_load(&business.ops), atomic_load(&business.errors));
     }
+    if (ap_reference != MAP_FAILED)
+        REQUIRE(!munmap((void *)ap_reference, (size_t)page_size), "Dobby AP alias cleanup");
     page_close(&reference);
 out:
     pthread_mutex_unlock(&dobby_crc_lock);

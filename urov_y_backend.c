@@ -63,7 +63,13 @@ static inline void uy_flush_icache_all(void)
 #define UY_VM_EXEC 0x00000004UL
 #define UY_VM_MAYWRITE 0x00000020UL
 #define UY_VM_PFNMAP 0x00000400UL
-#define UY_VM_IO 0x00002000UL
+/* VM_LOCKED is 0x2000 and VM_IO is 0x4000 in every supported kernel (4.x-6.x).
+ * 2.11.0 and earlier defined UY_VM_IO as 0x2000, i.e. they rejected VM_LOCKED:
+ * an app could call mlock() on its own RX page and make REGISTER fail with
+ * EINVAL.  Locking only pins a page against reclaim and does not change the
+ * leaf PTE, so 2.12.0 accepts VM_LOCKED and rejects only the real VM_IO. */
+#define UY_VM_LOCKED 0x00002000UL
+#define UY_VM_IO 0x00004000UL
 #define UY_VM_HUGETLB 0x00400000UL
 #define UY_VM_MIXEDMAP 0x10000000UL
 
@@ -190,10 +196,20 @@ struct uy_page {
     uint32_t fake_off;
     uint32_t fake_len;
     uint32_t armed;
+    /* Registration-time VMA identity.  A fork copies the VMA with
+     * vm_area_dup(), so the child keeps the same vm_file pointer, pgoff and
+     * range; a foreign process that opens the same file again has a different
+     * struct file.  handle_mm_fault uses this to re-arm a forked child's copy
+     * without ever arming an unrelated mapping. */
+    void *vma_file;
+    uint64_t vma_pgoff;
+    uint64_t vma_start;
+    uint64_t vma_end;
 };
 
 struct uy_session {
     void *mm;
+    uint64_t tgid;      /* owner thread group: only its execve replaces the mm */
     uint64_t generation;
     uint64_t hits;
     uint64_t replays;
@@ -232,6 +248,14 @@ static uint32_t g_caps;
 static uint32_t g_page_size;
 static uint32_t g_page_shift;
 static uint64_t g_user_limit;
+/* Page bases of the last session, kept after release so an orphaned trap (a
+ * forked child that never read the page while the session was live) can be
+ * restored instead of turning into a signal.  Only the bases are needed and
+ * they are never dereferenced as pages, so the storage is a fixed array. */
+#define UY_RETIRED_MAX 64U
+static uint64_t g_retired[UY_RETIRED_MAX];
+static uint32_t g_retired_count;
+static uint32_t g_retired_mode;
 
 static void *f_brk_handler;
 static void *f_do_mem_abort;
@@ -269,6 +293,15 @@ static int g_page_hooked;
 static int g_mmf_hooked;
 static int g_degraded;
 static int g_abort_has_iss2;
+/* Kernel-assisted reads (access_remote_vm/__access_remote_vm) are overlaid by
+ * a function hook.  The hook target is the implementation entry when it
+ * exists, so both /proc/<pid>/mem and access_process_vm() are covered. */
+static void *f_kread;
+static int g_kread_argc;
+static int g_kread_hooked;
+/* Set to `current` only while the module itself calls the access helper.  The
+ * kernel-read hook must never rewrite the module's own snapshot/image reads. */
+static void *g_internal_access;
 /* FPSIMD state can only be driven when both kernel helpers resolved and BTF
  * described task_struct.thread.uw.fpsimd_state.  Otherwise a vector load from
  * the target page keeps the historical fail-closed SIGSEGV. */
@@ -327,10 +360,19 @@ static int mm_has_live_user(void *mm)
 static int uy_access_vm(void *mm, unsigned long addr, void *buf,
                         int len, unsigned int flags)
 {
-    if (f_access_vm) return f_access_vm(mm, addr, buf, len, flags);
+    void *prev;
+    int ret;
+
+    /* Registration, site arming and control replies read/write the very pages
+     * the kernel-read hook rewrites.  Mark the task while the module's own
+     * call is in flight so the after hook leaves that buffer alone. */
+    prev = __atomic_exchange_n(&g_internal_access, current, __ATOMIC_ACQ_REL);
+    if (f_access_vm) ret = f_access_vm(mm, addr, buf, len, flags);
     /* Old public access_remote_vm() supplies a NULL task to this variant.
      * Passing current here would associate a foreign mm with the unload task. */
-    return f_access_vm_task(0, mm, addr, buf, len, flags);
+    else ret = f_access_vm_task(0, mm, addr, buf, len, flags);
+    __atomic_store_n(&g_internal_access, prev, __ATOMIC_RELEASE);
+    return ret;
 }
 
 /* For sleepable control only. Early 5.x has probe_user_read() but may lack a
@@ -397,6 +439,8 @@ static void uy_free(void *p)
     else if (f_vfree) f_vfree(p);
 }
 
+static int overlay_live(void);
+
 static uint64_t session_get_mm(void *mm)
 {
     uint64_t ref;
@@ -413,6 +457,22 @@ static uint64_t session_get_mm(void *mm)
 static uint64_t session_get(void)
 {
     return session_get_mm(mm_of_task(current));
+}
+
+/* A reader that inherited the leaf trap but not the mm binding (a forked
+ * child of the owner).  It is served from the same immutable image while the
+ * session lives; the reader epoch keeps that image alive across a release. */
+static uint64_t session_get_any(void)
+{
+    uint64_t ref;
+
+    if (!overlay_live()) return 0;
+    ref = uy_reader_enter(&g_readers);
+    if (ref && !overlay_live()) {
+        uy_reader_exit(&g_readers, ref);
+        return 0;
+    }
+    return ref;
 }
 
 /* Do not spin on a preempted reader, or proceed after a timeout. Only the
@@ -446,6 +506,59 @@ static struct uy_page *page_by_index(uint32_t index)
 
     for (i = 0; i < g_sess.page_count; ++i)
         if (g_sess.pages[i].index == index) return &g_sess.pages[i];
+    return 0;
+}
+
+/* A leaf PTE that only this module produces: present, read-only for EL0
+ * (AP[2]=1) and without EL0 read permission (AP[1]=0).  The kernel never
+ * creates that pair for a readable VMA - execute-only mappings have no
+ * VM_READ and PROT_NONE pages carry PTE_PROT_NONE - so the signature both
+ * identifies a trap a forked child inherited and keeps an unrelated
+ * permission fault from being "repaired" into a readable page. */
+static int uy_leaf_signature(uint64_t pte)
+{
+    if ((pte & (PTE_VALID | PTE_TYPE_MASK)) != (PTE_VALID | PTE_TYPE_PAGE)) return 0;
+    if (pte & (PTE_CONT | PTE_SPECIAL | PTE_DEVMAP | PTE_PROT_NONE)) return 0;
+    return !(pte & PTE_USER) && (pte & PTE_RDONLY);
+}
+
+static int uy_trap_leaf(void *mm, uint64_t far)
+{
+    uint64_t *ptep;
+    uint64_t pte;
+
+    if (!mm) return 0;
+    ptep = pte_of(mm, page_base(far));
+    if (!ptep) return 0;
+    pte = __atomic_load_n(ptep, __ATOMIC_ACQUIRE);
+    return uy_leaf_signature(pte);
+}
+
+/* Restore AP[1] on a trap whose session is gone and let the faulting
+ * instruction retry, so an orphaned trap can never become a signal. */
+static int uy_repair_trap(void *mm, uint64_t far)
+{
+    uint64_t *ptep;
+    uint64_t old;
+
+    if (!mm) return 0;
+    ptep = pte_of(mm, page_base(far));
+    if (!ptep) return 0;
+    old = __atomic_load_n(ptep, __ATOMIC_ACQUIRE);
+    if (!uy_leaf_signature(old)) return 0;
+    if (!__atomic_compare_exchange_n(ptep, &old, old | PTE_USER, 0,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return 0;
+    flush_tlb_all();
+    return 1;
+}
+
+static int uy_retired_has(uint64_t page)
+{
+    uint32_t i;
+
+    for (i = 0; i < g_retired_count; ++i)
+        if (g_retired[i] == page) return 1;
     return 0;
 }
 
@@ -647,7 +760,13 @@ static int validate_site_vma(void *vma, uint64_t pc, int page_mode)
  * A private page has no other writer, and the mmap/mprotect/munmap/mremap/
  * madvise/MAP_FIXED gates end the session before such a change can happen.
  * VM_WRITE itself is always rejected, so a page that is currently writable
- * (for example after a failed execmod restore) can never be registered. */
+ * (for example after a failed execmod restore) can never be registered.
+ *
+ * VM_LOCKED is deliberately accepted since 2.12.0.  2.11.0 and earlier used
+ * 0x2000 for VM_IO, which is VM_LOCKED on every supported kernel, so an app
+ * could call mlock() on its own RX page and make REGISTER fail with EINVAL.
+ * Locking does not change the leaf PTE the trap edits; it only pins the page
+ * against reclaim, which even shrinks the fault-in re-arm window. */
 static int validate_target_vma(void *vma, uint64_t address)
 {
     unsigned long start, end, flags;
@@ -667,6 +786,20 @@ static int validate_target_vma(void *vma, uint64_t address)
         if (flags & UY_VM_MAYWRITE) return -EINVAL;
     }
     return 0;
+}
+
+/* Remember what identifies this mapping.  fork() duplicates the VMA through
+ * vm_area_dup(), so a child keeps the same struct file pointer, pgoff and
+ * range; a different process that maps the same file gets its own struct
+ * file.  handle_mm_fault uses this to re-arm only a copy of the registered
+ * mapping. */
+static void uy_capture_vma(struct uy_page *p, void *vma)
+{
+    p->vma_file = vma ? *(void **)((char *)vma + g_layout.vma_file) : 0;
+    p->vma_pgoff = vma && g_layout.vma_pgoff_ok ?
+        *(unsigned long *)((char *)vma + g_layout.vma_pgoff) : 0;
+    p->vma_start = vma ? *(unsigned long *)((char *)vma + g_layout.vma_start) : 0;
+    p->vma_end = vma ? *(unsigned long *)((char *)vma + g_layout.vma_end) : 0;
 }
 
 /* ------------------------------------------------------ page (UXN) arming */
@@ -801,6 +934,47 @@ static int ap_disarm_pages(struct uy_session *s, void *mm)
             __atomic_store_n(&s->pages[i].armed, 0, __ATOMIC_RELEASE);
     uy_mmap_write_unlock(mm);
     return rc;
+}
+
+/* Re-apply the data trap after a protection change that kept the page
+ * readable and executable.  Linux often returns early when the new
+ * protection equals the current one, so the common mprotect(RX) hardening
+ * call does not even change the PTE; this covers the calls that do. */
+static void ap_rearm_range(void *mm, uint64_t start, uint64_t len)
+{
+    uint64_t end = start + len;
+    uint32_t i;
+    int changed = 0;
+
+    if (end < start) end = ~UINT64_C(0);
+    for (i = 0; i < g_sess.page_count; ++i) {
+        struct uy_page *p = &g_sess.pages[i];
+        int ret;
+
+        if (p->base < start || p->base + g_page_size > end) continue;
+        if (!__atomic_load_n(&p->armed, __ATOMIC_ACQUIRE)) continue;
+        ret = page_set_ap(mm, p->base, 0);
+        if (ret > 0) changed = 1;
+    }
+    if (changed) flush_tlb_all();
+}
+
+/* A fork of the session owner copies the trapped leaf PTE.  The child is not
+ * bound to the session mm, so handle_mm_fault cannot use session_get_mm();
+ * the VMA identity captured before the fault proves this mm carries a copy of
+ * the registered mapping. */
+static int ap_shadow_rearm(void *mm, uint64_t page, uint64_t file, uint64_t pgoff,
+                           uint64_t start, uint64_t end)
+{
+    struct uy_page *p = page_find(page);
+    int ret;
+
+    if (!p || !mm || mm == g_sess.mm) return 0;
+    if (file != (uint64_t)(uintptr_t)p->vma_file || pgoff != p->vma_pgoff ||
+        start != p->vma_start || end != p->vma_end)
+        return 0;
+    ret = page_set_ap(mm, page, 0);
+    return ret > 0 ? 1 : 0;
 }
 
 /* Fault the page in if needed, then install the trap bit. No byte of the code
@@ -1848,6 +2022,7 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
     uint64_t esr = args->arg1;
     struct pt_regs *regs = (struct pt_regs *)args->arg2;
     unsigned ec = (esr >> 26) & 0x3fUL;
+    int ap_read;
     uint32_t opcode;
     uint64_t ref;
 
@@ -1858,11 +2033,37 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
         (g_abort_has_iss2 && (esr & UY_ESR_ISS2)) ||
         !uy_user_range(far, 1))
         return;
+    ap_read = ec == UY_EC_DABT_LOW && !(esr & (UY_ESR_WNR | UY_ESR_CM));
     ref = session_get();
-    if (!ref) return;
+    if (!ref) {
+        void *reader = mm_of_task(current);
 
-    if (g_sess.mode == UROV_Y_MODE_PAGE_AP && ec == UY_EC_DABT_LOW &&
-        !(esr & (UY_ESR_WNR | UY_ESR_CM))) {
+        /* A forked child inherits a copy of the trapped leaf PTE but not the
+         * session mm.  While the session lives that copy is served from the
+         * same immutable image, so a child that reads the code page sees the
+         * registered view instead of the live bytes.  Once the session is
+         * gone the orphaned trap is turned back into an ordinary readable
+         * PTE and the instruction retries, so no reader can take a signal
+         * because of a trap left behind. */
+        if (!ap_read || !uy_trap_leaf(reader, far)) return;
+        /* Take the reader reference before touching the page array: release
+         * frees it only after both reader epochs are drained. */
+        ref = session_get_any();
+        if (ref) {
+            if (g_sess.mode == UROV_Y_MODE_PAGE_AP && page_find(page_base(far)))
+                goto serve;
+            uy_reader_exit(&g_readers, ref);
+        }
+        if (g_retired_mode == UROV_Y_MODE_PAGE_AP && uy_retired_has(page_base(far)) &&
+            uy_repair_trap(reader, far)) {
+            args->ret = 0;
+            args->skip_origin = 1;
+        }
+        return;
+    }
+
+serve:
+    if (g_sess.mode == UROV_Y_MODE_PAGE_AP && ap_read) {
         struct uy_page *page = page_find(page_base(far));
         struct uy_page *code = page_find(page_base(regs->pc));
         uint64_t fault_pc = regs->pc;
@@ -1918,17 +2119,27 @@ static void uy_mm_fault_before(hook_fargs4_t *args, void *udata)
 
     (void)udata;
     /* Newer handle_mm_fault() can drop the VMA lock and invalidate the
-     * pointer. Capture its mm while the caller's protection still holds. */
+     * pointer. Capture its mm and the mapping identity while the caller's
+     * protection still holds. */
     args->local.data0 = vma && overlay_live() ?
         (uintptr_t)__atomic_load_n((void *const *)(vma + g_layout.vma_mm), __ATOMIC_RELAXED) : 0;
     args->local.data1 = args->arg1;
     args->local.data2 = args->arg2; /* FAULT_FLAG_* for the deferred code scan */
+    args->local.data3 = vma ? (uintptr_t)*(void **)(vma + g_layout.vma_file) : 0;
+    args->local.data4 = vma && g_layout.vma_pgoff_ok ?
+        *(unsigned long *)(vma + g_layout.vma_pgoff) : 0;
+    args->local.data5 = vma ? *(unsigned long *)(vma + g_layout.vma_start) : 0;
+    args->local.data6 = vma ? *(unsigned long *)(vma + g_layout.vma_end) : 0;
 }
 
 /* A fault-in just (re)created the site page PTE from the VMA protection, which
  * is executable. Re-apply the execute-never bit so a page that was evicted or
  * dropped does not silently lose its trap. Covers the user fault path and
  * get_user_pages based readers such as /proc/self/mem.
+ *
+ * The same hook re-arms a forked child's copy of a registered PAGE_AP page:
+ * the child is a distinct mm, so it is recognised by the mapping identity
+ * captured in the before hook rather than by session_get_mm().
  *
  * A file-backed code page that REGISTER saw non-resident was not in the
  * branch map.  The first fault that makes it present scans it here, before
@@ -1944,7 +2155,17 @@ static void uy_mm_fault_after(hook_fargs4_t *args, void *udata)
     (void)udata;
     if ((args->ret & UY_FAULT_INCOMPLETE) || !uy_user_range(page, g_page_size)) return;
     ref = session_get_mm(mm);
-    if (!ref) return;
+    if (!ref) {
+        if (!__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) && overlay_live() &&
+            g_sess.mode == UROV_Y_MODE_PAGE_AP)
+            ret = ap_shadow_rearm(mm, page, args->local.data3, args->local.data4,
+                                  args->local.data5, args->local.data6);
+        if (ret > 0)
+            flush_tlb_all();
+        else if (ret < 0 && ret != -ENOENT)
+            __atomic_store_n(&g_degraded, 1, __ATOMIC_RELEASE);
+        return;
+    }
     if (!__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) {
         if (g_sess.mode == UROV_Y_MODE_PAGE_AP) {
             struct uy_page *p = page_find(page);
@@ -1989,8 +2210,16 @@ static long prepare_site(struct uy_site *s, void *mm, uint64_t pc, uint64_t targ
 static void session_free_storage(void)
 {
     void *mm = g_sess.mm;
+    unsigned i, n = g_sess.page_count;
 
     uy_code_free();
+    /* Remember the page bases (not the images) so an orphaned trap in a
+     * forked child can still be recognised and restored after the session is
+     * gone.  The array is only ever compared by address. */
+    g_retired_count = n < UY_RETIRED_MAX ? n : UY_RETIRED_MAX;
+    if (g_retired_count && g_sess.pages)
+        for (i = 0; i < g_retired_count; ++i) g_retired[i] = g_sess.pages[i].base;
+    g_retired_mode = g_sess.mode;
     uy_free(g_sess.pages);
     uy_free(g_sess.arena);
     memset(&g_sess, 0, sizeof(g_sess));
@@ -2111,6 +2340,17 @@ static long do_register(struct urov_y_request *q)
     if (mode == UROV_Y_MODE_SITE_BRK && !g_brk_hooked) return -EOPNOTSUPP;
     if (mode != UROV_Y_MODE_SITE_BRK && (!g_page_hooked || !g_mmf_hooked))
         return -EOPNOTSUPP;
+    /* PAGE_AP promises that no reader observes the live bytes.  That is only
+     * true when both kernel-assisted read paths are covered: the
+     * __access_remote_vm hook (/proc/<pid>/mem, ptrace, access_process_vm)
+     * and the per-pid mm resolution used by process_vm_readv.  Fail closed
+     * instead of silently leaving a readable path. */
+    if (mode == UROV_Y_MODE_PAGE_AP && (!g_kread_hooked || !f_find_task_by_vpid)) {
+        if (g_verbose)
+            pr_info("urov-y: PAGE_AP needs kread=%d find_task=%d\n",
+                    g_kread_hooked, f_find_task_by_vpid ? 1 : 0);
+        return -EOPNOTSUPP;
+    }
     if (q->page_count && mode != UROV_Y_MODE_PAGE_AP) return -EOPNOTSUPP;
     if (mode != UROV_Y_MODE_PAGE_AP && !q->site_count) return -EINVAL;
     if (n > g_max_pages) return -EINVAL;
@@ -2133,7 +2373,10 @@ static long do_register(struct urov_y_request *q)
         return -EOPNOTSUPP;
     }
     g_sess.mm = mm;
+    g_sess.tgid = uy_task_tgid();
     __atomic_store_n(&g_owner, mm, __ATOMIC_RELEASE);
+    g_retired_count = 0;
+    g_retired_mode = 0;
 
     if (q->page_count) {
         ret = copy_user_image(mm, q->pages_addr, (uint8_t *)descs, (unsigned)desc_bytes);
@@ -2190,7 +2433,12 @@ static long do_register(struct urov_y_request *q)
         p->spare = p->image + g_page_size;
         p->snapshot = p->spare + g_page_size;
         uy_mmap_write_lock(mm);
-        ret = validate_target_vma(f_find_vma(mm, p->base), p->base);
+        {
+            void *vma = f_find_vma(mm, p->base);
+
+            ret = validate_target_vma(vma, p->base);
+            if (!ret) uy_capture_vma(p, vma);
+        }
         uy_mmap_write_unlock(mm);
         if (ret) goto fail;
         ret = page_build_image(p, d, mm, q->page_count ? 0 : q);
@@ -2500,8 +2748,11 @@ struct uy_iovec {
 };
 
 /* One local/remote segment of a same-mm read.  Only the registered segments
- * are rewritten; everything else keeps the bytes the kernel copied. */
-static void uy_vm_overlay(uint64_t local, uint64_t remote, uint64_t len, int allow_fake)
+ * are rewritten; everything else keeps the bytes the kernel copied.  A forked
+ * child is a distinct mm, so its copy is only rewritten while the leaf PTE at
+ * that page still carries this module's trap. */
+static void uy_vm_overlay(uint64_t local, uint64_t remote, uint64_t len, int allow_fake,
+                          void *mm, int owner)
 {
     uint8_t bytes[UY_VM_CHUNK];
 
@@ -2514,7 +2765,7 @@ static void uy_vm_overlay(uint64_t local, uint64_t remote, uint64_t len, int all
         if ((uint64_t)seg > len) seg = (unsigned)len;
         if (seg > sizeof(bytes)) seg = (unsigned)sizeof(bytes);
         p = page_find(page);
-        if (p) {
+        if (p && (owner || uy_trap_leaf(mm, page))) {
             page_view(p, off, seg, bytes, !allow_fake);
             if (f_copy_out((void *)(uintptr_t)local, bytes, seg)) return;
         }
@@ -2538,27 +2789,27 @@ static void uy_vm_readv_after(hook_fargs6_t *args, void *udata)
     uint64_t pid, lvec, liovcnt, rvec, riovcnt, ref, left;
     uint64_t li = 0, ri = 0, loff = 0, roff = 0;
     void *mm, *task;
-    int allow, have_l = 0, have_r = 0;
+    int allow, have_l = 0, have_r = 0, owner;
 
     (void)udata;
     if ((long)args->ret <= 0 || !f_copy_out) return;
-    mm = mm_of_task(current);
-    if (!mm || mm != __atomic_load_n(&g_owner, __ATOMIC_ACQUIRE)) return;
-    /* The caller's own address space is overlaid.  A pid that names another
-     * thread of the same mm (a CLONE_VM sibling, including a different
-     * thread group) reaches the same pages through GUP; resolve it exactly
-     * as process_vm_readv did and compare the mm.  A truly foreign mm must
-     * keep the bytes the kernel copied. */
+    /* The remote address space decides, not the caller's: another process (or
+     * another thread group) reading the owner through process_vm_readv must
+     * see the same image as the owner's own loads. */
     pid = sys_arg(args, 0);
-    if (pid != uy_task_pid() && pid != uy_task_tgid()) {
-        int same = 0;
-
+    if (pid == uy_task_pid() || pid == uy_task_tgid()) {
+        mm = mm_of_task(current);
+    } else {
         if (!f_find_task_by_vpid || !f_rcu_lock) return;
         f_rcu_lock();
         task = f_find_task_by_vpid((int)pid);
-        if (task && mm_of_task(task) == mm) same = 1;
+        mm = task ? mm_of_task(task) : 0;
         f_rcu_unlock();
-        if (!same) return;
+    }
+    if (!mm || mm != __atomic_load_n(&g_owner, __ATOMIC_ACQUIRE)) {
+        /* A forked child keeps a copy of the trap but not the session mm; its
+         * kernel-assisted reads are served per page while that copy exists. */
+        if (!mm || !overlay_live() || g_sess.mode != UROV_Y_MODE_PAGE_AP) return;
     }
     lvec = sys_arg(args, 1);
     liovcnt = sys_arg(args, 2);
@@ -2570,11 +2821,15 @@ static void uy_vm_readv_after(hook_fargs6_t *args, void *udata)
         !uy_user_range(rvec, riovcnt * sizeof(struct uy_iovec)))
         return;
 
-    ref = session_get_mm(mm);
+    owner = mm == g_sess.mm;
+    ref = owner ? session_get_mm(mm) : session_get_any();
     if (!ref) return;
     regs = g_wrapper_mode ? (struct pt_regs *)args->arg0 : 0;
+    /* The caller window only exists for the owner's own threads; a foreign
+     * reader gets the snapshot unless the session overlays every caller. */
     allow = !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) &&
-            (g_sess.caller_count == 0U || (regs && caller_allowed_deep(regs)));
+            (g_sess.caller_count == 0U ||
+             (owner && regs && caller_allowed_deep(regs)));
     left = (uint64_t)(long)args->ret;
     while (left && li < liovcnt && ri < riovcnt) {
         uint64_t lrem, rrem, seg;
@@ -2596,12 +2851,79 @@ static void uy_vm_readv_after(hook_fargs6_t *args, void *udata)
             continue;
         }
         if (seg > left) seg = left;
-        uy_vm_overlay(l.base + loff, r.base + roff, seg, allow);
+        uy_vm_overlay(l.base + loff, r.base + roff, seg, allow, mm, owner);
         loff += seg;
         roff += seg;
         left -= seg;
     }
 out:
+    uy_reader_exit(&g_readers, ref);
+}
+
+/* --------------------------------------------- kernel-assisted read overlay */
+
+/* /proc/<pid>/mem, ptrace(PTRACE_PEEKDATA) and every other access_remote_vm()
+ * caller copy through GUP, never through the EL0 data abort.  A single after
+ * hook on the implementation entry rewrites the kernel buffer the caller is
+ * about to hand back, so those readers see the registered image too.  The
+ * function is already resolved for the control plane; the hook adds no
+ * syscall entry, ABI field or counter. */
+static void uy_kread_overlay(uint64_t remote, void *buf, uint64_t len, int allow_fake,
+                             void *mm, int owner)
+{
+    uint8_t *out = buf;
+
+    while (len) {
+        uint64_t page = page_base(remote);
+        unsigned off = (unsigned)(remote - page);
+        unsigned seg = g_page_size - off;
+        struct uy_page *p;
+
+        if ((uint64_t)seg > len) seg = (unsigned)len;
+        p = page_find(page);
+        if (p && (owner || uy_trap_leaf(mm, page))) page_view(p, off, seg, out, !allow_fake);
+        remote += seg;
+        out += seg;
+        len -= seg;
+    }
+}
+
+static void uy_kread_after(hook_fargs6_t *args, void *udata)
+{
+    void *mm;
+    void *buf;
+    uint64_t remote, len, ref;
+    unsigned long flags;
+    int allow, owner;
+
+    (void)udata;
+    if ((long)args->ret <= 0) return;
+    /* The module's own snapshots, site words and control replies must never be
+     * rewritten by this hook. */
+    if (__atomic_load_n(&g_internal_access, __ATOMIC_ACQUIRE) == current) return;
+    if (g_kread_argc == 6) {
+        mm = (void *)args->arg1;
+        remote = args->arg2;
+        buf = (void *)args->arg3;
+        flags = (unsigned long)args->arg5;
+    } else {
+        mm = (void *)args->arg0;
+        remote = args->arg1;
+        buf = (void *)args->arg2;
+        flags = (unsigned long)args->arg4;
+    }
+    if (!mm || !buf || (flags & 0x1U) /* FOLL_WRITE */) return;
+    len = (uint64_t)(long)args->ret;
+    if (!len || !uy_user_range(remote, len)) return;
+    owner = mm == __atomic_load_n(&g_owner, __ATOMIC_ACQUIRE);
+    if (!owner && (!overlay_live() || g_sess.mode != UROV_Y_MODE_PAGE_AP)) return;
+    ref = owner ? session_get_mm(mm) : session_get_any();
+    if (!ref) return;
+    /* A forked child gets the snapshot (a foreign mm has no caller window the
+     * owner could vouch for); an owner-side reader keeps the normal rule. */
+    allow = !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) &&
+            g_sess.caller_count == 0U;
+    uy_kread_overlay(remote, buf, len, allow, mm, owner);
     uy_reader_exit(&g_readers, ref);
 }
 
@@ -2642,14 +2964,20 @@ static void gate_error(hook_fargs6_t *args, long ret)
     args->skip_origin = 1;
 }
 
-/* End the session before a fork or vfork can copy a patched mapping. A
- * thread that merely shares the mm keeps the same session. */
+/* End the session before a fork or vfork can copy a patched instruction or an
+ * execute-never page.  A thread that merely shares the mm keeps the session.
+ *
+ * PAGE_AP leaves no byte, no VMA flag and no execute permission changed, so a
+ * forked child only inherits a copy of the trapped leaf PTE.  That copy is
+ * served by the abort hook (see uy_abort_before) while the session lives, so
+ * fork()/vfork() no longer end the overlay. */
 static void uy_clone_before(hook_fargs6_t *args, void *udata)
 {
     uint64_t flags;
     int ret = 0;
 
     if (!caller_is_owner()) return;
+    if (overlay_live() && g_sess.mode == UROV_Y_MODE_PAGE_AP) return;
     flags = sys_arg(args, 0);
     if (udata && f_copy_in(&flags, (const void *)(uintptr_t)flags, sizeof(flags)))
         flags = 0;
@@ -2689,6 +3017,29 @@ static int gate_range_overlaps(uint64_t start, uint64_t len)
     return 0;
 }
 
+#define UY_PROT_READ 0x1U
+#define UY_PROT_WRITE 0x2U
+#define UY_PROT_EXEC 0x4U
+
+/* Linux's madvise() accepts a bounded set of advice values and rejects the
+ * rest before touching the VMA.  2.11.0 ran its range gate first, so
+ * madvise(page, len, -1) ended the whole session and only then let Linux
+ * return EINVAL.  An invalid advice must pass through untouched. */
+static int uy_advice_valid(uint64_t advice)
+{
+    if (advice <= 25U) return 1;              /* MADV_NORMAL .. MADV_COLLAPSE */
+    return advice == 100U || advice == 101U;  /* MADV_HWPOISON, SOFT_OFFLINE */
+}
+
+/* A protection change that keeps the page readable and executable cannot be
+ * used to read the live bytes, so PAGE_AP stays armed and the after hook
+ * re-applies the trap on the changed PTEs. */
+static int uy_prot_keeps_rx(uint64_t prot)
+{
+    return (prot & (UY_PROT_READ | UY_PROT_EXEC)) == (UY_PROT_READ | UY_PROT_EXEC) &&
+           !(prot & UY_PROT_WRITE);
+}
+
 /* A protected mapping is restored before the native syscall runs. If a
  * concurrent control transaction owns the session, the mutator must retry
  * instead of proceeding underneath it. */
@@ -2699,16 +3050,36 @@ static void uy_gate_before(hook_fargs6_t *args, void *udata)
 
     if (!caller_is_owner()) return;
     if (kind == UY_GATE_MMAP && !(sys_arg(args, 3) & UY_MAP_FIXED)) return;
+    if (kind == UY_GATE_MADVISE) {
+        /* The advice itself never changes page permissions.  With PAGE_AP a
+         * zapped PTE is re-armed by the fault path, so the session survives;
+         * BRK/UXN have no per-page rearm and keep the old teardown. */
+        if (!uy_advice_valid(sys_arg(args, 2))) return;
+        if (overlay_live() && g_sess.mode == UROV_Y_MODE_PAGE_AP) return;
+    }
+    if ((kind == UY_GATE_MPROTECT || kind == UY_GATE_PKEY_MPROTECT) &&
+        uy_prot_keeps_rx(sys_arg(args, 2)) && overlay_live() &&
+        g_sess.mode == UROV_Y_MODE_PAGE_AP)
+        return;
     if (!ctrl_try_lock()) {
         gate_error(args, -EBUSY);
         return;
     }
-    if (session_owned() &&
-        (kind == UY_GATE_EXECVE || kind == UY_GATE_EXECVEAT ||
-         gate_range_overlaps(sys_arg(args, 0), sys_arg(args, 1)) ||
-         (kind == UY_GATE_MREMAP && (sys_arg(args, 3) & UY_MREMAP_FIXED) &&
-          gate_range_overlaps(sys_arg(args, 4), sys_arg(args, 2)))))
-        ret = release_session(1);
+    if (session_owned()) {
+        int release;
+
+        if (kind == UY_GATE_EXECVE || kind == UY_GATE_EXECVEAT) {
+            /* A vfork child shares the owner's mm but execs into a new one;
+             * the parent keeps the armed mapping.  Only the owner thread
+             * group's own exec replaces the address space of the session. */
+            release = uy_task_tgid() == g_sess.tgid;
+        } else {
+            release = gate_range_overlaps(sys_arg(args, 0), sys_arg(args, 1)) ||
+                      (kind == UY_GATE_MREMAP && (sys_arg(args, 3) & UY_MREMAP_FIXED) &&
+                       gate_range_overlaps(sys_arg(args, 4), sys_arg(args, 2)));
+        }
+        if (release) ret = release_session(1);
+    }
     ctrl_unlock();
     if (ret) gate_error(args, ret);
 }
@@ -2716,16 +3087,22 @@ static void uy_gate_before(hook_fargs6_t *args, void *udata)
 /* An executable mapping created or made executable after REGISTER was not in
  * the branch map.  Scan the new range before the caller can return to EL0 and
  * branch from it.  A syscall the before hook refused (negative return) has no
- * new mapping. */
+ * new mapping.
+ *
+ * The same after hook re-applies the PAGE_AP trap on a protection change that
+ * kept the page readable and executable: Linux rewrites the leaf PTEs from the
+ * VMA protection, which restores AP[1]. */
 static void uy_gate_after(hook_fargs6_t *args, void *udata)
 {
     int kind = (int)(uintptr_t)udata;
     long ret = (long)args->ret;
     uint64_t start, len;
 
-    if (ret < 0 || !__atomic_load_n(&g_code.valid, __ATOMIC_ACQUIRE) ||
-        !session_owned())
-        return;
+    if (ret < 0 || !session_owned()) return;
+    if ((kind == UY_GATE_MPROTECT || kind == UY_GATE_PKEY_MPROTECT) &&
+        g_sess.mode == UROV_Y_MODE_PAGE_AP && uy_prot_keeps_rx(sys_arg(args, 2)))
+        ap_rearm_range(g_sess.mm, sys_arg(args, 0), sys_arg(args, 1));
+    if (!__atomic_load_n(&g_code.valid, __ATOMIC_ACQUIRE)) return;
     switch (kind) {
     case UY_GATE_MMAP:
         if (!(sys_arg(args, 2) & 0x4U)) return; /* PROT_EXEC */
@@ -2926,6 +3303,27 @@ static long resolve_symbols(const struct kclf_btf *btf, int *brk_argc, int *mmf_
     if (access_argc == 5) f_access_vm = (access_remote_vm_t)access;
     if (access_argc == 6) f_access_vm_task = (access_remote_vm_task_t)access;
 
+    /* Hook the implementation entry so /proc/<pid>/mem and
+     * access_process_vm() (ptrace) are covered together; the public wrapper is
+     * only a fallback when the implementation symbol is unavailable. */
+    f_kread = 0;
+    g_kread_argc = 0;
+    {
+        void *impl = lookup("__access_remote_vm");
+        int impl_argc = impl ? uy_access_vm_argc(btf, "__access_remote_vm", 0) : 0;
+
+        if (impl_argc) {
+            f_kread = impl;
+            g_kread_argc = impl_argc;
+        } else if (f_access_vm) {
+            f_kread = (void *)f_access_vm;
+            g_kread_argc = 5;
+        } else if (f_access_vm_task) {
+            f_kread = (void *)f_access_vm_task;
+            g_kread_argc = 6;
+        }
+    }
+
     /* Newer update_current_state() only updates the saved state. Use the
      * save-and-flush helper when present so the EL0 return reloads it. */
     f_fp_preserve = (fpsimd_preserve_t)lookup(fp_name);
@@ -3124,6 +3522,16 @@ long urov_y_backend_init(const char *args)
     }
     g_vm_readv_hooked = 1;
 
+    /* Kernel-assisted reads: one function hook covers /proc/<pid>/mem,
+     * ptrace and every other access_remote_vm() caller. */
+    if (f_kread) {
+        ret = hook_wrap(f_kread, g_kread_argc, 0, uy_kread_after, 0);
+        g_kread_hooked = ret ? 0 : 1;
+        if (ret && g_verbose) pr_info("urov-y: hook kernel read failed: %ld\n", ret);
+    } else if (g_verbose) {
+        pr_info("urov-y: no access_remote_vm symbol; kernel reads stay uncovered\n");
+    }
+
     for (i = 0; i < UY_GATE_NUM; ++i) {
         ret = fp_hook_syscalln(g_gate_nrs[i], 6, uy_gate_before, uy_gate_after,
                                (void *)(uintptr_t)i);
@@ -3182,11 +3590,16 @@ long urov_y_backend_init(const char *args)
     __atomic_store_n(&g_ready, 1, __ATOMIC_RELEASE);
 
     if (g_verbose)
-        pr_info("urov-y: backend ready brk_imm=%x trap=%x page_mode=%d\n",
-                (unsigned)g_imm, (unsigned)g_trap_insn, g_page_hooked && g_mmf_hooked);
+        pr_info("urov-y: backend ready brk_imm=%x trap=%x page_mode=%d kread=%d/%d\n",
+                (unsigned)g_imm, (unsigned)g_trap_insn, g_page_hooked && g_mmf_hooked,
+                g_kread_hooked, g_kread_argc);
     return 0;
 
 unwind_prctl:
+    if (g_kread_hooked) {
+        hook_unwrap(f_kread, 0, uy_kread_after);
+        g_kread_hooked = 0;
+    }
     if (g_vm_readv_hooked) {
         fp_unhook_syscalln(__NR_process_vm_readv, 0, uy_vm_readv_after);
         g_vm_readv_hooked = 0;
@@ -3238,6 +3651,10 @@ long urov_y_backend_exit(void)
     if (g_vm_readv_hooked) {
         fp_unhook_syscalln(__NR_process_vm_readv, 0, uy_vm_readv_after);
         g_vm_readv_hooked = 0;
+    }
+    if (g_kread_hooked) {
+        hook_unwrap(f_kread, 0, uy_kread_after);
+        g_kread_hooked = 0;
     }
     if (g_clone3_hooked) {
         fp_unhook_syscalln(__NR_clone3, uy_clone_before, 0);
@@ -3292,7 +3709,8 @@ long urov_y_status_get(struct uy_status *out)
     out->hooks = (g_brk_hooked ? 1U : 0U) | (g_prctl_hooked ? 2U : 0U) |
                  (gates ? 4U : 0U) |
                  (g_clone_hooked ? 8U : 0U) | (g_clone3_hooked ? 16U : 0U) |
-                 (g_page_hooked ? 32U : 0U) | (g_mmf_hooked ? 64U : 0U);
+                 (g_page_hooked ? 32U : 0U) | (g_mmf_hooked ? 64U : 0U) |
+                 (g_kread_hooked ? 128U : 0U);
     out->degraded = __atomic_load_n(&g_degraded, __ATOMIC_ACQUIRE) ? 1U : 0U;
     out->core_checks = URO_CORE_CHECKS;
     out->imm = (uint32_t)g_imm;

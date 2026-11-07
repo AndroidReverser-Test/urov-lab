@@ -137,7 +137,11 @@ def main():
                            re.findall(r"DOBBY_DETECT_SPLIT [^\n]+", logs)]
             if [view["stage"] for view in split_views] != expected:
                 raise IncompleteLog(f"{label}: missing split-iovec records in {log_path.name}")
+            ap_views = [dict(KV.findall(line)) for line in re.findall(r"DOBBY_DETECT_AP [^\n]+", logs)]
+            if [view["stage"] for view in ap_views] != expected:
+                raise IncompleteLog(f"{label}: missing AP reservation records in {log_path.name}")
         if dobby and active and ("DOBBY_DETECT_RESTORE " not in logs or
+                                 "DOBBY_DETECT_LOCK " not in logs or
                                  "DOBBY_DETECT_GUARD " not in logs):
             raise IncompleteLog(f"{label}: missing recovery or guard records in {log_path.name}")
         if mode == "crc-ap-text" and not re.search(
@@ -158,23 +162,27 @@ def main():
                                "details": re.findall(r"(?:CRC_(?:REJECT|PRIVATE|REMAP|MAP|OVERLAY|SITE|"
                                                      r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC|BIG|BIG_OVERLAY|BIG_VMA|MIXED|"
                                                      r"SET|RESTORE|REREGISTER|LOCK_GUARD)"
-                                                     r"|ELIM_EXEC|DOBBY_DETECT_(?:STATUS|RESTORE|GUARD|BUSINESS|MANY|SIBLING|SPLIT)) [^\n]+", logs)})
+                                                     r"|ELIM_EXEC|DOBBY_DETECT_(?:STATUS|RESTORE|LOCK|GUARD|BUSINESS|ACCESS|KMEM|FORK_KMEM|MANY|SIBLING|SPLIT)) [^\n]+", logs)})
         if dobby:
             report["runs"][-1]["live_views"] = live_views
             report["runs"][-1]["many_views"] = many_views
             report["runs"][-1]["sibling_views"] = sibling_views
             report["runs"][-1]["split_views"] = split_views
+            report["runs"][-1]["ap_views"] = ap_views
             last = stages[2] if active else stages[-1]
             live = live_views[2] if active else live_views[-1]
             many = many_views[2] if active else many_views[-1]
             sibling = sibling_views[2] if active else sibling_views[-1]
             split = split_views[2] if active else split_views[-1]
+            ap = ap_views[2] if active else ap_views[-1]
             print(f"{label} PASS execute={last['execute']} file={last['file']} live={last['live']} "
                   f"iov1={live['single_crc']} iov65={live['kernel_crc']} "
                   f"iov1024_match={many['match']} sibling_match={sibling['match']} "
                   f"split_match={split['match']} views={live['match']}/{live['n']} "
                   f"xzr={live['zero_match']}/{live['n']} cross_page={last['match']}/{last['n']} "
-                  f"accepted_crc={last['accepted_crc']}", flush=True)
+                  f"ap={ap['match']}/{ap['n']} ap_unknown={ap['unknown']} "
+                  f"accepted_crc_old={last['accepted_crc']} accepted_crc_with_ap={ap['accepted_crc']}",
+                  flush=True)
             return
         if mode in ("crc-ap-text", "crc-ap-libc", "crc-ap-big"):
             last = stages[1]
@@ -219,7 +227,7 @@ def main():
         kp("kpm", "load", remote, f"key={module_key}")
         loaded = True
         report["loaded_status"] = kp("kpm", "ctl0", MODULE, "status")
-        if "hooks=0x7f" not in report["loaded_status"]:
+        if "hooks=0xff" not in report["loaded_status"]:
             raise RuntimeError("UROV-Y hooks incomplete")
         run_app("loaded-idle", clean_mode)
         modes = ("dobby-detect-active",) if args.dobby_detection else (

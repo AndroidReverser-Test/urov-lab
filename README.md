@@ -1,16 +1,30 @@
 # UROV-LAB
 
-`urov-y` 2.11.0 把同 `mm` 的 `process_vm_readv` 覆盖扩到 Linux 允许的全部
-1024 项 iovec，并在 2.10.0 的镜像/快照规则上补齐同 mm 兄弟 tid。**同 `mm`
-的 `process_vm_readv`** 由 syscall after hook 按镜像/快照规则重写调用者
-缓冲区，**`LDXR XZR; load; STXR XZR`** 在目标字为零时由 LL/SC 桥完成 no-op
-store。分支目标图覆盖 `VM_EXEC`-only VMA，未驻留代码页在首次 fault-in 时
-补扫，`mmap`/`mprotect`/`mremap` 新增可执行范围在返回 EL0 前补扫；不可读的
-可达页使 map incomplete 并关闭桥。ABI v8、`ctl0` 字段和 `hooks=0x7f` 不变。
+`urov-y` 2.12.0 把读覆盖扩到**内核辅助读**：新增 `__access_remote_vm` after
+hook，`/proc/<pid>/mem`、`ptrace` 与 `access_process_vm()` 与 EL0 读者看到同一
+镜像；`process_vm_readv` 改按**目标** `mm` 判定。`VM_LOCKED` 不再被拒绝
+（`mlock` 不是门槛），无效 `madvise` 透传给 Linux，同权限 `mprotect(RX)` 与
+`fork()`/`vfork()` 不再结束 `PAGE_AP` 会话：fork 子进程继承的陷阱 PTE 用 PTE
+形状识别并按镜像返回，会话结束后孤儿陷阱修复为可读并重试；`execve` 只在执行者
+属于 owner 线程组时拆会话。**同 `mm` 的 `process_vm_readv`** 仍按镜像/快照规则
+重写调用者缓冲区，**`LDXR XZR; load; STXR XZR`** 在目标字为零时由 LL/SC 桥完成
+no-op store。ABI v8 请求布局、`ctl0` 字段和计数器不变，`hooks` 因内核读 hook
+变为 `0xff`。
 2.8.0 将 `prctl` 的 magic 固定为 `UROVYLAB`，保留 ABI v8 请求布局和 MAC 校验。
 2.4.0 的参数校验、并发镜像发布和陷阱撤销适配继续用于 Android ARM64 的 5.4 起的 5.x 和 6.x 内核，
 支持 4 KiB 及符合条件的 16 KiB 页表。实测、支持边界和复跑命令见
 [UROV-Y 兼容性与审计](COMPATIBILITY_Y.md)。下方日期条目保留各历史版本的行为和证据。
+
+2026-11-08 第十二轮消除：`urov-y` 2.12.0 补齐内核辅助读，并让锁页、无效
+`madvise`、同权限 `mprotect(RX)`、`fork`/`vfork` 与 `vfork`+`exec` 不再带走
+或暴露会话。Dobby 24×3 活动阶段 `accepted_crc=24/24`（合计 72）、`views=0/72`、
+`iov1024/sibling/split` 全等，`/proc/self/mem` 18/18 与 EL0 视图一致，fork 子
+进程的 `/proc/self/mem` 3/3 一致；CRC 5×2（16 次）、消除 6×2（14 次）、多页
+5×1（含新增 24 页五路径 `mp-prod`）均 PASS。构建 `urov-y.kpm 13ca0c0c...`、
+`urovdetect.apk 4494e72c...`。方案与残余见
+[2.12.0 设计](ELIMINATION_2_12_DESIGN.md)、
+[结果 2.12.0](APP_READ_INTEGRITY_RESULTS.md) 与
+[审计 2.12.0](APP_READ_INTEGRITY_AUDIT.md)。
 
 2026-11-07 第十一轮消除：`urov-y` 2.11.0 把同 `mm` 的
 `process_vm_readv` 覆盖从 64 项扩到 Linux 允许的全部 1024 项 iovec，用逐项

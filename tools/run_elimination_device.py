@@ -243,7 +243,7 @@ def main():
             if not re.search(r"^callback_context=sleepable-v2$", info, re.M):
                 raise RuntimeError("active unload requires a loader reporting sleepable-v2")
         report["loaded_status"] = kp("kpm", "ctl0", "urov-y", "status")
-        if "hooks=0x7f" not in report["loaded_status"]:
+        if "hooks=0xff" not in report["loaded_status"]:
             raise RuntimeError("urov-y hooks incomplete")
 
         run_app("03-loaded-idle", "y-clean")

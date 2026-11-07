@@ -400,6 +400,65 @@ VMA，把每个 `B/BL/B.cond/CBZ/CBNZ/TBZ/TBNZ` 的静态目标写入按 VMA 划
 仍在；兄弟 tid 路径依赖可选的 `find_task_by_vpid`。完整数据和复跑命令见
 [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.11.0 节。
 
+## 2.12.0 生产读路径与生命周期保活复核（2026-11-08）
+
+同一 Pixel 6、`6.1.134-android14-11`、4 KiB、KernelPatch `0xc00`。检测仍在
+`untrusted_app`（`CapEff=0`、`Seccomp=2`、SELinux Enforcing）中执行。构建
+`urov-y.kpm 13ca0c0c...`、`urovdetect.apk 4494e72c...`。
+
+2.11.0 的活动矩阵读值已经干净，但检测器仍有五条**不需要改内核**的路径：
+
+1. `/proc/self/mem`、`ptrace` 和跨进程 `process_vm_readv` 走 GUP，看到真实页；
+   本机 `untrusted_app` 默认打不开 `/proc/self/mem`（dumpable=0），但
+   `prctl(PR_SET_DUMPABLE, 1)` 后即可。
+2. `mlock()` 自有 RX 页让 `REGISTER` 返回 `EINVAL`（`UY_VM_IO` 实际是
+   `VM_LOCKED`）。
+3. 重叠的无效 `madvise` 在 Linux 校验 advice 之前恢复整个会话。
+4. 重叠的 `mprotect(RX)` 直接结束会话。
+5. `fork()`/`vfork()` 在复制映射前结束会话；`vfork` 子进程 `execve` 也会带走
+   父进程的会话。
+
+2.12.0 的读取路径与生命周期：
+
+- **内核读 hook。** 新增 `__access_remote_vm`（5/6 参）after hook，只在
+  `ret > 0`、非 `FOLL_WRITE`、`mm` 属于会话（或仍是 fork 副本）时改写调用者的
+  内核缓冲区；模块自身的访问用 `current` 标记绕过。一个入口覆盖
+  `/proc/<pid>/mem`、ptrace 与 `access_process_vm()`。
+- **`process_vm_readv` 目标 mm。** 判定从调用者改为目标：外部进程读 owner、
+  兄弟 tid、`CLONE_VM` 兄弟都改写。`find_task_by_vpid` 缺失时 `PAGE_AP`
+  注册直接返回 `EOPNOTSUPP`，不再静默回退。
+- **`VM_LOCKED` 接受。** `UY_VM_IO` 改回 `0x4000`；`mlock` 只固定页，不改叶子
+  PTE。
+- **`madvise` 取值域。** 无效 advice 透传给 Linux；`PAGE_AP` 下有效 advice
+  不拆会话，掉掉的 PTE 由缺页回调重装。
+- **同权限 `mprotect`。** `PAGE_AP` 下保留 `READ|EXEC`、不含 `WRITE` 时保活，
+  after hook 重装；改成可写仍结束。
+- **`fork` 继承。** 子进程继承同一批陷阱 PTE，用“只有本模块能产生”的 PTE
+  形状识别并按镜像返回；未驻留页按 VMA 身份在缺页时重装；会话结束后孤儿陷阱
+  修复为可读并重试。`execve` 只在执行者属于 owner 线程组时拆会话。
+- **输出面。** ABI 仍 v8；`hooks` 增加 `0x80`；没有新 syscall hook、文件、
+  线程、定时器或返回码。
+
+真机结果：
+
+| 矩阵 | 结果 |
+| --- | --- |
+| Dobby 24×3 | PASS；`accepted_crc=24/24`×3、`views=0/72`、`iov1024/sibling/split` 全等；`DOBBY_DETECT_KMEM` 18/18 与 EL0 视图一致、`DOBBY_DETECT_FORK_KMEM` 3/3；`DOBBY_DETECT_LOCK` 3/3 覆盖生效；`DOBBY_DETECT_RESTORE` 3/3 会话存活 |
+| CRC 5×2 | PASS，16 次运行；`CRC_LOCK_GUARD` 12/12，`CRC_RESTORE` 10/10 存活 |
+| 消除矩阵 6×2 | PASS，14 次运行；`site_call_ns=285/286`，探针全 0 |
+| 多页 5×1 | PASS，6 次运行；`mp-prod` 24 页五条读路径 CRC 全等、`child_overlay=1` |
+
+残余（2.12.0）：
+
+1. 每次读一次同步异常、桥的非硬件独占 store 不变（架构边界）。
+2. 可写 `mprotect`、`munmap`/`mremap`/`MAP_FIXED`、owner `execve`、进程退出仍
+   结束会话；子进程把拷贝改成可写后该子进程失去覆盖。
+3. PTE 重装窗口仍在，限 `handle_mm_fault` 内部；孤儿陷阱修复依赖模块仍加载。
+4. `caller_count>0` 的窗口语义不变；生产用 `caller_count=0`。
+
+完整数据与复跑命令见
+[APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.12.0 节。
+
 ## 复跑
 
 在仓库根目录运行。`<KP_KEY>` 为设备的 KernelPatch 密钥，模块密钥由脚本另行生成。

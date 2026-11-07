@@ -324,8 +324,8 @@ static int uy_mapping_private_kb(const void *addr, unsigned *dirty, unsigned *an
 }
 
 /* Verify the read value and the architectural reservation result. */
-static void elimination_case(const char *name, const struct page *p, unsigned delta,
-                             int repeats, enum ud_verdict expected_nonzero)
+static void elimination_case(const char *name, const struct page *p, const uint8_t *ro_alias,
+                             unsigned delta, int repeats, enum ud_verdict expected_nonzero)
 {
     const uint8_t *at = p->address + p->entry + delta;
     const uint8_t *reference = (const uint8_t *)(uintptr_t)&ud_payload + delta;
@@ -335,6 +335,7 @@ static void elimination_case(const char *name, const struct page *p, unsigned de
     unsigned exclusive_matches = 0, exclusive_clean = 0, exclusive_unknown = 0;
     unsigned zero_matches = 0, zero_clean = 0, zero_unknown = 0;
     unsigned nonzero_matches = 0, nonzero_clean = 0, nonzero_unknown = 0;
+    unsigned ap_matches = 0, ap_clean = 0, ap_unknown = 0;
     unsigned reader_matches = 0, reader_clean = 0, reader_unknown = 0;
     unsigned accepted = 0, failed = 0, control_failed = 0;
     unsigned failures_before = g_fail;
@@ -384,6 +385,15 @@ static void elimination_case(const char *name, const struct page *p, unsigned de
         nonzero_matches += nonzero.reservation_loss == UD_MATCH;
         nonzero_clean += nonzero.reservation_loss == UD_NO_MATCH;
         nonzero_unknown += nonzero.reservation_loss == UD_UNKNOWN;
+        struct ud_exclusive_observation ap;
+        ud_observe_ap_reservation(at, ro_alias + p->entry + delta, p->fd, offset, &ap);
+        REQUIRE(errno == EDOM && (ap.reservation_loss == expected_nonzero ||
+                (ap.reservation_loss == UD_UNKNOWN && ap.error == EAGAIN)),
+                "%s AP verdict=%d accepted=%u failed=%u control=%u error=%d",
+                name, ap.reservation_loss, ap.accepted, ap.target_failed, ap.control_failed, ap.error);
+        ap_matches += ap.reservation_loss == UD_MATCH;
+        ap_clean += ap.reservation_loss == UD_NO_MATCH;
+        ap_unknown += ap.reservation_loss == UD_UNKNOWN;
         errno = EDOM;
         ud_observe_reader(at, p->fd, offset, uy_site_ldr, &rd);
         REQUIRE(errno == EDOM, "%s reader changed errno", name);
@@ -417,17 +427,19 @@ static void elimination_case(const char *name, const struct page *p, unsigned de
             nonzero_clean > 0 && !nonzero_matches,
             "%s inconclusive nonzero XZR result matches=%u clean=%u",
             name, nonzero_matches, nonzero_clean);
+    REQUIRE(ap_matches + ap_clean > 0, "%s all AP observations were inconclusive", name);
     REQUIRE(reader_matches == 0, "%s reader matched %u times", name, reader_matches);
     LOG("ELIM_CASE name=%s result=%s n=%d exclusive_match=%u exclusive_clean=%u "
         "exclusive_unknown=%u accepted=%u failed=%u control_failed=%u "
         "reader_match=%u reader_clean=%u reader_unknown=%u direct=0x%llx file=0x%llx "
         "zero_match=%u zero_clean=%u zero_unknown=%u "
-        "nonzero_match=%u nonzero_clean=%u nonzero_unknown=%u",
+        "nonzero_match=%u nonzero_clean=%u nonzero_unknown=%u ap_match=%u ap_clean=%u ap_unknown=%u",
         name, failures_before == g_fail ? "PASS" : "FAIL", repeats,
         exclusive_matches, exclusive_clean, exclusive_unknown, accepted, failed,
         control_failed, reader_matches, reader_clean, reader_unknown,
         (unsigned long long)rd.direct_value, (unsigned long long)rd.file_value,
-        zero_matches, zero_clean, zero_unknown, nonzero_matches, nonzero_clean, nonzero_unknown);
+        zero_matches, zero_clean, zero_unknown, nonzero_matches, nonzero_clean, nonzero_unknown,
+        ap_matches, ap_clean, ap_unknown);
 }
 
 /* No key: the module is loaded but cannot be addressed; the same observation
@@ -477,7 +489,12 @@ static void elimination_clean(void)
     REQUIRE(errno == EDOM && views.file_diff == UD_NO_MATCH && views.completed == UD_REPEATS,
             "UY clean views file=%d done=%u error=%d", views.file_diff,
             views.completed, views.error_file);
-    elimination_case("idle_unregistered", &p, 8, 3, UD_NO_MATCH);
+    const uint8_t *ro_alias = mmap(NULL, UROV_Y_PAGE, PROT_READ, MAP_PRIVATE, p.fd, p.file_offset);
+    REQUIRE(ro_alias != MAP_FAILED, "UY AP read-only alias errno=%d", errno);
+    if (ro_alias != MAP_FAILED) {
+        elimination_case("idle_unregistered", &p, ro_alias, 8, 3, UD_NO_MATCH);
+        REQUIRE(!munmap((void *)ro_alias, UROV_Y_PAGE), "UY AP alias cleanup");
+    }
     page_close(&p);
 }
 
@@ -512,6 +529,13 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
         page_close(&p);
         return;
     }
+    const uint8_t *ro_alias = mmap(NULL, UROV_Y_PAGE, PROT_READ, MAP_PRIVATE, p.fd, p.file_offset);
+    if (ro_alias == MAP_FAILED) {
+        REQUIRE(0, "UY AP read-only alias errno=%d", errno);
+        page_close(&reference);
+        page_close(&p);
+        return;
+    }
     at = p.address + p.entry + 8U;
     (void)uy_mapping_private_kb((const void *)(uintptr_t)&uy_site_ldr, &base_dirty,
                                 &base_anon);
@@ -525,7 +549,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
 
     REQUIRE(!app_pread(p.fd, p.file_offset + p.entry + 8, (uint8_t *)&disk, 8), "UY pread");
     REQUIRE(!app_pread(p.fd, p.file_offset + p.entry, disk64, sizeof(disk64)), "UY pread64");
-    elimination_case("baseline", &p, 8, repeats, UD_NO_MATCH);
+    elimination_case("baseline", &p, ro_alias, 8, repeats, UD_NO_MATCH);
     elimination_exec_case("baseline", &reference, repeats, UD_NO_MATCH);
     store_case("baseline", &p, 8, repeats, UD_NO_MATCH);
 
@@ -568,7 +592,8 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
                             "UY page mode made the site page private dirty=%u/%u "
                             "anon=%u/%u", dirty, base_dirty, anon, base_anon);
                 } else {
-                    REQUIRE(file_word != live_word, "UY site code word was not patched");
+                    REQUIRE(file_word != live_word && (live_word & 0xffe0001fU) == 0xd4200000U,
+                            "UY site did not contain a BRK: %08x", live_word);
                     REQUIRE(have_pd && anon >= base_anon + 4U,
                             "UY brk mode did not COW the site page anon=%u/%u",
                             anon, base_anon);
@@ -578,8 +603,8 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     }
 
     /* Only an actual data-abort path loses this reservation. */
-    elimination_case("active_page", &p, 8, repeats, expected_nonzero);
-    elimination_case("active_outside_window", &p, 96, repeats, expected_nonzero);
+    elimination_case("active_page", &p, ro_alias, 8, repeats, expected_nonzero);
+    elimination_case("active_outside_window", &p, ro_alias, 96, repeats, expected_nonzero);
 
     REQUIRE(!uy_status(&ctx, &before) && before.state == UROV_Y_ACTIVE,
             "UY status before execution probe");
@@ -635,10 +660,10 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     REQUIRE(!uy_set_page(&ctx, generation, UINT64_C(0x0f0e0d0c0b0a0908)),
             "UY SET errno=%d", errno);
     REQUIRE(uy_business_ldr(at) == UINT64_C(0x0f0e0d0c0b0a0908), "UY SET not visible");
-    elimination_case("active_after_set", &p, 8, repeats, expected_nonzero);
+    elimination_case("active_after_set", &p, ro_alias, 8, repeats, expected_nonzero);
     REQUIRE(!uy_set_page(&ctx, generation + 1, disk), "UY SET identity errno=%d", errno);
     REQUIRE(uy_business_ldr(at) == disk, "UY identity SET not visible");
-    elimination_case("active_equal_value", &p, 8, repeats, expected_nonzero);
+    elimination_case("active_equal_value", &p, ro_alias, 8, repeats, expected_nonzero);
     elimination_exec_case("active_equal_value", &reference, repeats, expected_exec);
     store_case("active_equal_value", &p, 8, repeats, expected_store);
     elimination_bridge_case("active_equal_value", &p, 8, expected_cross_page);
@@ -677,7 +702,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
             REQUIRE(dirty == base_dirty && anon == base_anon,
                     "UY page mode left the page private after deactivate");
     }
-    elimination_case("deactivated", &p, 8, repeats, UD_NO_MATCH);
+    elimination_case("deactivated", &p, ro_alias, 8, repeats, UD_NO_MATCH);
     elimination_exec_case("deactivated", &reference, repeats, UD_NO_MATCH);
     store_case("deactivated", &p, 8, repeats, UD_NO_MATCH);
     elimination_bridge_case("deactivated", &p, 8, UD_NO_MATCH);
@@ -692,6 +717,7 @@ out:
             (unsigned long long)atomic_load(&business.ops),
             atomic_load(&business.errors));
     }
+    REQUIRE(!munmap((void *)ro_alias, UROV_Y_PAGE), "UY AP alias cleanup");
     page_close(&reference);
     page_close(&p);
 }

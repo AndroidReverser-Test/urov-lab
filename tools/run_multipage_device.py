@@ -17,7 +17,7 @@ LAB = Path(__file__).resolve().parents[1]
 PACKAGE = "com.example.urovdetect"
 ACTIVITY = f"{PACKAGE}/.MainActivity"
 MODULE = "urov-y"
-MODES = ("mp-multi", "mp-ld1", "mp-cross", "mp-srcpage", "mp-audit")
+MODES = ("mp-multi", "mp-ld1", "mp-cross", "mp-srcpage", "mp-audit", "mp-prod")
 STAMP = re.compile(r"^\[\s*([0-9.]+)\]", re.M)
 
 
@@ -107,7 +107,10 @@ def main():
                          r"ld1_tail/uncovered_page0"),
             "mp-srcpage": (r"MP_SRC_PAGE register=1 page=1",
                            r"MP_SRC_PAGE_DONE page=1"),
-            "mp-audit": (r"MP_AUDIT invalid=5 updates=48 reads=[1-9]\d* errors=0 child_restored=1",),
+            "mp-audit": (r"MP_AUDIT invalid=5 updates=48 reads=[1-9]\d* errors=0 mprotect_active=1 "
+                     r"child_overlay=1",),
+            "mp-prod": (r"MP_PROD pages=24 bytes=\d+ image_crc=[0-9a-f]{8}",
+                        r"MP_PROD_DONE paths=[45] child_overlay=1"),
         }[mode]
         for pattern in required:
             if not re.search(pattern, logs):

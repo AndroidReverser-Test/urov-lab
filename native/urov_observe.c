@@ -16,8 +16,8 @@ struct sample_identity {
     struct stat file;
 };
 
-static int identity(const void *address, size_t size, int fd, off_t offset,
-                    struct sample_identity *out)
+static int identity_with_exec(const void *address, size_t size, int fd, off_t offset,
+                              bool executable, struct sample_identity *out)
 {
     struct ud_mapping *m = &out->mapping;
     struct stat *s = &out->file;
@@ -27,7 +27,7 @@ static int identity(const void *address, size_t size, int fd, off_t offset,
         size > (size_t)ps - (uintptr_t)address % (size_t)ps) return EINVAL;
     error = ud_mapping_at("/proc/self/maps", address, m);
     if (error) return error;
-    if (!m->readable || m->writable || !m->executable ||
+    if (!m->readable || m->writable || !!m->executable != executable ||
         size > m->end - (uintptr_t)address) return EACCES;
     if (fstat(fd, s)) return errno;
     if (!S_ISREG(s->st_mode) || m->inode != (uint64_t)s->st_ino ||
@@ -36,6 +36,12 @@ static int identity(const void *address, size_t size, int fd, off_t offset,
         (uint64_t)offset != m->offset + (uintptr_t)address - m->start ||
         s->st_size < offset || (uint64_t)(s->st_size - offset) < size) return ESTALE;
     return 0;
+}
+
+static int identity(const void *address, size_t size, int fd, off_t offset,
+                    struct sample_identity *out)
+{
+    return identity_with_exec(address, size, fd, offset, true, out);
 }
 
 static int unchanged(const struct sample_identity *a, const struct sample_identity *b)
@@ -134,6 +140,24 @@ static unsigned spaced_exclusive_once(const void *address, uint64_t *scratch, un
     __asm__ volatile("ldxr %0, [%3]\n"
                      "nop\n"
                      "ldrb %w1, [%4]\n"
+                     "stxr %w2, %0, [%3]\n"
+                     : "=&r"(old), "=&r"(value), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "memory");
+    *byte = value;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned post_load_nop_once(const void *address, uint64_t *scratch, unsigned *byte)
+{
+    uint64_t old;
+    unsigned value, failed;
+    /* Y 2.11.0 requires STXR at the faulting PC + 4. Keep the NOP after
+     * LDRB, where the bridge does not look past it. Both exclusives use only
+     * scratch; LDRB is the sole access to the sampled address. */
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     "ldrb %w1, [%4]\n"
+                     "nop\n"
                      "stxr %w2, %0, [%3]\n"
                      : "=&r"(old), "=&r"(value), "=&r"(failed)
                      : "r"(scratch), "r"(address) : "memory");
@@ -363,7 +387,9 @@ static unsigned execution_once(const void *address, uint64_t *scratch, unsigned 
     return failed;
 }
 
-enum reservation_probe { READ_ADJACENT, READ_SPACED, READ_ZERO, READ_NONZERO, EXECUTE_CANARY };
+enum reservation_probe {
+    READ_ADJACENT, READ_SPACED, READ_POST_LOAD_NOP, READ_ZERO, READ_NONZERO, EXECUTE_CANARY
+};
 
 static void observe_reservation(const void *address, const void *reference,
                                 int backing_fd, off_t offset, enum reservation_probe probe,
@@ -371,10 +397,12 @@ static void observe_reservation(const void *address, const void *reference,
 {
     struct sample_identity target, control, after;
     int execute = probe == EXECUTE_CANARY;
+    bool ap_probe = probe == READ_POST_LOAD_NOP;
     size_t size = execute ? sizeof(uint64_t) : 1U;
     unsigned (*sample)(const void *, uint64_t *, unsigned *) = exclusive_once;
     if (execute) sample = execution_once;
     if (probe == READ_SPACED) sample = spaced_exclusive_once;
+    if (ap_probe) sample = post_load_nop_once;
     if (probe == READ_ZERO) sample = zero_exclusive_once;
     if (probe == READ_NONZERO) sample = nonzero_exclusive_once;
     /* Keep the scratch away from normal stack writes and compiler spills.
@@ -384,12 +412,13 @@ static void observe_reservation(const void *address, const void *reference,
     int saved = errno, error;
     long ps = sysconf(_SC_PAGESIZE);
     uint64_t begin = now_ns();
-    unsigned baseline_byte = 0;
+    unsigned control_byte = 0, target_byte = 0;
     memset(out, 0, sizeof(*out));
     out->reservation_loss = UD_UNKNOWN;
     error = identity(address, size, backing_fd, offset, &target);
     if (error) { out->error = error; goto done; }
-    error = identity(reference, size, backing_fd, offset, &control);
+    /* UROV-Y cannot register a non-executable reference as a target page. */
+    error = identity_with_exec(reference, size, backing_fd, offset, !ap_probe, &control);
     if (error) { out->error = error; goto done; }
     if (ps <= 0 || (uintptr_t)address / (uintptr_t)ps ==
                    (uintptr_t)reference / (uintptr_t)ps ||
@@ -406,8 +435,12 @@ static void observe_reservation(const void *address, const void *reference,
         unsigned control_status = sample(reference, scratch, &a);
         unsigned target_status = sample(address, scratch, &b);
         if (control_status > 1U || target_status > 1U) { out->error = EPROTO; goto done; }
-        if (a != b || (i && a != baseline_byte)) { out->error = EAGAIN; goto done; }
-        baseline_byte = a;
+        if ((!ap_probe && a != b) ||
+            (i && (a != control_byte || b != target_byte))) {
+            out->error = EAGAIN; goto done;
+        }
+        control_byte = a;
+        target_byte = b;
     }
     for (unsigned epoch = 0; epoch < UD_OBSERVE_EPOCHS; ++epoch) {
         unsigned accepted = 0, failures = 0;
@@ -420,7 +453,9 @@ static void observe_reservation(const void *address, const void *reference,
             if (before > 1U || tested > 1U || after_control > 1U) {
                 out->error = EPROTO; goto done;
             }
-            if (a != baseline_byte || b != a || c != a) { out->error = EAGAIN; goto done; }
+            if (a != control_byte || b != target_byte || c != control_byte) {
+                out->error = EAGAIN; goto done;
+            }
             if (before || after_control) { ++out->control_failed; continue; }
             ++accepted;
             failures += !!tested;
@@ -435,7 +470,7 @@ static void observe_reservation(const void *address, const void *reference,
     if (out->control_failed > 8U) { out->error = EAGAIN; goto done; }
     error = identity(address, size, backing_fd, offset, &after);
     if (error || !unchanged(&target, &after)) { out->error = error ? error : EAGAIN; goto done; }
-    error = identity(reference, size, backing_fd, offset, &after);
+    error = identity_with_exec(reference, size, backing_fd, offset, !ap_probe, &after);
     if (error || !unchanged(&control, &after)) { out->error = error ? error : EAGAIN; goto done; }
     if (execute) {
         error = check_canary(address, reference, backing_fd, offset);
@@ -462,6 +497,13 @@ void ud_observe_spaced_exclusive(const void *address, const void *reference,
                                  struct ud_exclusive_observation *out)
 {
     observe_reservation(address, reference, backing_fd, offset, READ_SPACED, out);
+}
+
+void ud_observe_ap_reservation(const void *address, const void *reference,
+                               int backing_fd, off_t offset,
+                               struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_NOP, out);
 }
 
 void ud_observe_zero_exclusive(const void *address, const void *reference,

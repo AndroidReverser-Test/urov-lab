@@ -76,13 +76,17 @@ static int crc_deactivate(const struct crc_patch_api *api, const char *key)
     return !rc && q.state == UROV_Y_INACTIVE && q.session == 0;
 }
 
-/* UROV-Y 2.10.0's target check rejects VM_LOCKED on the tested kernel.
- * The request supplies ground truth. Lock only the owned, idle RX page. */
+/* UROV-Y 2.12.0 accepts VM_LOCKED: mlock() only pins a page against reclaim
+ * and does not change the leaf PTE, so the overlay has to work on a locked
+ * page.  The old EINVAL refusal was an app-visible way to stop REGISTER.
+ * Verify the overlay instead of the refusal, then restore through the
+ * authenticated DEACTIVATE. */
 static bool crc_lock_guard(const struct crc_patch_api *api, const char *key,
                            const void *page, const uint8_t image[CRC_PAYLOAD_SIZE],
                            unsigned mode, int all_callers, int repeats, const char *name)
 {
-    uint32_t expected_crc = crc_read_code(page, uy_business_ldrb);
+    uint32_t live_crc = crc_read_code(page, uy_business_ldrb);
+    uint32_t image_crc = crc_payload_bytes(image);
     uint32_t expected_return = crc_execute(page);
     uint64_t begin = now_ns();
     int lock_error = mlock(page, UROV_Y_PAGE) ? errno : 0;
@@ -90,32 +94,32 @@ static bool crc_lock_guard(const struct crc_patch_api *api, const char *key,
     REQUIRE(!lock_error, "CRC %s mlock errno=%d", name, lock_error);
     if (lock_error) return false;
 
+    struct ud_mapping before, after;
+    int map_error = ud_mapping_at("/proc/self/maps", page, &before);
     struct urov_y_request q;
     long rc = crc_register(api, key, page, image, mode, all_callers, &q);
     int register_error = rc ? errno : 0;
-    q = uy_req(UROV_Y_STATUS);
-    q.session = 1;
-    bool inactive = !api->control(key, &q) && q.state == UROV_Y_INACTIVE;
-    if (!rc) (void)crc_deactivate(api, key);
-
-    struct ud_mapping map;
-    bool rx = !ud_mapping_at("/proc/self/maps", page, &map) &&
-              map.readable && !map.writable && map.executable;
-    int stable = 0;
-    if (inactive && rx) {
-        for (int i = 0; i < repeats; ++i) {
-            stable += crc_execute(page) == expected_return &&
-                      crc_read_code(page, uy_business_ldrb) == expected_crc;
-        }
-    }
+    bool active = !rc && q.state == UROV_Y_ACTIVE;
+    uint32_t window_crc = active ? crc_read_code(page, uy_business_ldrb) : live_crc;
+    uint32_t window_return = active ? crc_execute(page) : 0;
+    int deactivate_error = 0;
+    if (active && !crc_deactivate(api, key)) deactivate_error = errno ? errno : EIO;
+    uint32_t restored_crc = crc_read_code(page, uy_business_ldrb);
+    bool rx = !map_error && !ud_mapping_at("/proc/self/maps", page, &after) &&
+              after.start == before.start && after.end == before.end &&
+              after.offset == before.offset && after.readable && !after.writable &&
+              after.executable;
     int unlock_error = munlock(page, UROV_Y_PAGE) ? errno : 0;
-    bool passed = rc == -1 && register_error == EINVAL && inactive && rx &&
-                  stable == repeats && !unlock_error;
+    bool passed = !register_error && active && window_crc != live_crc &&
+                  window_crc == image_crc && window_return == expected_return &&
+                  !deactivate_error && restored_crc == live_crc && rx && !unlock_error;
     REQUIRE(passed, "CRC %s locked page verification", name);
-    LOG("CRC_LOCK_GUARD name=%s mode=%u all_callers=%d bytes=%u lock_ns=%llu "
-        "register_errno=%d inactive=%d rx=%d stable=%d n=%d unlock_errno=%d",
-        name, mode, all_callers, UROV_Y_PAGE, (unsigned long long)lock_ns,
-        register_error, inactive, rx, stable, repeats, unlock_error);
+    LOG("CRC_LOCK_GUARD name=%s mode=%u all_callers=%d bytes=%u n=%d lock_ns=%llu "
+        "register_errno=%d active=%d window=%08x image=%08x live=%08x "
+        "execute=%04x deactivate_errno=%d restored=%08x rx=%d unlock_errno=%d",
+        name, mode, all_callers, UROV_Y_PAGE, repeats, (unsigned long long)lock_ns,
+        register_error, active, window_crc, image_crc, live_crc, window_return,
+        deactivate_error, restored_crc, rx, unlock_error);
     return passed;
 }
 
@@ -888,17 +892,23 @@ static void crc_overlay_signals(const struct page *target, const struct page *pa
     LOG("CRC_CHANGED_BYTE probe=%d error=%d completed=%u", obs.verdict, obs.error, obs.completed);
 }
 
+/* Linux rejects the advice before touching the VMA.  Since 2.12.0 the range
+ * gate no longer reads that rejection as a request to restore the session:
+ * only the authenticated DEACTIVATE ends an active overlay. */
 static bool crc_revoke(const struct crc_patch_api *api, const char *key,
                        const struct page *target, unsigned mode)
 {
     int advice_error = uy_invalid_advice(target->address, UROV_Y_PAGE);
     struct urov_y_request q = uy_req(UROV_Y_STATUS);
+    int survived;
+
     q.session = 1;
-    bool restored = !api->control(key, &q) && q.state == UROV_Y_INACTIVE;
-    REQUIRE(advice_error == EINVAL && restored,
-            "CRC invalid advice recovery errno=%d state=%u", advice_error, q.state);
-    LOG("CRC_RESTORE mode=%u madvise_errno=%d inactive=%d", mode, advice_error, restored);
-    return restored;
+    survived = !api->control(key, &q) && q.state == UROV_Y_ACTIVE;
+    REQUIRE(advice_error == EINVAL && survived,
+            "CRC invalid advice changed the session errno=%d state=%u",
+            advice_error, q.state);
+    LOG("CRC_RESTORE mode=%u madvise_errno=%d survived=%d", mode, advice_error, survived);
+    return crc_deactivate(api, key);
 }
 
 static void crc_injection(const char *mode_name, const char *key, int repeats,

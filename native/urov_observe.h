@@ -43,7 +43,8 @@ struct ud_live_observation {
  * The kernel copy uses 65 local iovecs: a count above the legacy 64-entry
  * module cap, and still one valid transfer because the remaining entries are
  * zero length. Enable only on Android profiles verified to allow
- * process_vm_readv. Retain the immutable RX mapping, fd and side-effect-free
+ * process_vm_readv. UROV-Y 2.11.0 covers this count too; matching views cannot
+ * establish integrity there. Retain the immutable RX mapping, fd and side-effect-free
  * reader for the call. Use a worker and sample at most 64 bytes within one
  * page. MATCH requires two stable but different views. UNKNOWN covers read
  * errors and unstable samples. Use the returned bytes only for MATCH or
@@ -76,6 +77,17 @@ void ud_observe_exclusive(const void *address, const void *reference,
 void ud_observe_spaced_exclusive(const void *address, const void *reference,
                                  int backing_fd, off_t offset,
                                  struct ud_exclusive_observation *out);
+
+/* Same lifetime, file identity and paired trials. The target is RX; the
+ * reference must be a read-only, non-executable alias of the same file byte
+ * in another page, so UROV-Y cannot register it. LDXR; LDRB; NOP; STXR puts
+ * a NOP at the faulting PC + 4, outside the 2.11.0 PAGE_AP store bridge.
+ * The two bytes may differ (e.g. a legitimate COW patch) but each must remain
+ * stable. A MATCH describes reservation loss for this read, independent of
+ * the returned byte. This does not test SITE_BRK or PAGE_UXN instruction fetch. */
+void ud_observe_ap_reservation(const void *address, const void *reference,
+                               int backing_fd, off_t offset,
+                               struct ud_exclusive_observation *out);
 
 /* Same paired controls as ud_observe_exclusive. The scratch word is zero
  * and both exclusives use XZR, a shape the UROV-Y 2.9.0 bridge rejects.

@@ -1,6 +1,20 @@
 # UROV-LAB 当前进度
 
-更新于 2026-11-07（Asia/Shanghai）。
+更新于 2026-11-08（Asia/Shanghai）。
+
+> 2026-11-08 补充：`urov-y` 2.12.0 消除 2.11.0 仍成立的五条 **App 可及** 特征：
+> `/proc/<pid>/mem`/ptrace/跨进程 `process_vm_readv` 的内核辅助读（新增
+> `__access_remote_vm` after hook，并按目标 `mm` 判定 `process_vm_readv`）、
+> `mlock` 拒绝注册（`VM_LOCKED` 现在接受）、无效 `madvise` 撤销会话（改为透传
+> Linux 的 `EINVAL`）、重叠 `mprotect(RX)` 结束会话（改为保活并重装），以及
+> `fork`/`vfork`/`vfork`+`exec` 结束会话（改为子进程继承陷阱并按镜像返回，
+> 会话结束后孤儿陷阱修复为重试）。Dobby 24×3 活动阶段 `views=0/72`、
+> `accepted_crc=72/72`、`/proc/self/mem` 18/18 与 EL0 视图一致；CRC 5×2、
+> 消除 6×2、多页 5×1（含新增 24 页五路径 `mp-prod`）均 PASS，
+> `site_call_ns=285/286`。构建 `urov-y.kpm 13ca0c0c...`、
+> `urovdetect.apk 4494e72c...`。见
+> [ELIMINATION_2_12_DESIGN.md](ELIMINATION_2_12_DESIGN.md) 与
+> [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.12.0 节。
 
 > 2026-11-07 补充：`urov-y` 2.10.0 用同进程 `process_vm_readv` after hook 补齐
 > GUP 读路径，但任一侧 iovec 数超过 64 时直接返回。2.11.0 把计数上限对齐

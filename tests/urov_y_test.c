@@ -435,7 +435,11 @@ static int run_active(const char *key, unsigned mode)
            mode_name(mode), (unsigned long long)call_cost_ns(&p, 200));
     CHECK(!y_status(&ctx, &st) && st.state == UROV_Y_INACTIVE, "STATUS after deactivate");
 
-    /* A fork creating a new mm ends the session before it copies the mapping. */
+    /* PAGE_AP keeps the session across fork(): the child inherits a copy of the
+     * trapped leaf PTE and is served from the same image.  The child's business
+     * call is inside the registered caller window, so it sees the fake value;
+     * a direct call from main is outside the window and replays the snapshot.
+     * SITE_BRK/PAGE_UXN still end the session before the fork. */
     CHECK(y_register(&ctx, &p, fake_a, mode) == 0, "fork REGISTER failed");
     CHECK(uy_business_ldr(p.address + WIN) == fake_a, "fork session did not arm");
     {
@@ -443,7 +447,8 @@ static int run_active(const char *key, unsigned mode)
         if (pid == 0) {
             uint64_t child_business = uy_business_ldr(p.address + WIN);
             uint64_t child_direct = uy_site_ldr(p.address + WIN);
-            _exit(child_business == original && child_direct == original ? 0 : 7);
+            uint64_t want_business = mode == UROV_Y_MODE_PAGE_AP ? fake_a : original;
+            _exit(child_business == want_business && child_direct == original ? 0 : 7);
         }
         CHECK(pid > 0, "fork pid=%d errno=%d", (int)pid, errno);
         if (pid > 0) {
@@ -453,18 +458,37 @@ static int run_active(const char *key, unsigned mode)
                   "child status=0x%x", status);
         }
     }
-    CHECK(uy_business_ldr(p.address + WIN) == original, "parent site not restored after fork");
-    CHECK(!y_status(&ctx, &st) && st.state == UROV_Y_INACTIVE, "fork left session live");
+    if (mode == UROV_Y_MODE_PAGE_AP) {
+        CHECK(uy_business_ldr(p.address + WIN) == fake_a,
+              "parent lost the overlay after fork");
+        CHECK(!y_status(&ctx, &st) && st.state == UROV_Y_ACTIVE,
+              "AP fork ended the session");
+        CHECK(y_deactivate(&ctx) == 0, "fork DEACTIVATE errno=%d", errno);
+    } else {
+        CHECK(uy_business_ldr(p.address + WIN) == original,
+              "parent site not restored after fork");
+        CHECK(!y_status(&ctx, &st) && st.state == UROV_Y_INACTIVE,
+              "fork left session live");
+    }
 
-    /* Mapping gate: a mapping change that overlaps the target page ends the
-     * session silently and then behaves natively. */
+    /* Mapping gate: a same-protection mprotect keeps a PAGE_AP session (Linux
+     * usually does not even rewrite the PTE); a different protection or any
+     * other mode still ends it. */
     CHECK(y_register(&ctx, &p, fake_a, mode) == 0, "re-REGISTER failed");
     CHECK(uy_business_ldr(p.address + WIN) == fake_a, "re-registered site");
     errno = 0;
     rc = mprotect(p.address, PAGE, PROT_READ | PROT_EXEC);
     CHECK(rc == 0, "mprotect gate rc=%d errno=%d", rc, errno);
-    CHECK(uy_business_ldr(p.address + WIN) == original, "mprotect did not restore");
-    CHECK(!y_status(&ctx, &st) && st.state == UROV_Y_INACTIVE, "gate left session live");
+    if (mode == UROV_Y_MODE_PAGE_AP) {
+        CHECK(uy_business_ldr(p.address + WIN) == fake_a,
+              "AP mprotect lost the overlay");
+        CHECK(!y_status(&ctx, &st) && st.state == UROV_Y_ACTIVE,
+              "AP mprotect ended the session");
+        CHECK(y_deactivate(&ctx) == 0, "mprotect DEACTIVATE errno=%d", errno);
+    } else {
+        CHECK(uy_business_ldr(p.address + WIN) == original, "mprotect did not restore");
+        CHECK(!y_status(&ctx, &st) && st.state == UROV_Y_INACTIVE, "gate left session live");
+    }
 
     page_close(&p);
     printf("%s cases=%u assertions=%u failures=%u\n",

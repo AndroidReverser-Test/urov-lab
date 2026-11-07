@@ -2,6 +2,211 @@
 
 本文按最新复核在前排列。
 
+## 2.12.0 生产读路径、锁页、映射门控与 fork 保活
+
+2026-11-08，Pixel 6 / Android 16 / `6.1.134-android14-11` / 4 KiB / KernelPatch
+`0xc00`。检测在 `untrusted_app` 中执行（`CapEff=0`、`Seccomp=2`、SELinux
+Enforcing）；root 只用于装卸 KPM 与核对设备状态。设计与实现见
+[ELIMINATION_2_12_DESIGN.md](ELIMINATION_2_12_DESIGN.md)。
+
+```text
+urov-y.kpm      13ca0c0ccd6ca462b08a0df50235c20107315d92d206edeffffde613aaef73c5
+urovdetect.apk  4494e72c94d5e157b43765d24448fa21ebbb25aeae1329a892bb963cf6792dae
+```
+
+### 本轮消除的特征点
+
+| # | 2.11.0 仍成立的特征 | 2.12.0 做法 | 真机证据 |
+| --- | --- | --- | --- |
+| E1 | `/proc/self/mem`、`ptrace`、跨进程读看到真实字节 | 新增 `__access_remote_vm`（5/6 参）after hook，按 `mm` 覆盖内核读缓冲区；`process_vm_readv` 改按**目标** `mm` 判定；fork 子进程按“仍带陷阱的叶子 PTE”逐页覆盖 | `DOBBY_DETECT_KMEM` 18/18 `errno=0 match=1`；`DOBBY_DETECT_FORK_KMEM` 3/3 子进程自己的 `/proc/self/mem` 与镜像一致；`mp-prod` 的五条读路径 CRC 全等 |
+| E2 | 先 `mlock` 自有 RX 页即让 `REGISTER` 返回 `EINVAL` | `UY_VM_IO` 改回真实 `0x4000`，显式接受 `VM_LOCKED=0x2000` | `CRC_LOCK_GUARD` 12/12 `register_errno=0 active=1`；`DOBBY_DETECT_LOCK` 3/3 `overlay=1` |
+| E3 | 重叠的无效 `madvise` 恢复整个会话 | advice 先按 Linux 取值域校验；无效值直接透传；`PAGE_AP` 下有效 advice 也不拆会话（缺页回调重装） | `CRC_RESTORE` 10/10 `madvise_errno=22 survived=1`；`DOBBY_DETECT_RESTORE` 3/3 `still_active=1 image_kept=1` |
+| E4 | 重叠 `mprotect(RX)` 结束会话 | `PAGE_AP` 下新权限仍含 `READ|EXEC` 且不含 `WRITE` 时不拆会话，after hook 重装陷阱 | `MP_AUDIT` `mprotect_active=1`（会话保持且仍读到镜像） |
+| E5 | `fork()`/`vfork()` 结束会话 | `PAGE_AP` 的 clone 不拆会话；子进程用陷阱签名（present、`AP[2]=1`、`AP[1]=0`）识别并取镜像；未驻留页按 VMA 身份在缺页时重装；会话结束后孤儿陷阱修复为可读并重试 | `mp-audit` `child_overlay=1`；`mp-prod` 子进程 64 字节全等；`DOBBY_DETECT_FORK_KMEM` 3/3 |
+| E6 | `vfork`+`execve` 带走父进程的会话 | `execve` 只在执行者属于 owner 线程组时拆会话；`posix_spawn` 之类的子进程 `exec` 不再影响父进程 | 见 `mp-prod`（子进程 fork 后读镜像、父会话保持）与 `urov_y_test` 的 mode 分支 |
+
+另外把 `find_task_by_vpid` 从“可选回退”改为 `PAGE_AP` 注册的硬要求
+（缺失时 `REGISTER` 返回 `EOPNOTSUPP`），消除兄弟 tid 路径在无该符号内核上的
+静默缺口。`hooks` 增加 `0x80` 表示内核读 hook；ABI 仍为 v8，请求布局、
+`ctl0` 文本、计数器与返回码不变。
+
+### 实现要点
+
+- **内核读 hook**：`__access_remote_vm` 的 after 回调只在 `ret > 0`、
+  `!(gup_flags & FOLL_WRITE)`、`mm` 属于会话（或仍是 fork 副本）时改写调用者的
+  内核缓冲区；模块自身的 `access_remote_vm` 调用用 `current` 标记绕过。
+  `/proc/self/mem`、`/proc/<pid>/mem`、`ptrace(PTRACE_PEEKDATA)` 与
+  `access_process_vm()` 由同一入口覆盖。
+- **`process_vm_readv`**：判定从“调用者 `mm`”改为“目标 `mm`”。外部进程读
+  owner、同线程组兄弟 tid、`CLONE_VM` 兄弟进程都改写；真正外部 `mm` 保留
+  GUP 字节。
+- **`mlock`**：`VM_LOCKED` 只固定页、不改叶子 PTE，注册与陷阱照常；锁页反而
+  缩小了换出后重装陷阱的窗口。
+- **`madvise`**：`MADV_NORMAL..MADV_COLLAPSE` 与 `HWPOISON/SOFT_OFFLINE` 之外
+  的值交给 Linux 返回 `EINVAL`，不碰会话；`PAGE_AP` 下 `MADV_DONTNEED` 掉掉的
+  PTE 由缺页回调重装。
+- **`mprotect`**：同权限（常见 `mprotect(RX)` 硬化调用）Linux 通常直接返回，
+  PTE 不变；确实改了权限时 after hook 对范围内仍满足 `validate_target_vma()`
+  的页重清 `AP[1]` 并刷 TLB。改成可写或去掉 `READ/EXEC` 仍结束会话。
+- **`fork`**：fork 的子进程继承同一批叶子 PTE 的拷贝（`AP[1]` 已清）。异常
+  入口在 `current->mm` 不是会话 `mm` 时用“只有本模块能产生的 PTE 形状”识别，
+  按 `caller_count` 语义返回镜像；会话结束后同样形状走“置回 `AP[1]` + 重试”，
+  不会变成信号。`fork` 时未驻留的页在子进程缺页时按登记时的 VMA 身份
+  （`vm_file` 指针、`vm_pgoff`、`vm_start`、`vm_end`）重装陷阱。
+- **`execve`**：`vfork` 子进程与父进程共享 `mm`，exec 只替换子进程的地址空间；
+  门控改为只在 `task->tgid == 会话 tgid` 时拆会话。
+
+### 真机结果
+
+| 矩阵 | 结果 | 目录 |
+| --- | --- | --- |
+| Dobby 24×3 | PASS；3 个活动进程各 `accepted_crc=24/24`（合计 72/72）、`live=96964c4f`（等于文件）；`views=0/72`、`iov1024_match=1`、`sibling_match=1`、`split_match=1`、`xzr=0/72`、`cross_page=0/72`；`DOBBY_DETECT_KMEM` 18/18 与 EL0 视图逐字节一致，`DOBBY_DETECT_FORK_KMEM` 3/3 | [dobby-detect-20261108-010644](results/dobby-detect-20261108-010644/summary.json) |
+| CRC 5×2 | PASS，16 次运行（BRK/UXN/AP/AP-all/text/libc/big ×2）；`CRC_LOCK_GUARD` 12/12 成功覆盖，`CRC_RESTORE` 10/10 会话存活；`crc-ap-all` 的 `direct=window=file` | [crc-20261108-010719](results/crc-20261108-010719/summary.json) |
+| 消除矩阵 6×2 | PASS，14 次运行；`w-active` 798 条断言，`exclusive_match=0`、`zero_match=0`、桥/NOP/间接/跨页 store 均 0；`ELIM_TIMING mode=ap site_call_ns=285/286`（2.11.0 相同量级） | [eliminate-20261108-010801](results/eliminate-20261108-010801/summary.json) |
+| 多页 5×1 | PASS，6 次运行；新增 `mp-prod`：24 页 / 96 KiB 真实 `.text`、`caller_count=0`，标量、`memcpy`、`process_vm_readv`、`/proc/self/mem`、fork 子进程五条路径的 CRC 全部等于镜像（`paths=5 child_overlay=1`） | [multipage-20261108-010925](results/multipage-20261108-010925/summary.json) |
+
+- 全部矩阵前后 boot ID 一致，增量内核日志未匹配 `BUG:`/`WARNING:`/`Oops`/
+  panic/RCU stall/hung task，测试后 `kpm list` 为空。
+- `site_call_ns=285/286`（2.11.0 为 285）说明新增 hook 没有进入 EL0 读取路径；
+  读取成本仍是每次读一次同步异常。
+- `DOBBY_DETECT_AP` 在活动阶段仍为 `match=24/24`、`accepted_crc_with_ap=0`：
+  这是**架构性**的独占预约丢失（`ERET` 清本地监视器），2.11.0 就存在，
+  本轮未改变；它只影响独占探针，不影响任何读值。
+
+### 残余（2.12.0）
+
+1. `PAGE_AP` 每次数据读仍一次同步异常（约 280 ns/次）；桥的 store 仍是内核
+   nofault 普通写，不是硬件独占写。二者是 `ERET` 语义与“不解码 store”的架构
+   边界。
+2. `mprotect` 把页改成**可写**、`munmap`/`mremap`/`MAP_FIXED` 覆盖、owner 自己
+   `execve`、进程退出仍结束会话：页本身可写或被替换，`PAGE_AP` 没有 store
+   解码，无法在可写页上保持只读陷阱。
+3. `fork` 子进程把自己的拷贝 `mprotect` 成可写后，该子进程失去覆盖（父进程
+   不受影响）；孤儿陷阱的修复只在模块仍加载时可用。
+4. PTE 重装窗口仍在：只存在于“页被回收后重新 fault-in”的
+   `handle_mm_fault` 内部，after hook 在返回 EL0 前重装；只有另一个 CPU 上
+   恰好同时读该页的线程能看到。
+5. 每次 `fork` 继承的陷阱不重建会话状态；`REGISTER` 之后新建的匿名可执行页
+   的间接分支仍按 2.11.0 的位图残余处理（`uy_llsc_skipped`）。
+6. `caller_count>0` 的窗口语义不变；生产覆盖请用 `caller_count=0`。
+7. root 仍可用 `kpm list`/`ctl0 status` 看到模块与会话；`seccomp` 仍可由 App
+   自己拒绝 `prctl` 控制面（进程策略，不是模块特征）。
+8. 孤儿陷阱修复只按“退役基址 + 陷阱 PTE 形状”识别。arm64 生产内核没有 XOM
+   特性，可读 VMA 之外没有同形 PTE；只有把 XOM 实现成 `AP[1]=0, AP[2]=1` 且
+   另一进程恰好在同一虚拟地址上有这种页时，该页会被误置回可读。
+
+### 复跑
+
+```powershell
+./kpms/urov-lab/build.ps1
+./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --dobby-detection --repeats 24 --cycles 3
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --repeats 5 --cycles 2
+python ./kpms/urov-lab/tools/run_elimination_device.py --serial $Serial --key $KpKey --skip-x-control --repeats 6 --cycles 2
+python ./kpms/urov-lab/tools/run_multipage_device.py --serial $Serial --key $KpKey --repeats 5 --cycles 1
+```
+
+## 2.11.0 普通 App 无密钥复核：检测数据陷阱与锁页防护
+
+2026-11-08，Pixel 6 / Android 16 / `6.1.134-android14-11` / 4 KiB / KernelPatch
+`0xc00`。沿用下一节的 2.11.0 KPM，只改检测库、测试 App 和运行器。检测在
+`untrusted_app` 中执行（`CapEff=0`、`Seccomp=2`、SELinux Enforcing），只接收
+地址、参照映射、fd 和文件偏移。密钥只交给建立会话和核对状态的夹具；root 只用于
+装卸 KPM 和核对设备状态。
+
+```text
+urov-y.kpm      8d0eb588010cc2bb8df5791c3f650e48cf6efcefe407689c40e7a73b4b3c9a20
+urovdetect.apk  fdee78dd0c56ac58e36e5e87776986ba9df482f218bc8391c87423127f62f254
+```
+
+### 实现与检测依据
+
+模块用派生 selector 和请求 MAC 验证 ABI v8 的 `REGISTER`，把唯一活动会话绑定到
+发起者的 `mm`。登记时复制当时的真实页为快照，并把 `SRC_USER` 字节合入另一份镜像。
+快照不一定等于磁盘文件；例如 Dobby 在登记前改码，快照就是改码页。异常处理器按
+`x30` 或最多 16 层 `x29` 帧链选视图，窗口内取镜像，窗口外取快照，无窗口时统一取
+镜像。它解码读取指令并提交结果寄存器、回写与 PC；缺页可重装 PTE 陷阱，重叠映射
+操作先恢复陷阱。详见 [注册](urov_y_backend.c#L2094)、[异常处理](urov_y_backend.c#L1845)
+和 [映射门控](urov_y_backend.c#L2695)。
+
+| 模式 | 机制 | 普通 App 可采用的证据 |
+| --- | --- | --- |
+| `SITE_BRK` | 对已知读指令所在私有页做 COW，以 `BRK` 触发模拟。 | 在独立读取点复核已知读指令，要求发布 ELF 的预期指令稳定变成 A64 `BRK`。测试为 `f9400000 → d43730c0`，3/3 个活动进程命中，注销后指令恢复。 |
+| `PAGE_UXN` | 对读者页置 UXN；接管该页的取指异常，支持有限的指令流。 | 对 App 预置的同页 `BTI C; RET` canary 做配对取指，验证独占状态是否丢失。活动窗口和等值覆盖共 72/72 命中；BRK、AP 同条件各 0/72。不可将任意地址当作 canary 调用。 |
+| `PAGE_AP` | 清目标页叶 PTE 的 AP[1]；原机器码照常取指，EL0 数据读经异常处理。 | 对目标做配对独占探针。即使镜像、同进程内核读和文件一致，异常返回仍清掉预约。 |
+
+如果能无副作用地调用真实业务读者，业务读值与独立读取的稳定差异也可交叉确认；
+三种模式的窗口夹具各 3/3。所有读者都得到干净镜像时，文件比对不能证实活体代码完整性。
+2.11.0 会重写同 `mm` 的 `process_vm_readv` 结果，包括 65/1024 项、拆分向量和兄弟 tid。
+不同 `mm` 的读与 `/proc/self/mem` 不在该重写路径内；但本机普通 App 在无活动会话时
+打开 `/proc/self/mem` 得到 `EACCES`，同 UID 的独立子进程读取父进程得到 `EPERM`。
+这是权限结果，不能作为模块信号。没有更改 dumpable 或 SELinux，也没有 attach ptrace。
+参见 [向量读钩子](urov_y_backend.c#L2534) 和
+[Linux 跨进程读的权限检查](https://github.com/torvalds/linux/blob/v6.1/mm/process_vm_access.c)。
+
+### PAGE_AP 探针
+
+[探针](native/urov_observe.c#L502) 用 `LDXR; LDRB; NOP; STXR`。只有 `LDRB` 读目标
+字节，独占加载和存回同一个值都在本线程的私有栈槽。`NOP` 放在目标读**之后**，
+因此 [2.11.0 的桥](urov_y_backend.c#L1596) 在故障 PC + 4 找不到 `STXR`，不会代报
+成功。[Arm 独占监视器说明 §3.2.4](https://documentation-service.arm.com/static/68c223238a337a2bc6645c0a)
+解释了 `ERET` 清本地监视器的行为。旧的相邻探针和读**之前**插 NOP 的探针可能被桥接；
+既有非零 scratch 的 XZR 探针也可作交叉复核。
+
+目标为 RX；参照必须是同一文件、同一偏移的 `r--` 别名。Y 要求目标为 RX，因此
+参照不会被当前实现登记。前后核对映射和文件身份；两个字节各自稳定即可，合法
+COW 改码导致的字节差异不会触发阳性。预热后做三组各 32 次“参照 → 目标 → 参照”，
+两侧参照都成功才接受。目标 `STXR` 96/96 失败报 `MATCH`，96/96 成功报 `NO_MATCH`；
+混合结果、参照不稳定、对照废弃超过 8 次、元数据变化均为 `UNKNOWN`。耗时不参与判决。
+
+### 真机对照
+
+| Dobby 场景 | 样本 | MATCH | NO_MATCH | UNKNOWN |
+| --- | ---: | ---: | ---: | ---: |
+| 未改码 | 624 | 0 | 621 | 3 |
+| 仅 Dobby 改码 | 624 | 0 | 624 | 0 |
+| 改码且 `PAGE_AP` 活动 | 480 | 480 | 0 | 0 |
+| 解除 `PAGE_AP`，保留改码 | 480 | 0 | 479 | 1 |
+
+10 个活动进程中，目标函数始终返回 `0x1235`，普通 CRC 和同 `mm` 内核读均返回干净
+镜像。旧规则采信 480/480 次伪造 CRC；加探针后采信 0/480 次。独立模式矩阵的 AP
+活动样本另有 144/144 命中，其中 36 次为等值覆盖，36 次在镜像字节窗口外；既有非零
+XZR 探针结果一致。Dobby 并行业务调用 12,175,232 次，0 错误，UI 心跳最大间隔
+25 ms；探针含映射核验，均值约 3.3 ms，单次最大 10.2 ms。
+
+### 如何阻止与恢复
+
+- **预防：**在可能注册之前，`mlock` 少量自有关键 RX 页并持续保持锁定。该构建
+  的 `UY_VM_IO` 数值 `0x2000` 在 [Linux 6.1](https://github.com/torvalds/linux/blob/v6.1/include/linux/mm.h#L282)
+  实际是 `VM_LOCKED`；[目标 VMA 校验](urov_y_backend.c#L651) 对三种模式都拒绝此位。
+  本轮 16 次有效登记均返回 `EINVAL`，覆盖私有 Dobby 页、共享 RX 别名及链接器
+  私有 `.text`；代码仍可取指，读值稳定。部署须检查 `mlock` 成功，受 `RLIMIT_MEMLOCK`
+  约束；重映射、解锁或不同构建后需重新验证。它不会自动撤销已有会话。
+- **恢复：**只在受控页面和维护时机使用。夹具给重叠页传入无效 `madvise` advice，
+  模块在 Linux 返回 `EINVAL` 前先恢复陷阱；非重叠参照保持会话。Dobby 10/10 次恢复
+  真实改码字节，映射和函数行为保持；CRC 夹具另验证三种模式。`EINVAL` 本身不能证明
+  成功，且此操作会解除整个会话，不能拿它当日常只读探针。
+- **可选：**专用进程可在登记前安装既有 seccomp TSYNC 规则，只拒绝 ABI v8 的
+  `REGISTER` 封包。10 次均使当前线程和已存在的兄弟线程返回 `EPERM`。过滤器与
+  `NoNewPrivs` 会留在进程中，采用前须确认进程策略允许；锁页预防无需这一步。
+
+生产接入建议在 worker 低频抽查持有生命周期的少量自有 RX 页，保持映射、fd 和参照
+稳定。`MATCH` / `UNKNOWN` 仅停止采信本次活体 CRC；正常业务继续，`UNKNOWN` 可复查。
+`NO_MATCH` 仅表示采样路径未见异常。单机数据不外推到所有 ARM64/16 KiB 设备；预约
+丢失也不能唯一归因到模块名，且无法发现空闲模块、其他 `mm` 或未采样页。
+
+正式结果：[Dobby 48×10](results/dobby-detect-20261108-001444/summary.json)、
+[三模式 12×3](results/eliminate-20261108-001615/summary.json)、
+[CRC 与锁页 5×1](results/crc-20261108-001736/summary.json)。三组均通过，设备 boot ID
+保持一致，增量内核日志未发现崩溃或挂起；结束时 KPM 列表为空。
+
+```powershell
+./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --dobby-detection --repeats 48 --cycles 10
+python ./kpms/urov-lab/tools/run_elimination_device.py --serial $Serial --key $KpKey --skip-install --skip-x-control --repeats 12 --cycles 3
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --skip-install --repeats 5 --cycles 1
+```
+
 ## 2.11.0 全 iovec 窗口、同 mm pid 解析与 1024 项边界
 
 2026-11-07 在 Pixel 6（Android 16，`6.1.134-android14-11`，4 KiB，KernelPatch
