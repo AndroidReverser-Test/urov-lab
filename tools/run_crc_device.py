@@ -30,6 +30,8 @@ def main():
     parser.add_argument("--serial", required=True)
     parser.add_argument("--key", required=True, help="KernelPatch superkey")
     parser.add_argument("--skip-install", action="store_true", help="use the already installed test APK")
+    parser.add_argument("--dobby-detection", action="store_true",
+                        help="run the keyless probe against a Dobby patch masked by PAGE_AP")
     parser.add_argument("--repeats", type=int, default=15)
     parser.add_argument("--cycles", type=int, default=3)
     args = parser.parse_args()
@@ -37,7 +39,8 @@ def main():
         parser.error("repeats 3..200, cycles 1..10")
 
     stamp = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d-%H%M%S")
-    output = LAB / "results" / f"crc-{stamp}"
+    prefix = "dobby-detect" if args.dobby_detection else "crc"
+    output = LAB / "results" / f"{prefix}-{stamp}"
     output.mkdir(parents=True)
     module_key = secrets.token_hex(16)
     remote = f"/data/local/tmp/urov-crc-{stamp}.kpm"
@@ -65,7 +68,8 @@ def main():
         return shell("/data/local/tmp/kpatch", args.key, *argv)
 
     def run_once(label, mode):
-        active = mode != "crc-clean"
+        dobby = mode.startswith("dobby-detect-")
+        active = mode not in ("crc-clean", "dobby-detect-clean")
         shell("am", "force-stop", PACKAGE)
         argv = ["am", "start", "-W", "-n", ACTIVITY, "--es", "mode", mode,
                 "--ei", "repeats", str(args.repeats)]
@@ -91,14 +95,19 @@ def main():
         if not uid or int(uid[1]) < 10000 or not re.search(r"CapEff:\s*0{16}\b", logs) or not re.search(
                 r"Seccomp:\s*2\b", logs):
             raise RuntimeError(f"{label}: invalid app credentials")
-        if mode == "crc-ap-text":
+        if dobby:
+            stages = [dict(KV.findall(line)) for line in re.findall(r"DOBBY_DETECT [^\n]+", logs)]
+            stage_key = "stage"
+        elif mode == "crc-ap-text":
             stages = [dict(KV.findall(line)) for line in
                       re.findall(r"CRC_PAGE name=linker_text [^\n]+", logs)]
             stage_key = "stage"
         else:
             stages = [dict(KV.findall(line)) for line in re.findall(r"CRC_STAGE [^\n]+", logs)]
             stage_key = "name"
-        if mode in ("crc-ap-text", "crc-ap-libc", "crc-ap-big"):
+        if dobby:
+            expected = ["clean", "patch_only", "overlay", "deactivated"] if active else ["clean", "patch_only"]
+        elif mode in ("crc-ap-text", "crc-ap-libc", "crc-ap-big"):
             expected = ["clean", "overlay", "deactivated"]
         else:
             expected = ["clean", "patch_only", "overlay", "deactivated"] if active else \
@@ -108,7 +117,8 @@ def main():
             raise RuntimeError(f"{label}: unexpected CRC stage order {names}")
         if active and "state=inactive" not in kp("kpm", "ctl0", MODULE, "status"):
             raise RuntimeError(f"{label}: fixture left an active session")
-        if names != expected or "CRC_FIXTURE dlopen=1" not in logs:
+        marker = "DOBBY_HOOK address=" if dobby else "CRC_FIXTURE dlopen=1"
+        if names != expected or marker not in logs:
             raise IncompleteLog(f"{label}: missing CRC records in {log_path.name}")
         if mode == "crc-ap-text" and not re.search(
                 r"CRC_VMA name=linker_text .*shared=0 maywrite=1 dc=0 private_dirty_kb=0 "
@@ -126,7 +136,13 @@ def main():
         report["runs"].append({"label": label, "mode": mode, "uid": int(uid[1]), "pid": pid,
                                "log": log_path.name, "result": result[0], "stages": stages,
                                "details": re.findall(r"(?:CRC_(?:REJECT|PRIVATE|REMAP|MAP|OVERLAY|SITE|"
-                                                     r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC|BIG|BIG_OVERLAY|BIG_VMA|MIXED|SET)|ELIM_EXEC) [^\n]+", logs)})
+                                                     r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC|BIG|BIG_OVERLAY|BIG_VMA|MIXED|SET)|ELIM_EXEC|DOBBY_DETECT_STATUS) [^\n]+", logs)})
+        if dobby:
+            last = stages[2] if active else stages[-1]
+            print(f"{label} PASS execute={last['execute']} file={last['file']} live={last['live']} "
+                  f"match={last['match']}/{last['n']} unknown={last['unknown']} "
+                  f"accepted_crc={last['accepted_crc']}", flush=True)
+            return
         if mode in ("crc-ap-text", "crc-ap-libc", "crc-ap-big"):
             last = stages[1]
         elif active:
@@ -152,6 +168,7 @@ def main():
         if report["initial_modules"]:
             raise RuntimeError("existing modules preserved")
         clean_start = True
+        report["boot_id_before"] = shell("cat", "/proc/sys/kernel/random/boot_id")
         report["kernel"] = shell("uname", "-a")
         report["kpver"] = kp("kpver")
         report["selinux"] = shell("getenforce")
@@ -161,7 +178,8 @@ def main():
         report["artifacts"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (apk, kpm)}
         if not args.skip_install:
             adb("install", "--no-incremental", "-r", str(apk), timeout=120)
-        run_app("no-module", "crc-clean")
+        clean_mode = "dobby-detect-clean" if args.dobby_detection else "crc-clean"
+        run_app("no-module", clean_mode)
 
         staged = True
         adb("push", str(kpm), remote)
@@ -170,11 +188,16 @@ def main():
         report["loaded_status"] = kp("kpm", "ctl0", MODULE, "status")
         if "hooks=0x7f" not in report["loaded_status"]:
             raise RuntimeError("UROV-Y hooks incomplete")
-        run_app("loaded-idle", "crc-clean")
+        run_app("loaded-idle", clean_mode)
+        modes = ("dobby-detect-active",) if args.dobby_detection else (
+            "crc-brk", "crc-uxn", "crc-ap", "crc-ap-all", "crc-ap-text", "crc-ap-libc", "crc-ap-big")
         for i in range(1, args.cycles + 1):
-            for mode in ("crc-brk", "crc-uxn", "crc-ap", "crc-ap-all", "crc-ap-text",
-                         "crc-ap-libc", "crc-ap-big"):
+            for mode in modes:
                 run_app(f"{mode}-{i}", mode)
+        if args.dobby_detection:
+            kp("kpm", "unload", MODULE)
+            loaded = False
+            run_app("post-unload", clean_mode)
         report["passed"] = True
     except Exception as exc:
         report["error"] = redact(str(exc))
@@ -188,6 +211,9 @@ def main():
                 if staged:
                     shell("rm", "-f", remote)
                 report["final_modules"] = kp("kpm", "list")
+                report["boot_id_after"] = shell("cat", "/proc/sys/kernel/random/boot_id")
+                if report["boot_id_after"] != report.get("boot_id_before"):
+                    raise RuntimeError("device rebooted during the test")
                 if before is not None:
                     timestamps = STAMP.findall(before)
                     since = float(timestamps[-1]) if timestamps else 0

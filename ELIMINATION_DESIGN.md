@@ -854,3 +854,111 @@ python .\kpms\urov-lab\tools\run_crc_device.py `
 新增场景 `crc-ap-big`：整页 4096 字节伪镜像（`fake_addr`）、16..4096 字节
 `memcpy`/`memcmp`/`strlen`/`crc32`、32 字节内部窗口（offset 64）与同会话 `SET`。
 主机侧 `tools/test_host.sh` 仍通过 58 个汇编语料向量与 4152 项核心自测。
+
+## 14. 第六轮：相邻 LL/SC 桥的执行存证恢复
+
+### 14.1 触发本轮的特征
+
+`APP_READ_INTEGRITY_AUDIT.md` 的第 1 条检测：`LDXR scratch; LDRB target; STXR
+scratch` 的配对读。`PAGE_AP` 的 EL0 数据异常必然经过 `ERET`，本地独占监视器被
+清，目标 `STXR` 稳定失败；2.4.0/2.4.1 已移除旧桥，因此该信号对 AP 是确定性的
+阳性。2.5.0 需要在不恢复“分支跳过 `LDXR` 也代写”的前提下消除它。
+
+### 14.2 机制
+
+`uy_llsc_prepare()` 在 AP 数据异常里只使用故障前的寄存器快照，按故障 PC 匹配：
+
+```text
+LDXR/LDAXR  Xt, [Xn]        ; PC-4
+LDR/...     Wd, ...         ; PC，发生 permission abort
+STXR/STLXR  Ws, Xt, [Xn]    ; PC+4
+```
+
+要求：
+
+1. 两条独占指令的 `size`、`Rn`、`Rt` 一致；`Xn != XZR`、`Xt != XZR`。
+2. 中间的 load 不写 `Xt` 或 `Xn`；带写回且写 `Xn` 的形式拒绝。
+3. `Xt` 仍等于 `[Xn]`（按宽度零扩展）；`LDXR` 确实执行且数据未被改写。
+4. `Xn` 自然对齐；`copy_from_user_nofault` 能读到 `[Xn]`，`copy_to_user_nofault`
+   能写回，且待写值等于当前内存。
+5. 模拟 load 成功、`PC` 已推进到 `STXR` 后才提交：写回同一值、`Ws=0`、`PC+=4`，
+   `STLXR` 追加 `dmb ishst`，`g_sess.llsc` 加一。
+
+因此：
+
+| 序列 | `Xt` | `[Xn]` | 原生 `STXR` | 2.5.0 |
+| --- | --- | --- | --- | --- |
+| 正常 LL/SC | `LDXR` 装回的值 | 同一值 | 成功 | 代写同一值，`Ws=0`（等价） |
+| 分支跳过 `LDXR` | 调用者预置的哨兵 | 初值 | 失败、零写入 | 不桥，原生失败、零写入 |
+| 并发写改了 `[Xn]` | `LDXR` 旧值 | 新值 | 失败 | 不桥，原生失败 |
+| `Xt=XZR` / 非紧邻 / 成对 | — | — | 由原生决定 | 不桥 |
+
+`ud_observe_unreserved_store()` 的 `CLREX/B;LDXR` 探针仍是反向验证：它不预置
+`Xt==[Xn]`，2.5.0 上必须保持 `match=0`、`stores=0`。
+
+### 14.3 被否决的替代方案
+
+| 方案 | 否决原因 |
+| --- | --- |
+| 不桥，接受 `STXR` 失败 | 正是本轮要消除的确定性特征 |
+| 在 EL1 用 `STXR` 探测本地监视器 | 异常入口/IRQ/调度是否清监视器由实现决定，探测自身消费监视器；无法区分“未执行 `LDXR`”和“已被内核清掉” |
+| 单步/硬件观察点 | 仍是同步异常 + `ERET`，仍要桥，且新增调试状态 |
+| 改 `STXR` 指令为 BRK | 回到代码页差异（§9 已消除的特征） |
+| 只按相邻编码匹配 | 重新引入 `CLREX/B;LDXR` 的代写特征（§11） |
+
+### 14.4 真机验证
+
+Pixel 6（oriole，Android 16，6.1.134，KP `0xc00`，4 KiB）。2.5.0 构建：
+
+- `run_crc_device.py --dobby-detection --repeats 24 --cycles 5`：5 次活动运行，
+  `DOBBY_DETECT stage=overlay` 全部 `match=0/24`、`clean=24`、`unknown=0`、
+  `accepted_crc=24`，合计 11,520 个目标三元组 0 失败；`execute=0x1235`、
+  `live_crc=file_crc=96964c4f`。同一 APK 在 2.4.1 上是 `match=24/24`、
+  `accepted_crc=0`。
+- `run_elimination_device.py --repeats 6 --cycles 1`：`w-active` 的
+  `active_page`/`active_outside_window`/`active_after_set`/`active_equal_value`
+  均 `exclusive_match=0`、`exclusive_clean=6`；`ud_observe_unreserved_store`
+  全部 `stores=0`；8 CPU store 探针 0 写入；三种模式、不同 UID、活动期卸载全部
+  PASS。
+- `w-active --repeats 200` 活动期轮询 `ctl0 status`：`llsc=42,952`、
+  `failures=0`，证明代写确实发生。
+- `run_crc_device.py --repeats 5 --cycles 1`、`run_multipage_device.py` 回归
+  PASS，`kernel_issues=[]`、测试后模块列表为空。
+
+数据：[dobby-detect-20261107-140230](results/dobby-detect-20261107-140230/summary.json)、
+[eliminate-20261107-140259](results/eliminate-20261107-140259/summary.json)、
+[crc-20261107-140417](results/crc-20261107-140417/summary.json)、
+[multipage-20261107-140448](results/multipage-20261107-140448/summary.json)。
+
+### 14.5 残余特征与限制（诚实清单）
+
+1. **形状**：只覆盖紧邻 `LDXR/LDAXR; load; STXR/STLXR`；`NOP` 间隔、跨基本块、
+   函数调用、成对 `LDXP/STXP` 仍会看到监视器失效。
+2. **预置证据**：调用者先读 `[Xn]`、把 `Xt` 预置为同一值、再分支跳过 `LDXR`，
+   桥仍会代写。待写值等于内存，因此只改变 `Ws`，不改变内存；检测 App 的现有
+   `CLREX/B;LDXR` 探针不预置该值，保持阴性。
+3. **`Xt=XZR`**：没有可验证寄存器，不桥。
+4. **时序/并发**：`copy_to_user_nofault` 的 store 是普通写，不是硬件独占 store；
+   `STLXR` 的 release 顺序用 `dmb ishst` 近似，多线程争用同一 scratch 的语义
+   不完全等价。
+5. **时间**：仍每次读取一次同步异常，实测 `site_call_ns≈289`（窗口外）与 2.4.1
+   同量级；桥额外两次 nofault uaccess，但只在紧邻 LL/SC 形状发生。
+6. **PTE 重装窗口、root 可见性、注册事务窗口**：同 §10.7。
+7. **合作模型**：调用者自己声明业务窗口；同进程直接调用已注册业务函数仍拿伪值
+   （§12.4 的边界不变）。
+
+### 14.6 构建与验证入口
+
+```powershell
+.\kpms\urov-lab\build.ps1
+.\kpms\urov-lab\apps\urov-detect\build.ps1
+python .\kpms\urov-lab\tools\run_crc_device.py `
+  --serial <SERIAL> --key <KP-SUPERKEY> --dobby-detection --repeats 24 --cycles 5
+python .\kpms\urov-lab\tools\run_elimination_device.py `
+  --serial <SERIAL> --key <KP-SUPERKEY> --repeats 6 --cycles 1
+```
+
+`dobby_crc_fixture.inc` 的 overlay 阶段已把 `expect_trap` 改为 `false`：旧断言
+把“AP 必然让 `STXR` 失败”当作预期，2.5.0 起该特征不存在。`w-active` 的 AP
+期望也从 `UD_MATCH` 改为 `UD_NO_MATCH`；`ud_observe_unreserved_store` 仍要求
+`UD_NO_MATCH` 且零写入。

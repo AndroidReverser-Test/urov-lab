@@ -1236,6 +1236,12 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
     g_checks = g_fail = g_cases = 0;
     log_context();
     LOG("BEGIN mode=%s repeats=%d", mode, (int)repeats);
+    if (!strcmp(mode, "dobby-detect-clean") || !strcmp(mode, "dobby-detect-active")) {
+        dobby_detection_fixture(!strcmp(mode, "dobby-detect-active") ? key : NULL, (int)repeats);
+        snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
+                 g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
+        goto done;
+    }
     if (!strncmp(mode, "crc-", 4)) {
         uint32_t clean_crc = 0, patched_crc = 0;
         crc_injection(mode, key, (int)repeats, &clean_crc, &patched_crc);

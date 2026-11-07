@@ -17,8 +17,10 @@
  * page EL0 execute-never and emulating the fetch.  PAGE_AP instead clears
  * only AP[1] on the target page: fetch (including a BTI/RET canary) stays
  * native, while every data read is emulated with the same caller-window rules.
- * PAGE_AP does not emulate stores. Exception return clears the exclusive
- * reservation; the following STXR, if any, executes in userspace.
+ * PAGE_AP does not emulate arbitrary stores.  Because the exception return
+ * clears the exclusive reservation, an adjacent LDXR;load;STXR whose LDXR
+ * result is still in Rt is completed in the handler (see uy_llsc_prepare);
+ * every other store stays native.
  */
 #include <common.h>
 #include <compiler.h>
@@ -113,6 +115,31 @@ struct uy_fpstate {
 };
 _Static_assert(sizeof(struct uy_fpstate) == UY_FPSIMD_BYTES, "FPSIMD image size");
 
+/* AArch64 load/store-exclusive encodings (ARM ARM C6.2).  The access size is
+ * [31:30]; [29:21] and [15:10] are fixed, while Rs/Rn/Rt are variable.  STXR
+ * carries the status register in Rs, so its match mask excludes [20:16]. */
+#define UY_EXCL_LD_MASK 0x3ffffc00U
+#define UY_EXCL_LDXR 0x085f7c00U
+#define UY_EXCL_LDAXR 0x085ffc00U
+#define UY_EXCL_ST_MASK 0x3fe0fc00U
+#define UY_EXCL_STXR 0x08007c00U
+#define UY_EXCL_STLXR 0x0800fc00U
+
+/* One adjacent LDXR;load;STXR triple that the PAGE_AP handler may complete
+ * itself.  The plan is built from the registers as they were at the fault,
+ * before the load is emulated, and committed only after emulation succeeds. */
+struct uy_llsc {
+    uint64_t base;
+    uint64_t value;
+    unsigned size;
+    unsigned data_reg;
+    unsigned base_reg;
+    unsigned status_reg;
+    unsigned acquire;
+    unsigned release;
+    unsigned valid;
+};
+
 typedef void (*fpsimd_preserve_t)(void);
 typedef void (*fpsimd_update_t)(const void *state);
 typedef void (*void_fn)(void);
@@ -167,6 +194,7 @@ struct uy_session {
     uint64_t hits;
     uint64_t replays;
     uint64_t failures;
+    uint64_t llsc;      /* adjacent LL/SC stores completed by the AP bridge */
     uint64_t caller_start[UROV_Y_MAX_CALLERS];
     uint64_t caller_end[UROV_Y_MAX_CALLERS];
     struct uy_page *pages;     /* page_count entries, sorted by base */
@@ -1045,15 +1073,134 @@ static int uy_fp_commit_multi(const struct uro_load *d, const uint8_t *bytes)
     return 0;
 }
 
+/* Fetch one instruction word from the faulting thread's address space.  A
+ * registered target page may have AP[1] cleared, so prefer its immutable
+ * snapshot, exactly as the AP handler does for the faulting instruction. */
+static int uy_read_insn(uint64_t pc, uint32_t *out)
+{
+    struct uy_page *page;
+
+    if (!uy_user_range(pc, sizeof(*out)) || (pc & 3U)) return -1;
+    page = page_find(page_base(pc));
+    if (page) {
+        memcpy(out, page->snapshot + (pc - page->base), sizeof(*out));
+        return 0;
+    }
+    return f_copy_in(out, (const void *)(uintptr_t)pc, sizeof(*out)) ? -1 : 0;
+}
+
+static int uy_is_ldxr(uint32_t insn, unsigned *size, unsigned *rt, unsigned *rn)
+{
+    if ((insn & UY_EXCL_LD_MASK) != UY_EXCL_LDXR &&
+        (insn & UY_EXCL_LD_MASK) != UY_EXCL_LDAXR)
+        return 0;
+    *size = insn >> 30;
+    *rt = insn & 31U;
+    *rn = (insn >> 5) & 31U;
+    return 1;
+}
+
+static int uy_is_stxr(uint32_t insn, unsigned *size, unsigned *rs, unsigned *rt, unsigned *rn)
+{
+    if ((insn & UY_EXCL_ST_MASK) != UY_EXCL_STXR &&
+        (insn & UY_EXCL_ST_MASK) != UY_EXCL_STLXR)
+        return 0;
+    *size = insn >> 30;
+    *rs = (insn >> 16) & 31U;
+    *rt = insn & 31U;
+    *rn = (insn >> 5) & 31U;
+    return 1;
+}
+
+/* Decide whether the faulting load sits in an adjacent
+ * LDXR/LDAXR; load; STXR/STLXR sequence whose STXR can be retired here.
+ *
+ * The ERET that resumes EL0 clears the local exclusive monitor, so the
+ * original STXR would always fail.  Completing it in the handler restores the
+ * native outcome, but only when the LDXR result is still in Rt: after a
+ * successful LDXR the data register equals [Xn].  A skipped LDXR normally
+ * leaves a different value, which is not bridged.  A caller that pre-reads
+ * [Xn] can forge that evidence, but the bridge additionally requires the
+ * store value to equal the bytes already in memory, so even that path only
+ * changes the status word and never memory. */
+static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
+                            const struct uro_load *load, struct uy_llsc *out)
+{
+    uint32_t before, after;
+    unsigned lsize, lrt, lrn, ssize, srt, srn, srs;
+    uint64_t mem = 0, mask;
+
+    memset(out, 0, sizeof(*out));
+    if (!f_copy_out || !load || load->vector || load->multi || load->count != 1U)
+        return;
+    if (pc < 4U || !uy_user_range(pc - 4U, 4U) || !uy_user_range(pc + 4U, 4U))
+        return;
+    if (uy_read_insn(pc - 4U, &before) || uy_read_insn(pc + 4U, &after))
+        return;
+    if (!uy_is_ldxr(before, &lsize, &lrt, &lrn) ||
+        !uy_is_stxr(after, &ssize, &srs, &srt, &srn))
+        return;
+    if (lsize != ssize || lrt != srt || lrn != srn) return;
+    if (lrt == 31U || lrn == 31U || srn == 31U) return;
+    /* The intervening load must not rewrite the value the STXR stores or the
+     * base it addresses; a pre/post-index form that writes Xn is equally
+     * unreproducible. */
+    if (load->rt == lrt || load->rt == lrn ||
+        (load->count == 2U && (load->rt2 == lrt || load->rt2 == lrn)))
+        return;
+    if (load->writeback && load->rn == lrn) return;
+    if (regs->x[lrn] & ((UINT64_C(1) << lsize) - 1U)) return;
+    if (f_copy_in(&mem, (const void *)(uintptr_t)regs->x[lrn], 1U << lsize))
+        return;
+    mask = lsize == 3U ? ~UINT64_C(0) : ((UINT64_C(1) << (8U << lsize)) - 1U);
+    /* LDXR Wt/Bt/Ht zero-extend into Xt, so the full register must match the
+     * zero-extended memory value.  This also rejects a caller that pre-fills
+     * the high half of Xt to imitate an executed LDXR. */
+    if (regs->x[lrt] != (mem & mask)) return;
+
+    out->base = regs->x[lrn];
+    out->value = regs->x[lrt];
+    out->size = 1U << lsize;
+    out->data_reg = lrt;
+    out->base_reg = lrn;
+    out->status_reg = srs;
+    out->acquire = (before & (1U << 15)) != 0;
+    out->release = (after & (1U << 15)) != 0;
+    out->valid = 1;
+}
+
+/* Commit a prepared bridge after uy_emulate_load() advanced PC past the
+ * faulting load.  The store is the STXR's own (same address, width and value),
+ * so a failure to write leaves PC on the STXR and the native instruction runs
+ * instead. */
+static void uy_llsc_commit(struct pt_regs *regs, uint64_t fault_pc,
+                           const struct uy_llsc *plan)
+{
+    if (!plan->valid || regs->pc != fault_pc + 4U) return;
+    if (!uy_user_range(plan->base, plan->size) ||
+        plan->base + plan->size < plan->base)
+        return;
+    if (f_copy_out((void *)(uintptr_t)plan->base, &plan->value, plan->size))
+        return;
+    if (plan->acquire) __asm__ volatile("dmb ishld" ::: "memory");
+    if (plan->release) __asm__ volatile("dmb ishst" ::: "memory");
+    if (plan->status_reg != 31U) regs->regs[plan->status_reg] = 0;
+    regs->pc += 4U;
+    __atomic_fetch_add(&g_sess.llsc, 1, __ATOMIC_RELAXED);
+}
+
 /* Emulate one load at `pc`: serve the bytes from the registered page images
  * (fake or registration snapshot) plus nofault uaccess for segments outside
  * the session.  `far` is the data-abort address for the PAGE_AP path (0 and
  * check_far==0 for the instruction-trap modes) and must fall inside the
  * decoded access range.  On success the model is committed to `regs`. A
  * negative return is a fail-closed condition; *bad then names the address
- * whose access would have raised the original fault. */
+ * whose access would have raised the original fault.  When `llsc` is not NULL
+ * the function also records, before committing any register, whether an
+ * adjacent exclusive sequence can be completed by the caller. */
 static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
-                           uint64_t far, int check_far, uint64_t *bad)
+                           uint64_t far, int check_far, uint64_t *bad,
+                           struct uy_llsc *llsc)
 {
     struct uro_regs model;
     struct uro_load load;
@@ -1080,6 +1227,12 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
         (load.writeback && !uy_user_range(load.wb, 1)))
         return -3;
     if (check_far && (far < load.address || far - load.address >= total)) return -3;
+    if (llsc) {
+        memset(llsc, 0, sizeof(*llsc));
+        if (g_sess.mode == UROV_Y_MODE_PAGE_AP &&
+            !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE))
+            uy_llsc_prepare(&model, pc, &load, llsc);
+    }
 
     covered = range_covered(load.address, (unsigned)total);
     if (!covered) {
@@ -1145,14 +1298,16 @@ static struct uy_site *armed_site_page(uint64_t page)
     return 0;
 }
 
-static void emulate_or_signal(struct pt_regs *regs, uint32_t opcode, uint64_t far, int check_far)
+static int emulate_or_signal(struct pt_regs *regs, uint32_t opcode, uint64_t far,
+                             int check_far, struct uy_llsc *llsc)
 {
     uint64_t bad = 0, pc = regs->pc;
-    int result = uy_emulate_load(regs, pc, opcode, far, check_far, &bad);
+    int result = uy_emulate_load(regs, pc, opcode, far, check_far, &bad, llsc);
 
-    if (!result) return;
+    if (!result) return 0;
     session_count_failure(pc, result);
     force_segv(result == -5 ? bad : far);
+    return result;
 }
 
 /* brk_handler(unused, esr, regs) and do_el0_brk64(esr, regs) share the
@@ -1171,7 +1326,7 @@ static void uy_brk_before(hook_fargs3_t *args, void *udata)
     if (!ref) return;
     site = g_sess.mode == UROV_Y_MODE_SITE_BRK ? site_by_pc(regs->pc) : 0;
     if (site) {
-        emulate_or_signal(regs, site->original, site->pc, 0);
+        (void)emulate_or_signal(regs, site->original, site->pc, 0, 0);
         args->ret = 0;
         args->skip_origin = 1;
     }
@@ -1214,7 +1369,11 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
         !(esr & (UY_ESR_WNR | UY_ESR_CM))) {
         struct uy_page *page = page_find(page_base(far));
         struct uy_page *code = page_find(page_base(regs->pc));
+        uint64_t fault_pc = regs->pc;
+        struct uy_llsc llsc;
+        int emulated = -1;
 
+        memset(&llsc, 0, sizeof(llsc));
         if (!page || !__atomic_load_n(&page->armed, __ATOMIC_ACQUIRE)) goto out;
         if ((regs->pc & 3U) || !uy_user_range(regs->pc, sizeof(opcode))) {
             session_count_failure(regs->pc, -EFAULT);
@@ -1222,20 +1381,25 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
         } else if (code) {
             /* Instruction fetch still uses the original RX bytes, but
              * data uaccess to that same code page can fault on AP[1]. */
-            memcpy(&opcode, code->snapshot + (regs->pc - code->base), sizeof(opcode));
-            emulate_or_signal(regs, opcode, far, 1);
+            memcpy(&opcode, code->snapshot + (fault_pc - code->base), sizeof(opcode));
+            emulated = emulate_or_signal(regs, opcode, far, 1, &llsc);
         } else if (f_copy_in(&opcode, (const void *)(uintptr_t)regs->pc, sizeof(opcode))) {
             session_count_failure(regs->pc, -EFAULT);
             force_segv(far);
         } else {
-            emulate_or_signal(regs, opcode, far, 1);
+            emulated = emulate_or_signal(regs, opcode, far, 1, &llsc);
         }
+        /* The exception return already cleared the local exclusive monitor;
+         * the bridge only restores an outcome the native sequence would have
+         * had.  It is attempted after the load committed, and only when the
+         * load succeeded. */
+        if (!emulated) uy_llsc_commit(regs, fault_pc, &llsc);
     } else if (g_sess.mode == UROV_Y_MODE_PAGE_UXN && ec == UY_EC_IABT_LOW &&
                far == regs->pc && armed_site_page(page_base(far))) {
         struct uy_site *site = site_by_pc(far);
 
         if (site) {
-            emulate_or_signal(regs, site->original, far, 0);
+            (void)emulate_or_signal(regs, site->original, far, 0, 0);
         } else if ((regs->pstate & ((UINT64_C(1) << 20) | (UINT64_C(1) << 21))) ||
                    f_copy_in(&opcode, (const void *)(uintptr_t)far, sizeof(opcode)) ||
                    page_flow(regs, opcode)) {
@@ -2433,6 +2597,7 @@ long urov_y_status_get(struct uy_status *out)
     out->hits = __atomic_load_n(&g_sess.hits, __ATOMIC_RELAXED);
     out->replays = __atomic_load_n(&g_sess.replays, __ATOMIC_RELAXED);
     out->failures = __atomic_load_n(&g_sess.failures, __ATOMIC_RELAXED);
+    out->llsc = __atomic_load_n(&g_sess.llsc, __ATOMIC_RELAXED);
     out->active = overlay_live();
     if (out->active) {
         out->sites = g_sess.site_count;

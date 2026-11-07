@@ -26,16 +26,20 @@ def main():
     parser.add_argument("--key", required=True, help="Not persisted to results")
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument("--cycles", type=int, default=3)
+    parser.add_argument("--skip-live-unload", action="store_true",
+                        help="test only sessions that the app deactivates before unload")
     args = parser.parse_args()
     if not 3 <= args.repeats <= 200 or not 1 <= args.cycles <= 10:
         parser.error("repeats must be 3..200; cycles must be 1..10")
     stamp = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d-%H%M%S")
     output = LAB / "results" / f"detection-{stamp}"
     output.mkdir(parents=True, exist_ok=False)
+    remote = f"/data/local/tmp/urov-detection-{stamp}.kpm"
     report = {"host_time_utc8": stamp, "serial": args.serial, "repeats": args.repeats,
-              "cycles": args.cycles, "runs": [], "steps": [], "passed": False}
+              "cycles": args.cycles, "skip_live_unload": args.skip_live_unload,
+              "runs": [], "steps": [], "passed": False}
     prefix = ["adb", "-s", args.serial]
-    loaded = False
+    loaded = staged = False
     dmesg_before = ""
 
     def adb(argv, check=True, timeout=15):
@@ -115,6 +119,7 @@ def main():
         report["initial_modules"] = initial
         if re.search(r"\burov-lab\b", initial):
             raise RuntimeError("urov-lab already loaded; preserve it and stop before changing state")
+        report["boot_id_before"] = shell(["cat", "/proc/sys/kernel/random/boot_id"])[1]
         report["device"] = shell(["getprop", "ro.build.fingerprint"])[1]
         report["kernel"] = shell(["uname", "-a"])[1]
         report["device_time"] = shell(["date", "+%Y-%m-%dT%H:%M:%S%z"])[1]
@@ -130,8 +135,9 @@ def main():
         for kind in ("detector_apk", "observer_apk"):
             adb(["install", "--no-incremental", "-r", str(artifacts[kind])], timeout=30)
         finish(launch("clean", "01-clean"))
-        adb(["push", str(artifacts["kpm"]), "/data/local/tmp/urov-detection-lab.kpm"])
-        kpatch("kpm", "load", "/data/local/tmp/urov-detection-lab.kpm", "active")
+        staged = True
+        adb(["push", str(artifacts["kpm"]), remote])
+        kpatch("kpm", "load", remote, "active")
         loaded = True
         step("loaded", kpatch("kpm", "ctl0", "urov-lab", "status"))
         finish(launch("idle", "02-loaded-idle"))
@@ -141,22 +147,24 @@ def main():
             step(f"active-{cycle + 1}-cleanup", state)
             if "state=inactive" not in state or "hits=0 failures=0" not in state:
                 raise RuntimeError("matrix left a session behind")
-        owner = launch("hold", "04-owner-live")
-        wait_log(owner, r"HOLD_READY\b")
-        state_before = kpatch("kpm", "ctl0", "urov-lab", "status")
-        step("foreign-before", state_before)
-        observer = launch("observer", "05-other-uid-observer", OBSERVER,
-                          "com.example.urovdetect.ObserverActivity")
-        finish(observer)
-        state_after = kpatch("kpm", "ctl0", "urov-lab", "status")
-        step("foreign-after", state_after)
-        if "state=active" not in state_before or state_before != state_after:
-            raise RuntimeError("foreign observer changed owner's session/counters")
+        if not args.skip_live_unload:
+            owner = launch("hold", "04-owner-live")
+            wait_log(owner, r"HOLD_READY\b")
+            state_before = kpatch("kpm", "ctl0", "urov-lab", "status")
+            step("foreign-before", state_before)
+            observer = launch("observer", "05-other-uid-observer", OBSERVER,
+                              "com.example.urovdetect.ObserverActivity")
+            finish(observer)
+            state_after = kpatch("kpm", "ctl0", "urov-lab", "status")
+            step("foreign-after", state_after)
+            if "state=active" not in state_before or state_before != state_after:
+                raise RuntimeError("foreign observer changed owner's session/counters")
         kpatch("kpm", "unload", "urov-lab")
         loaded = False
-        finish(owner)
-        if owner["uid"] == observer["uid"]:
-            raise RuntimeError("observer must have a different app UID")
+        if not args.skip_live_unload:
+            finish(owner)
+            if owner["uid"] == observer["uid"]:
+                raise RuntimeError("observer must have a different app UID")
         finish(launch("clean", "06-post-unload"))
         report["passed"] = True
     except Exception as exc:
@@ -173,7 +181,12 @@ def main():
         for package in (OWNER, OBSERVER):
             shell(["am", "force-stop", package], check=False)
         try:
+            if staged:
+                shell(["rm", "-f", remote])
             report["final_modules"] = kpatch("kpm", "list")
+            report["boot_id_after"] = shell(["cat", "/proc/sys/kernel/random/boot_id"])[1]
+            if "boot_id_before" in report and report["boot_id_after"] != report["boot_id_before"]:
+                raise RuntimeError("device rebooted during the test")
             if "urov-lab" in report["final_modules"]:
                 report["passed"] = False
             after = kpatch("su", "-c", "dmesg")
@@ -188,7 +201,8 @@ def main():
                     new_lines.append(line)
             save("kernel-new.log", "\n".join(new_lines))
             report["kernel_issues"] = [line for line in new_lines if re.search(
-                r"BUG:|WARNING:|Oops:|Kernel panic|rcu[^\n]*stall|hung task", line, re.I)]
+                r"\bBUG:|\bWARNING:|\bOops:|\bKernel panic|\brcu[^\n]*stall|\bhung task|\bCall trace",
+                line, re.I)]
             if report["kernel_issues"]:
                 report["passed"] = False
         except Exception as exc:

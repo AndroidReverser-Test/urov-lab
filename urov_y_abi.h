@@ -66,9 +66,11 @@
  * EL0 data permission (AP[1]) on the *target* pages in the leaf PTE only, so
  * every EL0 data read of those pages takes a permission abort while fetch of
  * the same or any other page stays native.  The data abort is emulated with
- * the same fake/caller-window rules. Stores are never emulated; the exception
- * may cause a following STXR to fail. This mode supports the v8 page array,
- * LD1/LD2/LD3/LD4 and loads that cross a page boundary. */
+ * the same fake/caller-window rules.  Arbitrary stores are never emulated;
+ * an adjacent LDXR;load;STXR whose LDXR result is still in Rt is completed by
+ * the handler so the exception return does not turn a native success into a
+ * failure.  This mode supports the v8 page array, LD1/LD2/LD3/LD4 and loads
+ * that cross a page boundary. */
 #define UROV_Y_MODE_SITE_BRK 1U
 #define UROV_Y_MODE_PAGE_UXN 2U
 #define UROV_Y_MODE_PAGE_AP 3U

@@ -1,0 +1,9 @@
+--------- beginning of main
+10-04 04:33:16.798 18966 18990 I urovdetect: CONTEXT pid=18966 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 04:33:16.798 18966 18990 I urovdetect: BEGIN mode=dobby-detect-clean repeats=24
+10-04 04:33:16.930 18966 18990 I urovdetect: DOBBY_DETECT stage=clean n=24 execute=1234 file=96964c4f live=96964c4f crc_pass=24 accepted_crc=24 match=0 clean=24 unknown=0 accepted=2304 target_failed=0 control_failed=0 probe_mean_ns=5440482 probe_max_ns=11310181
+10-04 04:33:16.930 18966 18990 I urovdetect: DOBBY_HOOK address=0x7a9632a000 original=1234 hooked=1235
+10-04 04:33:16.999 18966 18990 I urovdetect: DOBBY_DETECT stage=patch_only n=24 execute=1235 file=96964c4f live=4e9e8cbc crc_pass=0 accepted_crc=0 match=0 clean=24 unknown=0 accepted=2304 target_failed=0 control_failed=0 probe_mean_ns=2873899 probe_max_ns=3083903
+10-04 04:33:16.999 18966 18990 I urovdetect: CONTEXT pid=18966 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 04:33:16.999 18966 18990 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=100 failures=0 mode=dobby-detect-clean
+10-04 04:33:17.167 18966 18966 I urovdetect: DETECT_RESULT PASS mode=dobby-detect-clean worker_ms=350 ui_ticks=130 ui_max_gap_ms=14 native=PASS cases=2 assertions=100 failures=0

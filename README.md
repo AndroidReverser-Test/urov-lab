@@ -1,9 +1,21 @@
 # UROV-LAB
 
-`urov-y` 2.4.1 将 `prctl` 的 magic 固定为 `UROVYLAB`，保留 ABI v8 请求布局和 MAC 校验。
+`urov-y` 2.5.0 将 `prctl` 的 magic 固定为 `UROVYLAB`，保留 ABI v8 请求布局和 MAC 校验。
 2.4.0 的参数校验、并发镜像发布和陷阱撤销适配继续用于 Android ARM64 的 5.4 起的 5.x 和 6.x 内核，
 支持 4 KiB 及符合条件的 16 KiB 页表。实测、支持边界和复跑命令见
 [UROV-Y 兼容性与审计](COMPATIBILITY_Y.md)。下方日期条目保留各历史版本的行为和证据。
+
+2026-11-07 第六轮消除：`urov-y` 2.5.0 在 `PAGE_AP` 的 EL0 数据异常返回路径中恢复
+**相邻 LL/SC 桥**。仅当故障 PC 前一条是 `LDXR/LDAXR`、后一条是 `STXR/STLXR`，
+三条指令的基址/数据寄存器与宽度一致，`LDXR` 目的寄存器仍等于 `[Xn]`（执行存证），
+且 `STXR` 待写值等于当前内存时，handler 才在模拟 load 成功后完成这次 store、把
+`Ws` 置 0 并跳过 `STXR`。这样真实独占序列不会因为 `ERET` 清本地监视器而失败；
+分支跳过 `LDXR` 的 `CLREX/B;LDXR` 探针仍按原生失败且零写入。检测 App 的 Dobby
+矩阵 5 轮 × 24 次：活动阶段 `match=0/120`、`accepted_crc=120/120`（2.4.1 为
+`match=120/120`、`accepted_crc=0/120`）；`w-active` 的 AP 独占探针
+`exclusive_match=0`、跳过 `LDXR` 的 store 探针 0 写入；活动期 `ctl0 status`
+`llsc=42,952`。桥只覆盖紧邻三条指令、`Xt!=XZR`、非成对独占；残余见
+[设计 §14](ELIMINATION_DESIGN.md#14-第六轮相邻-llsc-桥的执行存证恢复)。
 
 2026-11-06 ABI v8 多页/宽 load：`urov-y` 的 `PAGE_AP` 模式从"一页一会话"
 扩到**一次会话任意页数组**（`struct uy_page_desc[page_count]`，默认配额 4096 页 /
@@ -138,7 +150,7 @@ UROV-LAB 是一个适用于 Android arm64 的独立 KPM：把一个一页只读�
 `SET` / `SET_PAGE` 校验代际号，构建新镜像后原子发布。注销或卸载时恢复读取点或页权限，
 再关闭读侧并等待在途回调释放会话引用。[控制与模拟实现](urov_y_backend.c)
 
-2.4.1 的控制调用为 `syscall(__NR_prctl, option, UROV_Y_PRCTL_MAGIC, op, &req, sizeof(req))`。
+2.5.0 的控制调用为 `syscall(__NR_prctl, option, UROV_Y_PRCTL_MAGIC, op, &req, sizeof(req))`。
 `UROV_Y_PRCTL_MAGIC` 的值为 `0x42414c59564f5255`，是 `UROVYLAB` 的 8 字节小端编码。
 `option` 和请求 MAC 密钥仍由加载参数 `key=` 派生。客户端需与 KPM 一起更新。
 [控制 ABI](urov_y_abi.h)
@@ -161,8 +173,9 @@ UROV-LAB 是一个适用于 Android arm64 的独立 KPM：把一个一页只读�
 `crc-ap-libc` 验证短长度的 bionic 读取和 zlib CRC；`crc-ap-big` 覆盖最多 4 KiB 的
 `memcpy`、`memcmp`、`strlen` 和 CRC。`PAGE_AP` 还支持 LD1/2/3/4 和跨页读，
 通过内核 FPSIMD helper 保存与提交向量状态。没有匹配的 helper 或布局时，向量读不模拟；
-`ctl0 status` 的 `fpsimd=` 字段报告可用性。`PAGE_AP` 不模拟写入或独占操作，数据异常
-可能使后续 `STXR` 失败。
+`ctl0 status` 的 `fpsimd=` 字段报告可用性。`PAGE_AP` 不模拟任意写入；只有紧邻且
+`LDXR` 执行存证成立的 `STXR/STLXR` 由 handler 完成原 store，其余独占形状仍可能
+因异常返回失去 reservation。
 
 2.4.0 在加载时适配 Android ARM64 的 5.4 及之后的 5.x/6.x 内核接口。
 默认从运行内核读取 BTF；没有内置 BTF 时可用 `btf=/path` 提供同一内核构建的
@@ -317,6 +330,7 @@ fake 字节按小端排列：`value` 是字节 0..7，`value_hi[0]` 是 8..15，
 | `tools/run_overlay_device.ps1` | root 设备自动化脚本 |
 | `tools/run_app_device.ps1` | 普通 app 设备自动化脚本 |
 | `APP_OVERLAY.md` / `RESULTS_APP.md` | 普通 app 方案、检测面、限制与真机证据 |
+| `APP_READ_INTEGRITY_AUDIT.md` / `APP_READ_INTEGRITY_RESULTS.md` | 读取完整性检测面、2.4.1 的特征清单与 2.5.0 桥接后复测（Dobby 24×5、消除矩阵、CRC、多页） |
 | `urov_x_backend.c` / `.h` / `urov_x.c` / `urov_x_abi.h` | covert 变体 `urov-x`：密钥化控制通道、读取点绑定、透明生命周期 |
 | `urov_y_backend.c` / `.h` / `urov_y.c` / `urov_y_abi.h` | `urov-y`：BRK 读取点、UXN 页陷阱、AP[1] 数据读陷阱；调用窗口、ABI v8 多页和向量读 |
 | `urov_y_compat.h` / `urov_y_readers.h` | 内核 ABI、页表几何、BTF 校验和会话读侧引用 |
@@ -327,10 +341,12 @@ fake 字节按小端排列：`value` 是字节 0..7，`value_hi[0]` 是 8..15，
 | `apps/urov-detect/crc_fixture.inc` | CRC 夹具：`crc-ap-text`/`crc-ap-libc`（标量 libc）与 `crc-ap-big`（整页覆盖 + SIMD 大长度传输、内部窗口、`SET`） |
 | `tools/run_elimination_device.py` | `urov-y` 设备矩阵（含 `urov-x` 阳性对照与三种模式对照） |
 | `tools/run_crc_device.py` | 同进程改码/CRC 矩阵（`crc-brk`/`crc-uxn`/`crc-ap`/`crc-ap-text`/`crc-ap-libc`/`crc-ap-big`） |
-| `ELIMINATION_DESIGN.md` / `ELIMINATION_RESULTS.md` | 读取点陷阱方案（§9 UXN、§10 AP+LL/SC 桥、§11 桥的执行存证、§13 SIMD&FP 大长度传输）、代码页/取指特征消除与真机对照结果 |
+| `ELIMINATION_DESIGN.md` / `ELIMINATION_RESULTS.md` | 读取点陷阱方案（§9 UXN、§10 AP+LL/SC 桥、§11 桥的执行存证、§13 SIMD&FP 大长度传输、§14 2.5.0 相邻 LL/SC 桥恢复）、代码页/取指特征消除与真机对照结果 |
 | `MULTIPAGE_DESIGN.md` | 历史设计稿：多页覆盖、LD1/LD2、跨页 load、16 KiB 页 |
 | `MULTIPAGE_RESULTS.md` | ABI v8 多页/LD1/LD2/LD3/LD4/跨页/SRC_FILE 的实现说明与真机证据 |
 | `tools/run_multipage_device.py` | ABI v8 设备矩阵（`mp-multi`/`mp-ld1`/`mp-cross`/`mp-srcfile`/`mp-audit`） |
 | `tools/run_stealth_device.py` | `urov-x` 设备矩阵（无密钥/活动/观察者/卸载/SIMD/fork） |
 | `STEALTH_DESIGN.md` / `STEALTH_RESULTS.md` | 检测特征点消除设计与真机对照结果 |
 | `results/` | 构建、设备与覆盖运行记录 |
+
+(End of file - total 336 lines)

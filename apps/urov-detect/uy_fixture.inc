@@ -402,7 +402,9 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     struct ud_reader_observation rd;
     struct urov_y_request st = {0}, before = {0};
     enum ud_verdict expected_exec = mode == UROV_Y_MODE_PAGE_UXN ? UD_MATCH : UD_NO_MATCH;
-    enum ud_verdict expected_exclusive = mode == UROV_Y_MODE_PAGE_AP ? UD_MATCH : UD_NO_MATCH;
+    /* Since 2.5.0 the AP handler completes an adjacent, execution-proven
+     * LDXR/load/STXR in the fault path: the probe must look native again. */
+    enum ud_verdict expected_exclusive = UD_NO_MATCH;
     /* A failed native STXR must not write the sentinel. */
     enum ud_verdict expected_store = UD_NO_MATCH;
     unsigned base_dirty = 0, base_anon = 0;

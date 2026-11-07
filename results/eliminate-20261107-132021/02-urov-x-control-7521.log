@@ -1,0 +1,26 @@
+--------- beginning of main
+10-04 03:55:09.275  7521  7547 I urovdetect: CONTEXT pid=7521 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 03:55:09.275  7521  7547 I urovdetect: BEGIN mode=observe-active repeats=12
+10-04 03:55:09.447  7521  7547 I urovdetect: OBS_CASE name=baseline result=PASS n=12 match=0 clean=12 unknown=0 accepted=1152 failed=0 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=3694 p95_us=8596 max_us=8596
+10-04 03:55:09.455  7521  7547 I urovdetect: OBS_CONTRACT result=PASS rejected=7 unstable_reader=unknown
+10-04 03:55:09.538  7521  7547 I urovdetect: OBS_CASE name=active_changed result=PASS n=12 match=12 clean=0 unknown=0 accepted=1152 failed=1152 control_failed=0 reader_match=12 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1 p50_us=2895 p95_us=2984 max_us=2984
+10-04 03:55:09.574  7521  7547 I urovdetect: ELIM_STORE name=x_active n=12 expected=0 match=0 clean=12 unknown=0 completed=384 stores=0 total_ns=34640096 max_ns=3091674
+10-04 03:55:09.657  7521  7547 I urovdetect: OBS_CASE name=active_outside_window result=PASS n=12 match=12 clean=0 unknown=0 accepted=1152 failed=1152 control_failed=0 reader_match=0 direct=0x0 reader=0x0 file=0x0 p50_us=2894 p95_us=3000 max_us=3000
+10-04 03:55:09.740  7521  7547 I urovdetect: OBS_CASE name=active_normal_alias result=PASS n=12 match=0 clean=12 unknown=0 accepted=1152 failed=0 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=2862 p95_us=2990 max_us=2990
+10-04 03:55:09.946  7521  7547 I urovdetect: OBS_CASE name=active_cpu_0 result=PASS n=3 match=3 clean=0 unknown=0 accepted=288 failed=288 control_failed=0 reader_match=3 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1 p50_us=17216 p95_us=18765 max_us=18765
+10-04 03:55:10.166  7521  7547 I urovdetect: OBS_CASE name=active_cpu_1 result=PASS n=3 match=3 clean=0 unknown=0 accepted=288 failed=288 control_failed=0 reader_match=3 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1 p50_us=17865 p95_us=19998 max_us=19998
+10-04 03:55:10.381  7521  7547 I urovdetect: OBS_CASE name=active_cpu_2 result=PASS n=3 match=3 clean=0 unknown=0 accepted=288 failed=288 control_failed=0 reader_match=3 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1 p50_us=16570 p95_us=17818 max_us=17818
+10-04 03:55:10.589  7521  7547 I urovdetect: OBS_CASE name=active_cpu_3 result=PASS n=3 match=3 clean=0 unknown=0 accepted=288 failed=288 control_failed=0 reader_match=3 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1 p50_us=16575 p95_us=20594 max_us=20594
+10-04 03:55:10.654  7521  7547 I urovdetect: OBS_CASE name=active_cpu_4 result=PASS n=3 match=3 clean=0 unknown=0 accepted=288 failed=288 control_failed=0 reader_match=3 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1 p50_us=5671 p95_us=5954 max_us=5954
+10-04 03:55:10.714  7521  7547 I urovdetect: OBS_CASE name=active_cpu_5 result=PASS n=3 match=3 clean=0 unknown=0 accepted=288 failed=288 control_failed=0 reader_match=3 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1 p50_us=5548 p95_us=5655 max_us=5655
+10-04 03:55:10.750  7521  7547 I urovdetect: OBS_CASE name=active_cpu_6 result=PASS n=3 match=3 clean=0 unknown=0 accepted=288 failed=288 control_failed=0 reader_match=3 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1 p50_us=2922 p95_us=3137 max_us=3137
+10-04 03:55:10.784  7521  7547 I urovdetect: OBS_CASE name=active_cpu_7 result=PASS n=3 match=3 clean=0 unknown=0 accepted=288 failed=288 control_failed=0 reader_match=3 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1 p50_us=2923 p95_us=3171 max_us=3171
+10-04 03:55:10.784  7521  7547 I urovdetect: OBS_CPUS tested=8 worker_affinity_restored=1
+10-04 03:55:10.784  7521  7547 I urovdetect: OBS_STATE active=1 generation=1 sites=2 failures=0 hits=5952
+10-04 03:55:10.867  7521  7547 I urovdetect: OBS_CASE name=active_equal_original result=PASS n=12 match=12 clean=0 unknown=0 accepted=1152 failed=1152 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=2892 p95_us=3029 max_us=3029
+10-04 03:55:10.867  7521  7547 I urovdetect: OBS_STATE active=1 generation=2 sites=2 failures=0 hits=7344
+10-04 03:55:10.950  7521  7547 I urovdetect: OBS_CASE name=deactivated result=PASS n=12 match=0 clean=12 unknown=0 accepted=1152 failed=0 control_failed=0 reader_match=0 direct=0xf2c66881f2aaacc1 reader=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 p50_us=2870 p95_us=2951 max_us=2951
+10-04 03:55:10.951  7521  7547 I urovdetect: OBS_BUSINESS ops=333440 errors=0 execution=original normal_io=ok
+10-04 03:55:10.951  7521  7547 I urovdetect: CONTEXT pid=7521 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 03:55:10.951  7521  7547 I urovdetect: NATIVE_RESULT PASS cases=16 assertions=554 failures=0 mode=observe-active
+10-04 03:55:10.954  7521  7521 I urovdetect: DETECT_RESULT PASS mode=observe-active worker_ms=1678 ui_ticks=256 ui_max_gap_ms=23 native=PASS cases=16 assertions=554 failures=0

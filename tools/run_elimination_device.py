@@ -7,8 +7,9 @@ Runs on one device; root only loads/unloads modules and collects kernel truth:
   - UROV-X: the older data-read detectors match on an active raw-XOM page.
   - UROV-Y BRK: the site word changes, but the canary executes natively.
   - UROV-Y PAGE_UXN: the site word is unchanged and canary fetches trap.
-  - UROV-Y PAGE_AP: site word and canary are native. A trapped data read
-    loses the exclusive reservation; a skipped LDXR must never lead to a store.
+  - UROV-Y PAGE_AP: site word and canary are native. 2.5.0 completes an
+    adjacent, execution-proven LDXR/load/STXR in the fault handler; a skipped
+    LDXR must still fail natively and never lead to a store.
   - All UROV-Y modes: the business reader receives the fake value.
   - A separate UID sees no findings while the owner's PAGE_UXN or PAGE_AP is live.
   - The owner reads the original bytes after deactivation and unload.
@@ -298,7 +299,7 @@ def main():
                 raise RuntimeError("w-active store matrix incomplete")
             for case in run["cases"]:
                 if case["name"].startswith("active") and (
-                        int(case["exclusive_match"]) == 0 or int(case["exclusive_clean"]) != 0 or
+                        int(case["exclusive_match"]) != 0 or int(case["exclusive_clean"]) == 0 or
                         int(case["reader_match"]) != 0):
                     raise RuntimeError(f"unexpected AP reservation/read result on {case['name']}")
             if "state=inactive" not in kp("kpm", "ctl0", "urov-y", "status"):

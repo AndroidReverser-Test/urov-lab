@@ -1,0 +1,93 @@
+{
+  "serial": "25091FDF60063J",
+  "repeats": 5,
+  "cycles": 1,
+  "runs": [
+    {
+      "label": "mp-multi-1",
+      "mode": "mp-multi",
+      "uid": 10284,
+      "pid": "11048",
+      "log": "mp-multi-1-11048.log",
+      "result": "DETECT_RESULT PASS mode=mp-multi worker_ms=351 ui_ticks=128 ui_max_gap_ms=18 native=PASS cases=1 assertions=18 failures=0",
+      "status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=1ba3 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x77f",
+      "details": [
+        "MP_QUERY caps=0x77f max_pages=682 page_shift=12 abi=8",
+        "MP_MULTI pages=24 span=98304 register=1 generation=1",
+        "MP_STATUS name=multi pages=24 armed=24 hits=0 replays=0 failures=0",
+        "MP_SET_PAGE page=7 generation=2 diff=98304",
+        "MP_MULTI_DONE pages=24 restored=1"
+      ]
+    },
+    {
+      "label": "mp-ld1-1",
+      "mode": "mp-ld1",
+      "uid": 10284,
+      "pid": "11123",
+      "log": "mp-ld1-1-11123.log",
+      "result": "DETECT_RESULT PASS mode=mp-ld1 worker_ms=351 ui_ticks=128 ui_max_gap_ms=18 native=PASS cases=1 assertions=57 failures=0",
+      "status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=1ba3 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x77f",
+      "details": [
+        "MP_QUERY caps=0x77f max_pages=682 page_shift=12 abi=8",
+        "MP_LD register=1 page=1 generation=1",
+        "MP_LD_DONE readers=ld1x4/ld1x2/ld1x1/ld1_8b/post_imm/post_reg/ld2/ld3/ld4 n=5"
+      ]
+    },
+    {
+      "label": "mp-cross-1",
+      "mode": "mp-cross",
+      "uid": 10284,
+      "pid": "11199",
+      "log": "mp-cross-1-11199.log",
+      "result": "DETECT_RESULT PASS mode=mp-cross worker_ms=350 ui_ticks=126 ui_max_gap_ms=20 native=PASS cases=1 assertions=27 failures=0",
+      "status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=1ba3 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x77f",
+      "details": [
+        "MP_QUERY caps=0x77f max_pages=682 page_shift=12 abi=8",
+        "MP_CROSS register=1 pages=2 generation=1",
+        "MP_CROSS_DONE reads=ldp_page1_page2/ld1_page1_page2/ld1_tail/uncovered_page0 n=5"
+      ]
+    },
+    {
+      "label": "mp-srcfile-1",
+      "mode": "mp-srcfile",
+      "uid": 10284,
+      "pid": "11274",
+      "log": "mp-srcfile-1-11274.log",
+      "result": "DETECT_RESULT PASS mode=mp-srcfile worker_ms=351 ui_ticks=128 ui_max_gap_ms=17 native=PASS cases=1 assertions=14 failures=0",
+      "status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=1ba3 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x77f",
+      "details": [
+        "MP_QUERY caps=0x77f max_pages=682 page_shift=12 abi=8",
+        "MP_SRC_FILE register=1 page=1 generation=1",
+        "MP_STATUS name=srcfile pages=1 armed=1 hits=645 replays=645 failures=0",
+        "MP_SRC_FILE_DONE page=1 reads=5"
+      ]
+    },
+    {
+      "label": "mp-audit-1",
+      "mode": "mp-audit",
+      "uid": 10284,
+      "pid": "11350",
+      "log": "mp-audit-1-11350.log",
+      "result": "DETECT_RESULT PASS mode=mp-audit worker_ms=351 ui_ticks=120 ui_max_gap_ms=75 native=PASS cases=1 assertions=63 failures=0",
+      "status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=1ba3 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x77f",
+      "details": [
+        "MP_QUERY caps=0x77f max_pages=682 page_shift=12 abi=8",
+        "MP_AUDIT invalid=5 updates=48 reads=307149 errors=0 child_restored=1"
+      ]
+    }
+  ],
+  "passed": true,
+  "initial_modules": "",
+  "kernel": "Linux localhost 6.1.134-android14-11-g66e758f7d0c0-ab13748739 #1 SMP PREEMPT Tue Jul  8 09:17:32 UTC 2025 aarch64 Toybox",
+  "page_size": 4096,
+  "kpver": "c00",
+  "selinux": "Enforcing",
+  "artifacts": {
+    "urovdetect.apk": "61636bf6c3e297f0d91264df52b12caf2b14204b3a3efe6c0cdbc595aa556a06",
+    "urov-y.kpm": "fab2fe62de5a636544b0262f9992fea39e06411de704bcd18a62b78937e62f56"
+  },
+  "layout_source": "live",
+  "loaded_status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=1ba3 hooks=0x7f core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x77f",
+  "final_modules": "",
+  "kernel_issues": []
+}
