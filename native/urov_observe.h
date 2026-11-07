@@ -6,6 +6,7 @@
 #define UD_OBSERVE_EPOCHS 3U
 #define UD_OBSERVE_TRIALS 32U
 #define UD_STORE_TRIALS 32U
+#define UD_LIVE_MAX_BYTES 64U
 
 struct ud_exclusive_observation {
     enum ud_verdict reservation_loss;
@@ -29,6 +30,24 @@ struct ud_store_observation {
 };
 
 typedef uint64_t (*ud_plain_reader)(const void *);
+typedef void (*ud_bytes_reader)(uint8_t *out, const uint8_t *address, size_t size);
+
+struct ud_live_observation {
+    enum ud_verdict verdict;
+    int error;
+    uint8_t user_bytes[UD_LIVE_MAX_BYTES], kernel_bytes[UD_LIVE_MAX_BYTES];
+    uint64_t elapsed_ns;
+};
+
+/* Compare the actual reader with a kernel copy of this process's mapped page.
+ * Enable only on Android profiles verified to allow process_vm_readv.
+ * Retain the immutable RX mapping, fd and side-effect-free reader for the
+ * call. Use a worker and sample at most 64 bytes within one page. MATCH
+ * requires two stable but different views. UNKNOWN covers read errors and
+ * unstable samples. Use the returned bytes only for MATCH or NO_MATCH.
+ */
+void ud_observe_live(const uint8_t *address, size_t size, int backing_fd, off_t offset,
+                     ud_bytes_reader reader, struct ud_live_observation *out);
 
 /* NO control ABI, secret, prctl, signals, target writes, or mapping operations.
  * Both addresses MUST be retained immutable readable executable file mappings
@@ -54,6 +73,14 @@ void ud_observe_exclusive(const void *address, const void *reference,
 void ud_observe_spaced_exclusive(const void *address, const void *reference,
                                  int backing_fd, off_t offset,
                                  struct ud_exclusive_observation *out);
+
+/* Same paired controls as ud_observe_exclusive. The scratch word is zero
+ * and both exclusives use XZR, a shape the UROV-Y 2.9.0 bridge rejects.
+ * A MATCH indicates reservation loss, including when the read bytes agree.
+ */
+void ud_observe_zero_exclusive(const void *address, const void *reference,
+                               int backing_fd, off_t offset,
+                               struct ud_exclusive_observation *out);
 
 /* Same retained RX mappings, offset and worker-thread requirements as above.
  * CLREX clears the reservation and a branch skips the LDXR next to the LDRB.

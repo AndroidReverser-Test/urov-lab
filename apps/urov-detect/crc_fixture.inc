@@ -757,6 +757,11 @@ static void crc_big_case(const struct crc_patch_api *api, const char *key,
 
 /* The checksum and the bridge check use only app-owned mappings. The fake
  * bytes, key, and authenticated requests are inputs to the fixture alone. */
+static void crc_copy_window(uint8_t *out, const uint8_t *address, size_t size)
+{
+    for (size_t i = 0; i < size; ++i) out[i] = (uint8_t)uy_business_ldrb(address + i);
+}
+
 static void crc_stage(const char *name, const struct page *target, const struct page *backing,
                       uint32_t clean_crc, uint32_t patched_crc, int repeats,
                       unsigned active_mode, int all_callers)
@@ -767,15 +772,51 @@ static void crc_stage(const char *name, const struct page *target, const struct 
     uint32_t direct_expected = all_callers ? clean_crc : live_crc;
     uint32_t window_expected = active_mode ? clean_crc : live_crc;
     unsigned match = 0, clean = 0, unknown = 0;
-    uint32_t direct = 0, site = 0, window = 0, returned = 0;
+    unsigned direct_match = 0, window_match = 0, live_unknown = 0;
+    uint32_t direct = 0, site = 0, window = 0, returned = 0, kernel = 0;
+    uint8_t expected[CRC_PAYLOAD_SIZE];
+    uint8_t kernel_expected[CRC_PAYLOAD_SIZE];
 
     ++g_cases;
+    if (app_pread(backing->fd, backing->file_offset, expected, sizeof(expected))) {
+        REQUIRE(0, "CRC %s backing read", name);
+        return;
+    }
+    memcpy(kernel_expected, expected, sizeof(expected));
+    /* 2.10.0 serves the same-mm process_vm_readv path from the overlay too.
+     * In the no-window (all-callers) case both the EL0 reader and the GUP
+     * reader therefore see the image, so the expected kernel bytes are the
+     * clean image source rather than the patched backing page. */
+    if (all_callers &&
+        app_pread(target->fd, target->file_offset, kernel_expected, sizeof(kernel_expected))) {
+        REQUIRE(0, "CRC %s image read", name);
+        return;
+    }
     for (int i = 0; i < repeats; ++i) {
         struct ud_store_observation obs;
+        struct ud_live_observation direct_live, window_live;
         returned = crc_execute(target->address);
-        direct = crc_read_code(target->address, NULL);
+        ud_observe_live(target->address, CRC_PAYLOAD_SIZE, backing->fd, backing->file_offset,
+                        copy_scalar, &direct_live);
+        ud_observe_live(target->address, CRC_PAYLOAD_SIZE, backing->fd, backing->file_offset,
+                        crc_copy_window, &window_live);
+        direct = crc_payload_bytes(direct_live.user_bytes);
+        window = crc_payload_bytes(window_live.user_bytes);
+        kernel = crc_payload_bytes(window_live.kernel_bytes);
+        direct_match += direct_live.verdict == UD_MATCH;
+        window_match += window_live.verdict == UD_MATCH;
+        live_unknown += direct_live.verdict == UD_UNKNOWN || window_live.verdict == UD_UNKNOWN;
+        /* The GUP view is no longer a differential: it follows the same caller
+         * window rule as an EL0 read (all-callers => image, window => the
+         * fixture's frame chain is outside the business window => snapshot). */
+        REQUIRE(direct_live.verdict == UD_NO_MATCH &&
+                window_live.verdict == (active_mode && !all_callers ? UD_MATCH : UD_NO_MATCH) &&
+                !memcmp(direct_live.kernel_bytes, kernel_expected, sizeof(expected)) &&
+                !memcmp(window_live.kernel_bytes, kernel_expected, sizeof(expected)),
+                "CRC %s live views direct=%d error=%d window=%d error=%d kernel=%08x",
+                name, direct_live.verdict, direct_live.error, window_live.verdict,
+                window_live.error, kernel);
         site = crc_read_code(target->address, uy_site_ldrb);
-        window = crc_read_code(target->address, uy_business_ldrb);
         ud_observe_unreserved_store(target->address + CRC_STABLE_OFFSET,
                                     (const uint8_t *)reference + CRC_STABLE_OFFSET,
                                     backing->fd, backing->file_offset + CRC_STABLE_OFFSET, &obs);
@@ -791,8 +832,10 @@ static void crc_stage(const char *name, const struct page *target, const struct 
         unknown += obs.verdict == UD_UNKNOWN;
     }
     LOG("CRC_STAGE name=%s n=%d execute=%04x file=%08x backing=%08x direct=%08x site=%08x "
-        "window=%08x bridge_match=%u bridge_clean=%u bridge_unknown=%u",
-        name, repeats, returned, clean_crc, live_crc, direct, site, window, match, clean, unknown);
+        "window=%08x bridge_match=%u bridge_clean=%u bridge_unknown=%u kernel=%08x "
+        "direct_match=%u window_match=%u live_unknown=%u",
+        name, repeats, returned, clean_crc, live_crc, direct, site, window, match, clean, unknown,
+        kernel, direct_match, window_match, live_unknown);
 }
 
 static void crc_overlay_signals(const struct page *target, const struct page *patched,
@@ -913,6 +956,11 @@ static void crc_injection(const char *mode_name, const char *key, int repeats,
     ud_check_views(target.address, CRC_PAYLOAD_SIZE, target.fd, target.file_offset, &views);
     REQUIRE(views.file_diff == UD_UNKNOWN && views.error_file == ESTALE,
             "CRC original mapping identity verdict=%d errno=%d", views.file_diff, views.error_file);
+    struct ud_live_observation stale;
+    ud_observe_live(target.address, CRC_PAYLOAD_SIZE, target.fd, target.file_offset, copy_scalar,
+                    &stale);
+    REQUIRE(stale.verdict == UD_UNKNOWN && stale.error == ESTALE,
+            "CRC stale live mapping verdict=%d errno=%d", stale.verdict, stale.error);
     LOG("CRC_MAP original_identity=%d error=%d", views.file_diff, views.error_file);
     crc_stage("patch_only", &target, &patched, *clean_crc, *patched_crc, repeats, 0, 0);
 
@@ -934,7 +982,14 @@ static void crc_injection(const char *mode_name, const char *key, int repeats,
         LOG("CRC_OVERLAY mode=%u generation=%llu hits=%llu replays=%llu failures=%llu", q.mode,
             (unsigned long long)q.generation, (unsigned long long)q.hits,
             (unsigned long long)q.replays, (unsigned long long)q.failures);
-        if (!crc_deactivate(&api, key)) goto done;
+        int advice_error = uy_invalid_advice(target.address, UROV_Y_PAGE);
+        q = uy_req(UROV_Y_STATUS);
+        q.session = 1;
+        bool restored = !api.control(key, &q) && q.state == UROV_Y_INACTIVE;
+        REQUIRE(advice_error == EINVAL && restored,
+                "CRC invalid advice recovery errno=%d state=%u", advice_error, q.state);
+        LOG("CRC_RESTORE mode=%u madvise_errno=%d inactive=%d", mode, advice_error, restored);
+        if (!restored) goto done;
         active = 0;
         crc_stage("deactivated", &target, &patched, *clean_crc, *patched_crc, repeats, 0, 0);
     }

@@ -1242,3 +1242,83 @@ Pixel 6，Android 16，`6.1.134-android14-11`，4 KiB，KernelPatch `0xc00`。
 | 多页 3×1 | PASS，5 次运行 | [multipage-20261107-184622](results/multipage-20261107-184622/summary.json) |
 
 测试前后 boot ID 一致，`kernel_issues=[]`，`kpm list` 为空。
+
+## 18. 第十轮：同进程内核辅助读与 XZR 独占序列
+
+### 18.1 触发本轮的特征
+
+2.9.0 的 Dobby 活动矩阵里，普通 CRC 已经通过，但 `urovdetect` 仍能稳定判定：
+
+1. **同进程 `process_vm_readv` 双读。** `process_vm_rw()` 用 GUP 固定目标 `mm`
+   的实际页并从内核视图复制，不经过 `do_mem_abort`，所以第一次
+   `process_vm_readv(getpid(), ...)` 得到改码后的字节，随后两次 EL0 读得到镜像，
+   两路稳定不同即 `MATCH`。2.9.0 为 480/480。
+2. **`LDXR XZR; LDRB; STXR Ws, XZR`。** `ERET` 清本地独占监视器，目标
+   `STXR` 原生失败；2.9.0 的 `uy_llsc_prepare()` 要求 `Rt != XZR`，因此该形状
+   永远不桥，目标组失败而对照成功，构成 `MATCH`（480/480）。
+
+### 18.2 被否决的“按被 arm 页缩小位图”
+
+先试过把分支目标位图缩到每个被 arm 的**数据页**窗口。该方案在本轮真机上立刻
+失败：故障 `LDRB` 的 PC 在**读者函数**的代码页（`liburovdetect.so`），与
+被注册的数据页没有地址关系；2.9.0 的全进程位图不能按数据页裁剪。因此保留
+“全进程可执行 VMA”的位图，只改完备性和成本。
+
+### 18.3 机制
+
+1. **`process_vm_readv` after hook。** 复用现有 syscall 表控制面，只处理
+   `current->mm` 是会话 owner 且 `pid` 为调用者 pid/tgid 的调用。以 syscall
+   返回值界定成功复制的前缀，按 iovec 顺序重走 local/remote 流；命中已登记页
+   的片段用 `page_view()` 的镜像/快照替换，其余保留内核已经复制的字节。窗口
+   选择复用 `caller_allowed_deep()`。`iovcnt > 64` 或非自身 pid 时保持原生。
+2. **XZR 桥。** 两侧都是 `XZR`、宽度/基址一致、`[Xn]` 当前为零时，handler
+   写回 0、置 `Ws=0`、跳过后面的 `STXR`。写回是 no-op，保持“桥不改变内存”
+   的不变量；非零目标保持原生失败。`LDXR XZR` 没有可验证寄存器，执行存证仍由
+   直接分支位图与 GPR 门控提供。
+3. **PAC/MTE 门控。** 对 `x0..x30` 同时比较原值和 `addr & (user_limit-1)`，
+   覆盖 `BRAA/BLRAA/RETAA` 留下的签名指针，以及 MTE top-byte tag。
+4. **完备分支图。** `REGISTER` 枚举所有 `VM_EXEC` VMA（含 executable-only）；
+   读不到的 present 页把 map 标为 incomplete。扫描时未驻留的页由
+   `handle_mm_fault` after hook 在第一次 present 时补扫；`mmap`/`mprotect`/
+   `mremap` after hook 扫描新的可执行范围。区域表 append-only，mark 使用源
+   VMA 快路径（仅在无重叠时），跨 VMA 目标回退到 first-match 查找；扫描用
+   `seq` 与故障路径互斥，故障侧看到奇数或变化的序号就拒绝代写。
+   incomplete/valid=0 一律 fail-closed。
+5. **成本。** 2.9.0 的 mark 是 O(区域数)，本次改为源 VMA O(1)；本矩阵
+   `REGISTER`（含 `DOBBY_ARM` 前后）为 70 ms，2.9.0 记录约 240 ms。读取路径
+   新增的只有 `seq` 两次读取和位测试，`ELIM_TIMING mode=ap` 为 281 ns
+   （2.9.0 为 283 ns）。
+
+### 18.4 为什么没有引入新的可观察量
+
+- `ctl0` 字段、ABI v8 布局、`hooks` 位图（仍为 `0x7f`）、计数器语义不变；
+  `process_vm_readv` hook 只改变同一 `mm` 的读结果，不新增返回码或状态。
+- XZR 桥只在目标字为零时写回 0，不改变内存；`llsc` 计数的增长仍是既有字段。
+- 分支图仍只读；增量补扫发生在 syscall/fault 返回 EL0 之前，读取循环里只有
+  位测试和 seqlock 校验。
+- 新增的一次性成本：未驻留代码页首次 fault-in 时解码 4 KiB；`REGISTER` 扫描
+  仍是控制面操作。
+
+### 18.5 真机验证
+
+Pixel 6，Android 16，`6.1.134-android14-11`，4 KiB，KernelPatch `0xc00`。
+构建 `urov-y.kpm 8e3ad63b...`、`urovdetect.apk 4f259a66...`。
+
+| 矩阵 | 结果 | 目录 |
+| --- | --- | --- |
+| Dobby 8×1 | PASS；活动阶段 `accepted_crc=8/8`、双读 0/8、XZR 0/8、bridge/NOP/indirect/cross 0/256 各、`spaced_accepted=768`、`hits=4032`、`failures=0` | [dobby-detect-20261107-200157](results/dobby-detect-20261107-200157/summary.json) |
+| CRC 5×1 | PASS，9 次运行；`crc-ap-all` 的 `direct=window=file`，全部 `bridge=0/5` | [crc-20261107-200217](results/crc-20261107-200217/summary.json) |
+| 消除矩阵 3×1 | PASS，11 次运行；`w-active` 497 条断言，XZR 全 clean；`ELIM_TIMING mode=ap site_call_ns=281` | [eliminate-20261107-200235](results/eliminate-20261107-200235/summary.json) |
+| 多页 3×1 | PASS，5 次运行 | [multipage-20261107-200347](results/multipage-20261107-200347/summary.json) |
+
+### 18.6 残余
+
+1. 每次 EL0 读取仍一次同步异常；PTE 重装窗口、root 可见性、注册事务窗口、
+   非硬件独占 store 仍在。
+2. 分支图依赖可读性：XOM/不透明可执行页 -> fail-closed；`REGISTER` 之后
+   原地写入且不再 `mprotect` 的匿名可执行映射，以及已扫描页内的自修改代码
+   不会补扫。W^X 流程由 mprotect after hook 覆盖。
+3. 只接管同 `mm`、同进程的 `process_vm_readv`；`/proc/self/mem`、ptrace、
+   跨进程读写、`iovcnt > 64` 仍看到真实字节。
+4. `REGISTER` 的一次全进程扫描仍是控制面成本（本矩阵 70 ms）。
+5. XZR 桥只对零目标 no-op；`caller_count > 0` 的窗口语义不变。

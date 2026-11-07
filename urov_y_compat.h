@@ -15,6 +15,8 @@
 
 struct uy_layout {
     int task_mm;
+    int task_pid;
+    int task_tgid;
     int mm_pgd;
     int mm_users;
     int mmap_lock;
@@ -183,6 +185,8 @@ static int uy_layout_from_btf(struct uy_layout *layout, const struct kclf_btf *b
     const struct kclf_btf_type *sem = kclf_btf_find(btf, "rw_semaphore", 0);
 
     layout->task_mm = kclf_btf_member_range(btf, "task_struct", "mm", 8, 8);
+    layout->task_pid = kclf_btf_member_range(btf, "task_struct", "pid", 4, 4);
+    layout->task_tgid = kclf_btf_member_range(btf, "task_struct", "tgid", 4, 4);
     layout->mm_pgd = kclf_btf_member_range(btf, "mm_struct", "pgd", 8, 8);
     layout->mm_users = kclf_btf_member_range(btf, "mm_struct", "mm_users", 4, 4);
     layout->vma_start = kclf_btf_member_range(btf, "vm_area_struct", "vm_start", 8, 8);

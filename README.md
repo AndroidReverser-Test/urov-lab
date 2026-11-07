@@ -1,9 +1,22 @@
 # UROV-LAB
 
-`urov-y` 2.8.0 将 `prctl` 的 magic 固定为 `UROVYLAB`，保留 ABI v8 请求布局和 MAC 校验。
+`urov-y` 2.10.0 在同进程读路径上补齐两项仍可命中的检测：**同 `mm` 的
+`process_vm_readv`** 由 syscall after hook 按镜像/快照规则重写调用者缓冲区，
+**`LDXR XZR; load; STXR XZR`** 在目标字为零时由 LL/SC 桥完成 no-op store。分支
+目标图覆盖 `VM_EXEC`-only VMA，未驻留代码页在首次 fault-in 时补扫，
+`mmap`/`mprotect`/`mremap` 新增可执行范围在返回 EL0 前补扫；不可读的可达页使
+map incomplete 并关闭桥。ABI v8、`ctl0` 字段和 `hooks=0x7f` 不变。
+2.8.0 将 `prctl` 的 magic 固定为 `UROVYLAB`，保留 ABI v8 请求布局和 MAC 校验。
 2.4.0 的参数校验、并发镜像发布和陷阱撤销适配继续用于 Android ARM64 的 5.4 起的 5.x 和 6.x 内核，
 支持 4 KiB 及符合条件的 16 KiB 页表。实测、支持边界和复跑命令见
 [UROV-Y 兼容性与审计](COMPATIBILITY_Y.md)。下方日期条目保留各历史版本的行为和证据。
+
+2026-11-07 第十轮消除：`urov-y` 2.10.0 让 Dobby 活动矩阵的
+`process_vm_readv` 双读与 XZR 独占序列同时归零，`accepted_crc=8/8`。构建
+`urov-y.kpm 8e3ad63b...`、`urovdetect.apk 4f259a66...`；Dobby 8×1、CRC 5×1、
+消除 3×1、多页 3×1 均 PASS，`REGISTER` 约 70 ms、AP 读取 281 ns。残余
+（XOM/自修改代码、`/proc/self/mem`/ptrace、每次读取一次异常等）见
+[结果 2.10.0](APP_READ_INTEGRITY_RESULTS.md) 与 [设计 §18](ELIMINATION_DESIGN.md#18-第十轮同进程内核辅助读与-xzr-独占序列)。
 
 2026-11-07 镜像来源变更：`urov-y` 2.8.0 **移除 `SRC_FILE`**，所有页镜像统一走
 `SRC_USER`，每个描述符一次最多一页（4 KiB/16 KiB）。`SRC_FILE` 常量保留为

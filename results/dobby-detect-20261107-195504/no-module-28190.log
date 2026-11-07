@@ -1,0 +1,12 @@
+--------- beginning of main
+10-04 10:29:39.932 28190 28216 I urovdetect: CONTEXT pid=28190 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 10:29:39.932 28190 28216 I urovdetect: BEGIN mode=dobby-detect-clean repeats=8
+10-04 10:29:40.193 28190 28216 I urovdetect: DOBBY_DETECT stage=clean n=8 execute=1234 file=96964c4f live=96964c4f crc_pass=8 accepted_crc=8 match=0 clean=8 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=768 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=256 bridge_successes=0 nop_match=0 nop_trials=256 nop_successes=0 ind_match=0 ind_trials=256 ind_successes=0 cross_page_trials=256 cross_page_successes=0 probe_mean_ns=3567977 probe_max_ns=6420166
+10-04 10:29:40.193 28190 28216 I urovdetect: DOBBY_DETECT_LIVE stage=clean n=8 match=0 unknown=0 kernel_file=8 kernel_crc=96964c4f zero_match=0 zero_clean=8 zero_unknown=0 mean_ns=772694 max_ns=3718506
+10-04 10:29:40.193 28190 28216 I urovdetect: DOBBY_HOOK address=0x7a97f17000 original=1234 hooked=1235
+10-04 10:29:40.361 28190 28216 I urovdetect: DOBBY_DETECT stage=patch_only n=8 execute=1235 file=96964c4f live=2ae99109 crc_pass=0 accepted_crc=0 match=0 clean=8 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=768 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=256 bridge_successes=0 nop_match=0 nop_trials=256 nop_successes=0 ind_match=0 ind_trials=256 ind_successes=0 cross_page_trials=256 cross_page_successes=0 probe_mean_ns=2953572 probe_max_ns=2966552
+10-04 10:29:40.361 28190 28216 I urovdetect: DOBBY_DETECT_LIVE stage=patch_only n=8 match=0 unknown=0 kernel_file=0 kernel_crc=2ae99109 zero_match=0 zero_clean=8 zero_unknown=0 mean_ns=293110 max_ns=304362
+10-04 10:29:40.363 28190 28216 I urovdetect: DOBBY_DETECT_BUSINESS ops=85760 errors=0
+10-04 10:29:40.363 28190 28216 I urovdetect: CONTEXT pid=28190 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 10:29:40.363 28190 28216 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=67 failures=0 mode=dobby-detect-clean
+10-04 10:29:40.367 28190 28190 I urovdetect: DETECT_RESULT PASS mode=dobby-detect-clean worker_ms=433 ui_ticks=137 ui_max_gap_ms=18 native=PASS cases=2 assertions=67 failures=0

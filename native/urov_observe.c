@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -57,6 +58,51 @@ static uint64_t now_ns(void)
     return (uint64_t)t.tv_sec * UINT64_C(1000000000) + (uint64_t)t.tv_nsec;
 }
 
+static int read_live(const uint8_t *address, uint8_t *bytes, size_t size)
+{
+    struct iovec local = { .iov_base = bytes, .iov_len = size };
+    struct iovec remote = { .iov_base = (void *)address, .iov_len = size };
+    ssize_t got = process_vm_readv(getpid(), &local, 1, &remote, 1, 0);
+
+    if (got < 0) return errno;
+    return (size_t)got == size ? 0 : EIO;
+}
+
+void ud_observe_live(const uint8_t *address, size_t size, int backing_fd, off_t offset,
+                     ud_bytes_reader reader, struct ud_live_observation *out)
+{
+    struct sample_identity before, after;
+    uint8_t user_again[UD_LIVE_MAX_BYTES], kernel_again[UD_LIVE_MAX_BYTES];
+    int saved = errno;
+    uint64_t begin = now_ns();
+
+    memset(out, 0, sizeof(*out));
+    out->verdict = UD_UNKNOWN;
+    if (!reader || size > UD_LIVE_MAX_BYTES) {
+        out->error = EINVAL;
+        goto done;
+    }
+    out->error = identity(address, size, backing_fd, offset, &before);
+    if (out->error) goto done;
+    out->error = read_live(address, out->kernel_bytes, size);
+    if (out->error) goto done;
+    reader(out->user_bytes, address, size);
+    reader(user_again, address, size);
+    out->error = read_live(address, kernel_again, size);
+    if (out->error) goto done;
+    out->error = identity(address, size, backing_fd, offset, &after);
+    if (out->error) goto done;
+    if (!unchanged(&before, &after) || memcmp(out->user_bytes, user_again, size) ||
+        memcmp(out->kernel_bytes, kernel_again, size)) {
+        out->error = EAGAIN;
+        goto done;
+    }
+    out->verdict = memcmp(out->user_bytes, out->kernel_bytes, size) ? UD_MATCH : UD_NO_MATCH;
+done:
+    out->elapsed_ns = now_ns() - begin;
+    errno = saved;
+}
+
 /* No calls, barriers, syscalls, retry loops or unrelated memory accesses can
  * appear inside this 12-byte window. ERET clears the local exclusive monitor.
  * Intervening loads may also clear it on some implementations: calibrate using
@@ -87,6 +133,19 @@ static unsigned spaced_exclusive_once(const void *address, uint64_t *scratch, un
                      "ldrb %w1, [%4]\n"
                      "stxr %w2, %0, [%3]\n"
                      : "=&r"(old), "=&r"(value), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "memory");
+    *byte = value;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned zero_exclusive_once(const void *address, uint64_t *scratch, unsigned *byte)
+{
+    unsigned value, failed;
+    __asm__ volatile("ldxr xzr, [%2]\n"
+                     "ldrb %w0, [%3]\n"
+                     "stxr %w1, xzr, [%2]\n"
+                     : "=&r"(value), "=&r"(failed)
                      : "r"(scratch), "r"(address) : "memory");
     *byte = value;
     return failed;
@@ -294,7 +353,7 @@ static unsigned execution_once(const void *address, uint64_t *scratch, unsigned 
     return failed;
 }
 
-enum reservation_probe { READ_ADJACENT, READ_SPACED, EXECUTE_CANARY };
+enum reservation_probe { READ_ADJACENT, READ_SPACED, READ_ZERO, EXECUTE_CANARY };
 
 static void observe_reservation(const void *address, const void *reference,
                                 int backing_fd, off_t offset, enum reservation_probe probe,
@@ -306,6 +365,7 @@ static void observe_reservation(const void *address, const void *reference,
     unsigned (*sample)(const void *, uint64_t *, unsigned *) = exclusive_once;
     if (execute) sample = execution_once;
     if (probe == READ_SPACED) sample = spaced_exclusive_once;
+    if (probe == READ_ZERO) sample = zero_exclusive_once;
     /* Keep the scratch away from normal stack writes and compiler spills.
      * The caller does not share this stack storage with other threads.
      */
@@ -387,6 +447,13 @@ void ud_observe_spaced_exclusive(const void *address, const void *reference,
                                  struct ud_exclusive_observation *out)
 {
     observe_reservation(address, reference, backing_fd, offset, READ_SPACED, out);
+}
+
+void ud_observe_zero_exclusive(const void *address, const void *reference,
+                               int backing_fd, off_t offset,
+                               struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_ZERO, out);
 }
 
 void ud_observe_execution(const void *address, const void *reference,

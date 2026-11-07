@@ -208,10 +208,12 @@ static void *dobby_existing_registrant(void *arg)
     return NULL;
 }
 
-static bool dobby_restore_and_block(const struct uy_ctx *ctx, const uint8_t *text, size_t page_size)
+static bool dobby_restore_and_block(const struct uy_ctx *ctx, const uint8_t *text,
+                                    const void *reference, size_t page_size)
 {
     struct dobby_registration_retry retry = { .ctx = ctx, .text = text, .error = -1 };
     struct urov_y_request status = {0};
+    struct ud_mapping before, after;
     pthread_t thread;
     int barrier_error = pthread_barrier_init(&retry.start, NULL, 2);
     int thread_error = barrier_error ? barrier_error :
@@ -220,15 +222,22 @@ static bool dobby_restore_and_block(const struct uy_ctx *ctx, const uint8_t *tex
     int nnp_before = prctl(PR_GET_NO_NEW_PRIVS, 0UL, 0UL, 0UL, 0UL);
     int filter_error = dobby_block_registration();
     int nnp_after = prctl(PR_GET_NO_NEW_PRIVS, 0UL, 0UL, 0UL, 0UL);
+    int outside_error = uy_invalid_advice(reference, page_size);
     bool still_active = !uy_status(ctx, &status) && status.state == UROV_Y_ACTIVE;
 
-    /* Only the dedicated test page uses this recovery path. The advice is
-     * already MADV_NORMAL, so the native call preserves its protections. */
-    int restore_error = madvise((void *)text, page_size, MADV_NORMAL) ? errno : 0;
-    bool inactive = !restore_error && !uy_status(ctx, &status) && status.state == UROV_Y_INACTIVE;
-    REQUIRE(still_active && inactive, "Dobby MADV_NORMAL recovery errno=%d state=%u",
-            restore_error, status.state);
-    LOG("DOBBY_DETECT_RESTORE madvise_errno=%d inactive=%d", restore_error, inactive);
+    int map_error = ud_mapping_at("/proc/self/smaps", text, &before);
+    int restore_error = uy_invalid_advice(text, page_size);
+    bool inactive = !uy_status(ctx, &status) && status.state == UROV_Y_INACTIVE;
+    bool preserved = !map_error && !ud_mapping_at("/proc/self/smaps", text, &after) &&
+        before.start == after.start && before.end == after.end &&
+        before.readable == after.readable && before.writable == after.writable &&
+        before.executable == after.executable && before.randomread && after.randomread;
+    REQUIRE(outside_error == EINVAL && still_active && restore_error == EINVAL &&
+            inactive && preserved, "Dobby invalid advice recovery errno=%d state=%u preserved=%d",
+            restore_error, status.state, preserved);
+    LOG("DOBBY_DETECT_RESTORE outside_errno=%d outside_active=%d madvise_errno=%d "
+        "inactive=%d vma_preserved=%d", outside_error, still_active, restore_error, inactive,
+        preserved);
 
     retry.attempt = !filter_error && inactive;
     int local_error = retry.attempt ? dobby_retry_register(ctx, text) : -1;
@@ -250,12 +259,14 @@ static bool dobby_restore_and_block(const struct uy_ctx *ctx, const uint8_t *tex
  * The observer gets only an address, a reference mapping and a file offset. */
 static void dobby_detection_stage(const char *name, const uint8_t *text,
                                   const struct page *reference, int repeats,
-                                  uint32_t file_crc, uint32_t expected_return,
-                                  bool expect_crc_pass, enum ud_verdict expected_path)
+                                  const uint8_t file[DOBBY_CRC_BYTES], uint32_t expected_return,
+                                  bool expect_crc_pass, enum ud_verdict expected_live)
 {
     const size_t sample = 64;
     const uint8_t *control = reference->address + reference->entry + sample;
-    const off_t offset = reference->file_offset + reference->entry + sample;
+    const off_t text_offset = reference->file_offset + reference->entry;
+    const off_t offset = text_offset + sample;
+    const uint32_t file_crc = (uint32_t)crc32(0, file, DOBBY_CRC_BYTES);
     unsigned matched = 0, clean = 0, unknown = 0, crc_pass = 0, accepted_crc = 0;
     unsigned adjacent_match = 0, adjacent_unknown = 0;
     unsigned spaced_match = 0, spaced_unknown = 0, spaced_accepted = 0;
@@ -264,23 +275,37 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
     unsigned nop_match = 0, nop_trials = 0, nop_successes = 0;
     unsigned ind_match = 0, ind_trials = 0, ind_successes = 0;
     unsigned cross_page_trials = 0, cross_page_successes = 0;
+    unsigned live_match = 0, live_unknown = 0, kernel_file = 0;
+    unsigned zero_match = 0, zero_clean = 0, zero_unknown = 0;
     uint64_t total_ns = 0, max_ns = 0;
-    uint32_t live_crc = 0, returned = 0;
+    uint64_t live_total_ns = 0, live_max_ns = 0;
+    uint32_t live_crc = 0, kernel_crc = 0, returned = 0;
 
     ++g_cases;
     for (int i = 0; i < repeats; ++i) {
-        uint8_t bytes[DOBBY_CRC_BYTES];
-        struct ud_exclusive_observation adjacent, spaced;
+        struct ud_live_observation live;
+        struct ud_exclusive_observation adjacent, spaced, zero;
         struct ud_store_observation bridge, nop, indirect, cross_page;
-        copy_scalar(bytes, text, sizeof(bytes));
-        live_crc = (uint32_t)crc32(0, bytes, sizeof(bytes));
+        errno = EDOM;
+        ud_observe_live(text, DOBBY_CRC_BYTES, reference->fd, text_offset, copy_scalar, &live);
+        REQUIRE(live.verdict == expected_live, "Dobby %s live views=%d error=%d", name,
+                live.verdict, live.error);
+        live_match += live.verdict == UD_MATCH;
+        live_unknown += live.verdict == UD_UNKNOWN;
+        bool file_ok = live.verdict != UD_UNKNOWN &&
+                       !memcmp(live.kernel_bytes, file, DOBBY_CRC_BYTES);
+        kernel_file += file_ok;
+        live_total_ns += live.elapsed_ns;
+        if (live.elapsed_ns > live_max_ns) live_max_ns = live.elapsed_ns;
+        live_crc = (uint32_t)crc32(0, live.user_bytes, DOBBY_CRC_BYTES);
+        kernel_crc = (uint32_t)crc32(0, live.kernel_bytes, DOBBY_CRC_BYTES);
         returned = dobby_crc_payload();
         REQUIRE(returned == expected_return && (live_crc == file_crc) == expect_crc_pass,
                 "Dobby %s execute=%04x live=%08x file=%08x", name, returned, live_crc, file_crc);
 
-        errno = EDOM;
         ud_observe_exclusive(text + sample, control, reference->fd, offset, &adjacent);
         ud_observe_spaced_exclusive(text + sample, control, reference->fd, offset, &spaced);
+        ud_observe_zero_exclusive(text + sample, control, reference->fd, offset, &zero);
         ud_observe_unreserved_status(text + sample, control, reference->fd, offset, &bridge);
         ud_observe_unreserved_nop_status(text + sample, control, reference->fd, offset, &nop);
         ud_observe_unreserved_indirect_status(text + sample, control, reference->fd, offset,
@@ -295,6 +320,9 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
         spaced_accepted += spaced.accepted;
         spaced_failed += spaced.target_failed;
         spaced_control_failed += spaced.control_failed;
+        zero_match += zero.reservation_loss == UD_MATCH;
+        zero_clean += zero.reservation_loss == UD_NO_MATCH;
+        zero_unknown += zero.reservation_loss == UD_UNKNOWN;
         bridge_match += bridge.verdict == UD_MATCH;
         bridge_unknown += bridge.verdict == UD_UNKNOWN;
         bridge_trials += bridge.completed;
@@ -311,7 +339,7 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
         clean += cross_page.verdict == UD_NO_MATCH;
         unknown += cross_page.verdict == UD_UNKNOWN;
         crc_pass += live_crc == file_crc;
-        accepted_crc += live_crc == file_crc && cross_page.verdict == UD_NO_MATCH;
+        accepted_crc += live_crc == file_crc && live.verdict == UD_NO_MATCH && file_ok;
         total_ns += cross_page.elapsed_ns;
         if (cross_page.elapsed_ns > max_ns) max_ns = cross_page.elapsed_ns;
     }
@@ -324,9 +352,12 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
     REQUIRE(!nop_successes, "Dobby %s NOP bridge stores=%u", name, nop_successes);
     REQUIRE(!ind_match && !ind_successes, "Dobby %s indirect bridge match=%u stores=%u",
             name, ind_match, ind_successes);
-    REQUIRE(!unknown && matched == (expected_path == UD_MATCH ? (unsigned)repeats : 0),
+    REQUIRE(!unknown && !matched,
             "Dobby %s read path match=%u unknown=%u", name, matched, unknown);
-    REQUIRE(accepted_crc == (expect_crc_pass && expected_path == UD_NO_MATCH ? (unsigned)repeats : 0),
+    REQUIRE(expected_live == UD_MATCH ? zero_match > 0 && !zero_clean :
+            zero_clean > 0 && !zero_match, "Dobby %s XZR match=%u clean=%u unknown=%u",
+            name, zero_match, zero_clean, zero_unknown);
+    REQUIRE(accepted_crc == (expect_crc_pass && expected_live == UD_NO_MATCH ? (unsigned)repeats : 0),
             "Dobby %s accepted_crc=%u", name, accepted_crc);
     LOG("DOBBY_DETECT stage=%s n=%d execute=%04x file=%08x live=%08x crc_pass=%u "
         "accepted_crc=%u match=%u clean=%u unknown=%u adjacent_match=%u adjacent_unknown=%u "
@@ -341,6 +372,11 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
         cross_page_trials, cross_page_successes,
         (unsigned long long)(total_ns / repeats),
         (unsigned long long)max_ns);
+    LOG("DOBBY_DETECT_LIVE stage=%s n=%d match=%u unknown=%u kernel_file=%u kernel_crc=%08x "
+        "zero_match=%u zero_clean=%u zero_unknown=%u mean_ns=%llu max_ns=%llu",
+        name, repeats, live_match, live_unknown, kernel_file, kernel_crc,
+        zero_match, zero_clean, zero_unknown,
+        (unsigned long long)(live_total_ns / repeats), (unsigned long long)live_max_ns);
 }
 
 static void dobby_detection_fixture(const char *key, int repeats)
@@ -362,28 +398,40 @@ static void dobby_detection_fixture(const char *key, int repeats)
         REQUIRE(0, "Dobby detection file read failed");
         goto close_reference;
     }
-    uint32_t file_crc = (uint32_t)crc32(0, file, sizeof(file));
     have_thread = pthread_create(&thread, NULL, business_main, &business) == 0;
     REQUIRE(have_thread, "Dobby detection business thread");
-    dobby_detection_stage("clean", text, &reference, repeats, file_crc, DOBBY_ORIGINAL, true, UD_NO_MATCH);
+    dobby_detection_stage("clean", text, &reference, repeats, file, DOBBY_ORIGINAL, true, UD_NO_MATCH);
 
     dobby_setup_error = dobby_crc_setup((void *)text, (size_t)page_size);
     if (dobby_setup_error) {
         REQUIRE(0, "Dobby detection setup errno=%d", dobby_setup_error);
         goto close_reference;
     }
-    dobby_detection_stage("patch_only", text, &reference, repeats, file_crc, DOBBY_HOOKED, false, UD_NO_MATCH);
+    dobby_detection_stage("patch_only", text, &reference, repeats, file, DOBBY_HOOKED, false, UD_NO_MATCH);
+    struct ud_mapping map;
+    REQUIRE(!madvise((void *)text, (size_t)page_size, MADV_RANDOM) &&
+            uy_invalid_advice(text, (size_t)page_size) == EINVAL &&
+            !ud_mapping_at("/proc/self/smaps", text, &map) && map.randomread,
+            "Dobby invalid advice changed an unregistered mapping");
     if (!key) goto close_reference;
 
     const char *stage = "module key";
     struct uy_ctx ctx;
     bool cleanup = false;
+    uint64_t arm_begin = now_ns();
     int error = uy_init_key(&ctx, key) ? EINVAL :
                 dobby_crc_arm(&ctx, text, (size_t)page_size, &stage, &cleanup);
+    uint64_t arm_ns = now_ns() - arm_begin;
     REQUIRE(!error, "Dobby detection %s errno=%d", stage, error);
+    if (!error) LOG("DOBBY_ARM register_ns=%llu", (unsigned long long)arm_ns);
     if (!error) {
         struct urov_y_request status = {0};
-        dobby_detection_stage("overlay", text, &reference, repeats, file_crc, DOBBY_HOOKED, true, UD_NO_MATCH);
+        /* 2.10.0: the same-mm process_vm_readv path is served the overlay, so
+         * the independent kernel view is no longer a differential.  The
+         * expected observation is the native one (NO_MATCH), and the accepted
+         * CRC is the positive control that the overlay is still live. */
+        dobby_detection_stage("overlay", text, &reference, repeats, file, DOBBY_HOOKED, true,
+                              UD_NO_MATCH);
         REQUIRE(!uy_status(&ctx, &status) && status.state == UROV_Y_ACTIVE && status.reserved == 1 &&
                 status.hits >= (uint64_t)repeats * DOBBY_CRC_BYTES && !status.failures,
                 "Dobby detection overlay hits=%llu failures=%llu",
@@ -391,14 +439,14 @@ static void dobby_detection_fixture(const char *key, int repeats)
         LOG("DOBBY_DETECT_STATUS hits=%llu failures=%llu",
             (unsigned long long)status.hits, (unsigned long long)status.failures);
 
-        if (dobby_restore_and_block(&ctx, text, (size_t)page_size)) cleanup = false;
+        if (dobby_restore_and_block(&ctx, text, reference.address, (size_t)page_size)) cleanup = false;
     }
     if (cleanup && uy_deactivate(&ctx)) {
         REQUIRE(0, "Dobby detection DEACTIVATE errno=%d", errno);
         goto close_reference;
     }
     if (!error)
-        dobby_detection_stage("deactivated", text, &reference, repeats, file_crc, DOBBY_HOOKED, false, UD_NO_MATCH);
+        dobby_detection_stage("deactivated", text, &reference, repeats, file, DOBBY_HOOKED, false, UD_NO_MATCH);
 
 close_reference:
     if (have_thread) {

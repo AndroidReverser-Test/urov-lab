@@ -1,0 +1,12 @@
+--------- beginning of main
+10-04 09:43:59.313 13082 13105 I urovdetect: CONTEXT pid=13082 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 09:43:59.313 13082 13105 I urovdetect: BEGIN mode=dobby-detect-clean repeats=6
+10-04 09:43:59.507 13082 13105 I urovdetect: DOBBY_DETECT stage=clean n=6 execute=1234 file=96964c4f live=96964c4f crc_pass=6 accepted_crc=6 match=0 clean=6 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=576 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=192 bridge_successes=0 nop_match=0 nop_trials=192 nop_successes=0 ind_match=0 ind_trials=192 ind_successes=0 cross_page_trials=192 cross_page_successes=0 probe_mean_ns=4107462 probe_max_ns=7878866
+10-04 09:43:59.507 13082 13105 I urovdetect: DOBBY_DETECT_LIVE stage=clean n=6 match=0 unknown=0 kernel_file=6 kernel_crc=96964c4f mean_ns=718479 max_ns=2271648
+10-04 09:43:59.508 13082 13105 I urovdetect: DOBBY_HOOK address=0x7a95d8e000 original=1234 hooked=1235
+10-04 09:43:59.616 13082 13105 I urovdetect: DOBBY_DETECT stage=patch_only n=6 execute=1235 file=96964c4f live=5b89f7ea crc_pass=0 accepted_crc=0 match=0 clean=6 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=576 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=192 bridge_successes=0 nop_match=0 nop_trials=192 nop_successes=0 ind_match=0 ind_trials=192 ind_successes=0 cross_page_trials=192 cross_page_successes=0 probe_mean_ns=2952487 probe_max_ns=3019165
+10-04 09:43:59.616 13082 13105 I urovdetect: DOBBY_DETECT_LIVE stage=patch_only n=6 match=0 unknown=0 kernel_file=0 kernel_crc=5b89f7ea mean_ns=294332 max_ns=299683
+10-04 09:43:59.617 13082 13105 I urovdetect: DOBBY_DETECT_BUSINESS ops=61312 errors=0
+10-04 09:43:59.617 13082 13105 I urovdetect: CONTEXT pid=13082 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 09:43:59.617 13082 13105 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=52 failures=0 mode=dobby-detect-clean
+10-04 09:43:59.673 13082 13082 I urovdetect: DETECT_RESULT PASS mode=dobby-detect-clean worker_ms=351 ui_ticks=130 ui_max_gap_ms=16 native=PASS cases=2 assertions=52 failures=0

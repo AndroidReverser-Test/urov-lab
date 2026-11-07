@@ -120,6 +120,11 @@ def main():
         marker = "DOBBY_HOOK address=" if dobby else "CRC_FIXTURE dlopen=1"
         if names != expected or marker not in logs:
             raise IncompleteLog(f"{label}: missing CRC records in {log_path.name}")
+        if dobby:
+            live_views = [dict(KV.findall(line)) for line in
+                          re.findall(r"DOBBY_DETECT_LIVE [^\n]+", logs)]
+            if [view["stage"] for view in live_views] != expected:
+                raise IncompleteLog(f"{label}: missing live view records in {log_path.name}")
         if dobby and active and ("DOBBY_DETECT_RESTORE " not in logs or
                                  "DOBBY_DETECT_GUARD " not in logs):
             raise IncompleteLog(f"{label}: missing recovery or guard records in {log_path.name}")
@@ -139,14 +144,15 @@ def main():
         report["runs"].append({"label": label, "mode": mode, "uid": int(uid[1]), "pid": pid,
                                "log": log_path.name, "result": result[0], "stages": stages,
                                "details": re.findall(r"(?:CRC_(?:REJECT|PRIVATE|REMAP|MAP|OVERLAY|SITE|"
-                                                     r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC|BIG|BIG_OVERLAY|BIG_VMA|MIXED|SET)"
+                                                     r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC|BIG|BIG_OVERLAY|BIG_VMA|MIXED|SET|RESTORE)"
                                                      r"|ELIM_EXEC|DOBBY_DETECT_(?:STATUS|RESTORE|GUARD|BUSINESS)) [^\n]+", logs)})
         if dobby:
+            report["runs"][-1]["live_views"] = live_views
             last = stages[2] if active else stages[-1]
+            live = live_views[2] if active else live_views[-1]
             print(f"{label} PASS execute={last['execute']} file={last['file']} live={last['live']} "
-                  f"bridge={last['bridge_match']}/{last['n']} spaced={last['spaced_match']}/{last['n']} "
-                  f"nop={last['nop_match']}/{last['n']} ind={last['ind_match']}/{last['n']} "
-                  f"cross_page={last['match']}/{last['n']} unknown={last['unknown']} "
+                  f"kernel={live['kernel_crc']} views={live['match']}/{live['n']} "
+                  f"xzr={live['zero_match']}/{live['n']} cross_page={last['match']}/{last['n']} "
                   f"accepted_crc={last['accepted_crc']}", flush=True)
             return
         if mode in ("crc-ap-text", "crc-ap-libc", "crc-ap-big"):

@@ -13,6 +13,7 @@
 | `urov-y` 2.5.0 `PAGE_AP` | 清目标页叶子 PTE 的 AP[1]。数据读取进 `do_mem_abort`，取指仍执行该页的真实字节。支持普通私有 `.text`、多页、跨页、FPSIMD 与 LD1/2/3/4。2.5.0 对紧邻 `LDXR/LDAXR; load; STXR/STLXR`、`Rt==[Xn]` 且待写值等于内存的序列完成原 store，`ERET` 后不再出现确定性的目标 `STXR` 失败。 |
 | `urov-y` 2.6.0 `PAGE_AP` | 在 2.5.0 之上允许 `LDXR` 与 load 之间 0–3 个 `NOP`，并在提交桥前扫描故障 PC 两侧各 256 字节，解码直接分支；只要有 `B/BL/CBZ/CBNZ/TBZ/TBNZ` 落到 load 上，就不代写，让原生 `STXR` 报告失败。这样“预置 `Rt==[Xn]` 后分支跳过 `LDXR`”的探针不再得到伪造成功。 |
 | `urov-y` 2.9.0 `PAGE_AP` | 在 2.8.0 基础上把“是否顺序到达 load”从单页扫描改为 `REGISTER` 期全进程直接分支目标位图：清 `AP[1]` 之前枚举会话 `mm` 的所有可读可执行 VMA，按 4 字节指令记录 `B/BL/B.cond/CBZ/CBNZ/TBZ/TBNZ` 的静态目标；故障时只查 `[LDXR+4, load]`。2.8.0 的跨页探针不再命中，读取路径耗时不变。 |
+| `urov-y` 2.10.0 `PAGE_AP` | 在 2.9.0 基础上补齐两条仍可命中的读路径：同 `mm` 的 `process_vm_readv` 由 syscall after hook 按同一镜像/快照规则重写调用者缓冲区；`LDXR XZR; load; STXR XZR` 在目标字为零时由桥完成 no-op store。分支目标图覆盖 `VM_EXEC`-only VMA，未驻留代码页在首次 fault-in 时补扫，`mmap`/`mprotect`/`mremap` 新增可执行范围在返回 EL0 前补扫，任何无法读取的可达页使 map incomplete 并关闭桥；间接分支门控同时比较 PAC/MTE 掩码后的值。 |
 
 [基础版后端](urov_backend.c) · [X 后端](urov_x_backend.c) · [Y 后端](urov_y_backend.c) · [指令解码](decode.c) · [软件模拟](emulate.c)
 
@@ -301,6 +302,56 @@ VMA，把每个 `B/BL/B.cond/CBZ/CBNZ/TBZ/TBNZ` 的静态目标写入按 VMA 划
 5. PTE 重装窗口、root 可见性、注册事务窗口不变；每次读取仍一次同步异常；
    桥的 store 仍是内核 nofault 普通写，不是硬件独占 store；`caller_count > 0`
    的窗口语义不变。
+
+## 2.10.0 内核辅助读与 XZR 序列复核（2026-11-07）
+
+同一 Pixel 6、`6.1.134-android14-11`、4 KiB、KernelPatch `0xc00`。构建
+`urov-y.kpm 8e3ad63b...`、`urovdetect.apk 4f259a66...`。2.9.0 的活动矩阵里
+仍有两条确定性检测：同进程 `process_vm_readv` 的 GUP 视图与 EL0 视图不同
+（480/480），以及 `LDXR XZR; LDRB; STXR XZR` 的目标 `STXR` 在 `ERET` 后失败
+（480/480）。
+
+2.10.0 的读取路径：
+
+- **`process_vm_readv` after hook。** syscall 表条目在 `mm` 是会话 owner、`pid`
+  是调用者自身时，按返回长度重走 local/remote iovec 流，只改写落在已登记页上的
+  字节；镜像/快照选择复用 `caller_allowed_deep()`。只新增一个 after 回调，不新增
+  ABI、`ctl0` 位、计数器或 `hooks` 位。
+- **XZR 桥。** `LDXR XZR` + `STXR XZR`、同宽度/基址、目标字为零时置 `Ws=0`
+  并跳过 `STXR`；写回 0 是 no-op。目标字非零时保持原生失败。
+- **完整分支目标图。** 覆盖 `VM_EXEC`，未驻留页在 `handle_mm_fault` 首次
+  present 时补扫（返回 EL0 之前），`mmap`/`mprotect`/`mremap` 新增范围在
+  after hook 补扫；读不到的可达页或无法加入的范围使 map incomplete，桥
+  fail-closed。扫描用 seqlock 与故障路径互斥，mark 用源 VMA 快路径；
+  本矩阵 `REGISTER` 为 70 ms（2.9.0 记录约 240 ms）。
+- **PAC/MTE 间接分支门控。** 掩码后比较 GPR，覆盖签名指针仍在寄存器的
+  `BRAA/BLRAA/RETAA` 形状。
+
+真机结果：
+
+- Dobby 8×1：活动阶段 `accepted_crc=8/8`、双读 `0/8`、XZR `0/8`、
+  bridge/NOP/indirect/cross `0/256` 各、`spaced_accepted=768` 且
+  `spaced_failed=0`、`hits=4032`、`failures=0`。
+- CRC 5×1：9 次运行 PASS；`crc-ap-all` 的 `direct=window=file`，`crc-ap` 的
+  `direct=0c7da8a0`、`window=f50bcaf6`，全部 `bridge=0/5`。
+- 消除矩阵 3×1：11 次运行 PASS；`w-active` 497 条断言，XZR 全 clean，
+  `ELIM_TIMING mode=ap site_call_ns=281`。
+- 多页 3×1：5 次运行 PASS。测试后模块列表为空、boot ID 不变。
+
+残余（2.10.0）：
+
+1. 每次 EL0 读取仍一次同步异常；PTE 重装窗口、root 可见性、注册事务窗口、
+   非硬件独占 store 仍在。
+2. 分支图依赖“扫描时/首次 present 时可读”。XOM 或不透明可执行页使桥
+   fail-closed；`REGISTER` 之后原地写入且不再 `mprotect` 的匿名可执行映射，
+   以及已扫描页内的自修改代码不会被补扫。W^X 流程由 mprotect after hook 覆盖。
+3. 只接管同 `mm`、同进程的 `process_vm_readv`；`/proc/self/mem`、ptrace、
+   跨进程读写和 iovec 数超过 64 的调用仍看到真实字节。
+4. `REGISTER` 的一次全进程扫描仍是控制面成本（本矩阵 70 ms），不在读取循环。
+5. XZR 桥只对零目标 no-op；`caller_count > 0` 的窗口语义不变。
+
+完整数据和复跑命令见
+[APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.10.0 节。
 
 ## 复跑
 

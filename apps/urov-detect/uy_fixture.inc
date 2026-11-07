@@ -10,7 +10,8 @@
  *   - ud_observe_unreserved_status() and ud_observe_unreserved_nop_status()
  *     see no PAGE_AP store after CLREX: a direct branch to the load or to a
  *     NOP in the LDXR gap is rejected by the bridge.
- *   - the cross-page branch probe matches on active PAGE_AP, including
+ *   - the fixed cross-page branch probe stays negative on 2.9.0; the XZR
+ *     sequence detects reservation loss on active PAGE_AP, including
  *     reads outside the caller window and equal-value overlays.
  *   - ud_observe_reader() outside the business window returns original bytes.
  *   - ud_observe_execution() on the canary matches only in active PAGE_UXN.
@@ -104,6 +105,13 @@ static int uy_status(const struct uy_ctx *ctx, struct urov_y_request *out)
     if (uy_control(ctx, UROV_Y_STATUS, &q)) return -1;
     *out = q;
     return 0;
+}
+
+/* Linux rejects the advice before changing the VMA. Y's range gate runs
+ * first, so an overlapping session can still be restored. */
+static int uy_invalid_advice(const void *address, size_t page_size)
+{
+    return madvise((void *)address, page_size, -1) ? errno : 0;
 }
 
 static const char *uy_mode_name(unsigned mode)
@@ -317,14 +325,15 @@ static int uy_mapping_private_kb(const void *addr, unsigned *dirty, unsigned *an
 
 /* Verify the read value and the architectural reservation result. */
 static void elimination_case(const char *name, const struct page *p, unsigned delta,
-                             int repeats, enum ud_verdict expected_exclusive)
+                             int repeats, enum ud_verdict expected_zero)
 {
     const uint8_t *at = p->address + p->entry + delta;
     const uint8_t *reference = (const uint8_t *)(uintptr_t)&ud_payload + delta;
     const off_t offset = p->file_offset + p->entry + delta;
-    struct ud_exclusive_observation ex = {0};
+    struct ud_exclusive_observation ex = {0}, zero = {0};
     struct ud_reader_observation rd = {0};
     unsigned exclusive_matches = 0, exclusive_clean = 0, exclusive_unknown = 0;
+    unsigned zero_matches = 0, zero_clean = 0, zero_unknown = 0;
     unsigned reader_matches = 0, reader_clean = 0, reader_unknown = 0;
     unsigned accepted = 0, failed = 0, control_failed = 0;
     unsigned failures_before = g_fail;
@@ -343,7 +352,7 @@ static void elimination_case(const char *name, const struct page *p, unsigned de
         errno = EDOM;
         ud_observe_exclusive(at, reference, p->fd, offset, &ex);
         REQUIRE(errno == EDOM, "%s exclusive changed errno", name);
-        REQUIRE(ex.reservation_loss == expected_exclusive ||
+        REQUIRE(ex.reservation_loss == UD_NO_MATCH ||
                 (ex.reservation_loss == UD_UNKNOWN && ex.error == EAGAIN),
                 "%s exclusive=%d accepted=%u failed=%u control=%u error=%d",
                 name, ex.reservation_loss, ex.accepted, ex.target_failed,
@@ -354,6 +363,16 @@ static void elimination_case(const char *name, const struct page *p, unsigned de
         accepted += ex.accepted;
         failed += ex.target_failed;
         control_failed += ex.control_failed;
+        ud_observe_zero_exclusive(at, reference, p->fd, offset, &zero);
+        REQUIRE(errno == EDOM, "%s XZR probe changed errno", name);
+        REQUIRE(zero.reservation_loss == expected_zero ||
+                (zero.reservation_loss == UD_UNKNOWN && zero.error == EAGAIN),
+                "%s XZR verdict=%d accepted=%u failed=%u control=%u error=%d", name,
+                zero.reservation_loss, zero.accepted, zero.target_failed,
+                zero.control_failed, zero.error);
+        zero_matches += zero.reservation_loss == UD_MATCH;
+        zero_clean += zero.reservation_loss == UD_NO_MATCH;
+        zero_unknown += zero.reservation_loss == UD_UNKNOWN;
         errno = EDOM;
         ud_observe_reader(at, p->fd, offset, uy_site_ldr, &rd);
         REQUIRE(errno == EDOM, "%s reader changed errno", name);
@@ -380,17 +399,20 @@ static void elimination_case(const char *name, const struct page *p, unsigned de
             oldmap.writable == newmap.writable && oldmap.executable == newmap.executable &&
             oldmap.dontcopy == newmap.dontcopy && oldmap.randomread == newmap.randomread &&
             oldmap.maywrite == newmap.maywrite, "%s VMA changed", name);
-    REQUIRE(expected_exclusive == UD_MATCH ? exclusive_matches > 0 && !exclusive_clean :
-            exclusive_matches == 0, "%s unexpected reservation result matches=%u clean=%u",
-            name, exclusive_matches, exclusive_clean);
+    REQUIRE(!exclusive_matches, "%s unexpected adjacent reservation loss", name);
+    REQUIRE(expected_zero == UD_MATCH ? zero_matches > 0 && !zero_clean :
+            zero_clean > 0 && !zero_matches, "%s inconclusive XZR result matches=%u clean=%u",
+            name, zero_matches, zero_clean);
     REQUIRE(reader_matches == 0, "%s reader matched %u times", name, reader_matches);
     LOG("ELIM_CASE name=%s result=%s n=%d exclusive_match=%u exclusive_clean=%u "
         "exclusive_unknown=%u accepted=%u failed=%u control_failed=%u "
-        "reader_match=%u reader_clean=%u reader_unknown=%u direct=0x%llx file=0x%llx",
+        "reader_match=%u reader_clean=%u reader_unknown=%u direct=0x%llx file=0x%llx "
+        "zero_match=%u zero_clean=%u zero_unknown=%u",
         name, failures_before == g_fail ? "PASS" : "FAIL", repeats,
         exclusive_matches, exclusive_clean, exclusive_unknown, accepted, failed,
         control_failed, reader_matches, reader_clean, reader_unknown,
-        (unsigned long long)rd.direct_value, (unsigned long long)rd.file_value);
+        (unsigned long long)rd.direct_value, (unsigned long long)rd.file_value,
+        zero_matches, zero_clean, zero_unknown);
 }
 
 /* No key: the module is loaded but cannot be addressed; the same observation
@@ -458,9 +480,10 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     struct ud_reader_observation rd;
     struct urov_y_request st = {0}, before = {0};
     enum ud_verdict expected_exec = mode == UROV_Y_MODE_PAGE_UXN ? UD_MATCH : UD_NO_MATCH;
-    /* Since 2.5.0 the AP handler completes an adjacent, execution-proven
-     * LDXR/load/STXR in the fault path: the probe must look native again. */
-    enum ud_verdict expected_exclusive = UD_NO_MATCH;
+    /* 2.10.0: the adjacent LDXR XZR;load;STXR XZR sequence is completed like
+     * the value-carrying form, so the reserved stack word keeps its native
+     * success and the probe reports the clean result in every mode. */
+    enum ud_verdict expected_zero = UD_NO_MATCH;
     /* A failed native STXR must not write the sentinel. */
     enum ud_verdict expected_store = UD_NO_MATCH;
     enum ud_verdict expected_cross_page = UD_NO_MATCH;
@@ -543,8 +566,8 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     }
 
     /* Only an actual data-abort path loses this reservation. */
-    elimination_case("active_page", &p, 8, repeats, expected_exclusive);
-    elimination_case("active_outside_window", &p, 96, repeats, expected_exclusive);
+    elimination_case("active_page", &p, 8, repeats, expected_zero);
+    elimination_case("active_outside_window", &p, 96, repeats, expected_zero);
 
     REQUIRE(!uy_status(&ctx, &before) && before.state == UROV_Y_ACTIVE,
             "UY status before execution probe");
@@ -600,10 +623,10 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     REQUIRE(!uy_set_page(&ctx, generation, UINT64_C(0x0f0e0d0c0b0a0908)),
             "UY SET errno=%d", errno);
     REQUIRE(uy_business_ldr(at) == UINT64_C(0x0f0e0d0c0b0a0908), "UY SET not visible");
-    elimination_case("active_after_set", &p, 8, repeats, expected_exclusive);
+    elimination_case("active_after_set", &p, 8, repeats, expected_zero);
     REQUIRE(!uy_set_page(&ctx, generation + 1, disk), "UY SET identity errno=%d", errno);
     REQUIRE(uy_business_ldr(at) == disk, "UY identity SET not visible");
-    elimination_case("active_equal_value", &p, 8, repeats, expected_exclusive);
+    elimination_case("active_equal_value", &p, 8, repeats, expected_zero);
     elimination_exec_case("active_equal_value", &reference, repeats, expected_exec);
     store_case("active_equal_value", &p, 8, repeats, expected_store);
     elimination_bridge_case("active_equal_value", &p, 8, expected_cross_page);
