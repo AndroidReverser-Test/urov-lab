@@ -1,5 +1,10 @@
 # UROV-Y ABI v8：多页、LD1/LD2/LD3/LD4 与跨页 load（实现与真机结果）
 
+> 2.8.0 更新：`SRC_FILE` 已移除，原 `mp-srcfile` 夹具改为 `mp-srcpage`，
+> 用 `SRC_USER(off=0, len=page_size)` 传入整页镜像；`REGISTER` 遇到
+> `SRC_FILE` 返回 `EINVAL`，`QUERY` 不再报告 `CAP_SRC_FILE`。下文 2026-11-06
+> 的 `SRC_FILE` 实现与结果保留为历史对照。
+
 日期：2026-11-06（Asia/Shanghai）。基线是 ABI v7（单页 4 KiB、SIMD&FP 单/pair、
 整页镜像）；设计稿见 [MULTIPAGE_DESIGN.md](MULTIPAGE_DESIGN.md)。本轮按用户要求：
 **R1 多页、R2 LD1/LD2（顺带 LD3/LD4）、R3 跨页全部实现；R4 16 KiB 不实现**。

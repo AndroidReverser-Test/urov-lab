@@ -1,0 +1,10 @@
+--------- beginning of main
+10-04 07:24:02.919 15040 15065 I urovdetect: CONTEXT pid=15040 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 07:24:02.919 15040 15065 I urovdetect: BEGIN mode=y-clean repeats=12
+10-04 07:24:03.032 15040 15065 I urovdetect: ELIM_CASE name=idle_unregistered result=PASS n=3 exclusive_match=0 exclusive_clean=3 exclusive_unknown=0 accepted=288 failed=0 control_failed=0 reader_match=0 reader_clean=3 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-04 07:24:03.074 15040 15065 I urovdetect: ELIM_EXEC name=unregistered n=12 expected=0 match=0 clean=11 unknown=1 accepted=1088 failed=1 control_failed=0 total_ns=40512738 max_ns=4140951
+10-04 07:24:03.112 15040 15065 I urovdetect: ELIM_STORE name=unregistered n=12 expected=0 match=0 clean=12 unknown=0 completed=384 stores=0 total_ns=35353473 max_ns=3042806
+10-04 07:24:03.120 15040 15065 I urovdetect: ELIM_BRIDGE name=unregistered expected=0 verdict=0 trials=32 successes=0 elapsed_ns=2956095 nop_expected=0 nop_verdict=0 nop_trials=32 nop_successes=0 nop_elapsed_ns=2939860
+10-04 07:24:03.120 15040 15065 I urovdetect: CONTEXT pid=15040 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 07:24:03.120 15040 15065 I urovdetect: NATIVE_RESULT PASS cases=4 assertions=94 failures=0 mode=y-clean
+10-04 07:24:03.273 15040 15040 I urovdetect: DETECT_RESULT PASS mode=y-clean worker_ms=350 ui_ticks=128 ui_max_gap_ms=18 native=PASS cases=4 assertions=94 failures=0

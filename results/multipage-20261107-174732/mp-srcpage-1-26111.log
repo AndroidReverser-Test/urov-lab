@@ -1,0 +1,13 @@
+--------- beginning of main
+10-04 08:22:02.101 26111 26135 I urovdetect: CONTEXT pid=26111 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 08:22:02.101 26111 26135 I urovdetect: BEGIN mode=mp-srcpage repeats=3
+10-04 08:22:02.101 26111 26135 I urovdetect: MP_QUERY caps=0x73f max_pages=682 page_shift=12 abi=8
+10-04 08:22:02.102 26111 26135 I urovdetect: MP_SRC_PAGE register=1 page=1 generation=1
+10-04 08:22:02.102 26111 26135 I urovdetect: FAIL MP SRC_PAGE direct read changed
+10-04 08:22:02.102 26111 26135 I urovdetect: FAIL MP SRC_PAGE direct read changed
+10-04 08:22:02.102 26111 26135 I urovdetect: FAIL MP SRC_PAGE direct read changed
+10-04 08:22:02.102 26111 26135 I urovdetect: MP_STATUS name=srcpage pages=1 armed=1 hits=387 replays=387 failures=0
+10-04 08:22:02.102 26111 26135 I urovdetect: MP_SRC_PAGE_DONE page=1 reads=3
+10-04 08:22:02.102 26111 26135 I urovdetect: CONTEXT pid=26111 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 08:22:02.102 26111 26135 I urovdetect: NATIVE_RESULT FAIL cases=1 assertions=11 failures=3 mode=mp-srcpage
+10-04 08:22:02.461 26111 26111 I urovdetect: DETECT_RESULT FAIL mode=mp-srcpage worker_ms=351 ui_ticks=126 ui_max_gap_ms=19 native=FAIL cases=1 assertions=11 failures=3

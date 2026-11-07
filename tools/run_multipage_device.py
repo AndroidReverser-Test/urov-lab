@@ -17,7 +17,7 @@ LAB = Path(__file__).resolve().parents[1]
 PACKAGE = "com.example.urovdetect"
 ACTIVITY = f"{PACKAGE}/.MainActivity"
 MODULE = "urov-y"
-MODES = ("mp-multi", "mp-ld1", "mp-cross", "mp-srcfile", "mp-audit")
+MODES = ("mp-multi", "mp-ld1", "mp-cross", "mp-srcpage", "mp-audit")
 STAMP = re.compile(r"^\[\s*([0-9.]+)\]", re.M)
 
 
@@ -89,7 +89,7 @@ def main():
         if not uid or int(uid[1]) < 10000:
             raise RuntimeError(f"{label}: invalid app credentials")
         query = re.search(r"MP_QUERY caps=(0x[0-9a-f]+) max_pages=(\d+) page_shift=(12|14) abi=8", logs)
-        if not query or int(query[1], 16) & 0x47f != 0x47f or int(query[2]) < 24:
+        if not query or int(query[1], 16) & 0x43f != 0x43f or int(query[2]) < 24:
             raise RuntimeError(f"{label}: ABI v8 QUERY report missing")
         page_bytes = 1 << int(query[3])
         if page_bytes != report["page_size"]:
@@ -105,8 +105,8 @@ def main():
             "mp-cross": (r"MP_CROSS register=1 pages=2",
                          r"MP_CROSS_DONE reads=ldp_page1_page2/ld1_page1_page2/"
                          r"ld1_tail/uncovered_page0"),
-            "mp-srcfile": (r"MP_SRC_FILE register=1 page=1",
-                           r"MP_SRC_FILE_DONE page=1"),
+            "mp-srcpage": (r"MP_SRC_PAGE register=1 page=1",
+                           r"MP_SRC_PAGE_DONE page=1"),
             "mp-audit": (r"MP_AUDIT invalid=5 updates=48 reads=[1-9]\d* errors=0 child_restored=1",),
         }[mode]
         for pattern in required:

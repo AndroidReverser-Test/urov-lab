@@ -1071,3 +1071,106 @@ python .\kpms\urov-lab\tools\run_multipage_device.py `
 `bridge_match=0`；`uy_fixture.inc` 的 `expected_bridge` 与逐 CPU 调用都改为
 `UD_NO_MATCH`。`ud_observe_unreserved_store`（哨兵变体）仍要求 `UD_NO_MATCH` 且
 零写入。
+
+## 16. 第八轮：NOP 间隔分支与间接分支门控
+
+### 16.1 触发本轮的特征
+
+2.6.0 的直接分支门控只把“目标等于故障 load PC”的
+`B/BL/CBZ/CBNZ/TBZ/TBNZ` 视为跳过 `LDXR`。新增的无密钥探针把分支目标落在
+load 前的 `NOP` 上：
+
+```asm
+clrex
+b 1f
+ldxr x9, [x1]        ; never executed
+1: nop
+ldrb w10, [x0]       ; target page, AP[1] cleared -> data abort
+stxr w8, x9, [x1]    ; Rt preset to [x1]
+```
+
+`uy_llsc_prepare()` 虽然允许 `LDXR` 与 load 之间有 0–3 个 `NOP`，但
+`uy_llsc_skipped()` 只扫描目标等于 load 的分支。因此该形状仍被代写：handler
+把同值写回 scratch、令 `Ws=0` 并跳过 `STXR`，探针得到 MATCH。2.6.0 报告里
+该探针为 480/480 命中。同一窗口还留下两类残余：
+
+- 直接分支位于故障 PC 的 ±256 字节之外，但仍落在同一代码页；
+- `ADR/ADRP + BR`、literal load + `BR`、`RET` 等间接控制流。
+
+### 16.2 机制
+
+`uy_llsc_prepare()` 的寄存器、宽度、自然对齐、`Rt == [Xn]` 与待写值等于内存
+等条件不变，新增两道只读门控：
+
+1. **整页直接分支门控。** 扫描故障 load 所在页的
+   `B/BL/B.cond/CBZ/CBNZ/TBZ/TBNZ`；分块 512 字节，覆盖 4 KiB 与 16 KiB
+   页。只要任一直接分支的目标落在闭区间 `[LDXR+4, load]`（NOP 间隔或 load
+   本身），就不代写。这同时消除了“分支落到 NOP”和“±256 字节外的同页分支”。
+2. **间接分支寄存器门控。** 故障发生时 load 尚未执行，`ADR/ADRP + BR`、
+   literal load + `BR`、`RET` 等路径通常仍把目标地址留在某个 GPR 中。若
+   `x0..x30` 任一值落在同一闭区间，就按“可能跳过 LDXR”处理，不代写。
+
+门控只让 handler 少写一次；拒绝时 PC 停在 `STXR`，由原生指令报告失败，内存
+不变。扫描不新增 hook、syscall、PTE/VMA/代码字节改动，也不新增 `ctl0` 字段
+或计数器。
+
+| 序列 | 控制流 | 2.6.0 | 2.7.0 |
+| --- | --- | --- | --- |
+| 紧邻 / NOP 间隔，顺序到达 | 经过 LDXR | 代写 | 代写 |
+| 直接分支到 load | 跳过 LDXR | 不代写 | 不代写 |
+| 直接分支到 NOP | 跳过 LDXR | **代写（特征）** | 不代写 |
+| 同页 ±256 外直接分支到 load/NOP | 跳过 LDXR | 代写 | 不代写 |
+| `ADR/ADRP + BR`、literal + `BR`、`RET` | 跳过 LDXR，目标仍在 GPR | 代写 | 不代写 |
+| 间接分支且目标寄存器在 load 前被覆盖 | 跳过 LDXR | 代写 | 仍可代写（残余） |
+| 跨页直接分支 | 跳过 LDXR | 代写 | 仍可代写（残余） |
+
+### 16.3 为什么没有引入新的可观察量
+
+- 没有新增 hook、syscall 表项、PTE/VMA/代码字节改动，也没有新增内核日志、
+  `ctl0 status` 字段或 ABI 版本变化。
+- 扫描只读故障页；512 字节分块使栈占用有界。门控只在 LL/SC 形状的故障上
+  运行，普通 load 的 288–404 ns 路径不变。
+- 间接门控只读取故障时的 GPR 快照，不写寄存器、不产生新异常。
+- `hooks=0x7f`、`core_checks`、`caps`、ABI v8 布局不变。
+
+### 16.4 真机验证
+
+Pixel 6（oriole，Android 16，`6.1.134-android14-11`，4 KiB，KernelPatch
+`0xc00`）。构建：
+
+```text
+urov-y.kpm      ff818b3ee62995b7353b30346ce7dca4b9601390f6edf2ce3ec9817b0c930d18
+urovdetect.apk  e21607a7cd45c6061458eb3e4094c2c43e58f1a430980da4215e4572dbb8954d
+```
+
+| 矩阵 | 结果 | 目录 |
+| --- | --- | --- |
+| Dobby 检测 24×1 | PASS；活动阶段 `nop=0/24`、`ind=0/24`、`bridge=0/24`、`spaced=0/24`、`accepted_crc=24/24`；执行仍为 `0x1235`，内存 CRC 等于文件 | [dobby-detect-20261107-171627](results/dobby-detect-20261107-171627/summary.json) |
+| 消除矩阵 3×1 | PASS，11 次运行、443 条断言；`ELIM_BRIDGE` 的直接、NOP、间接三项均 `verdict=0 trials=32 successes=0` | [eliminate-20261107-171731](results/eliminate-20261107-171731/summary.json) |
+| CRC 矩阵 5×1 | PASS，9 次运行（BRK/UXN/AP/AP-all/text/libc/big） | [crc-20261107-171907](results/crc-20261107-171907/summary.json) |
+| 多页/LD1/跨页/SRC_FILE | PASS，5 次运行 | [multipage-20261107-172858](results/multipage-20261107-172858/summary.json) |
+
+最终 AP 业务调用耗时 288 ns（`ELIM_TIMING mode=ap`）；`ELIM_RESIDUAL mode=ap`
+仍为 `site_file_word == site_live_word`、`site_cow_private=0`、
+`Private_Dirty/Anonymous=0`。测试后 `kpm list` 为空，boot ID 不变。
+
+### 16.5 残余特征与限制（诚实清单）
+
+1. **间接分支的目标寄存器被覆盖**：在 load 之前若把 `BR` 的目标寄存器改成
+   其他值，门控看不到区间地址，仍可代写。
+2. **跨页直接分支**：从另一页跳入本页的分支不在单页扫描范围。
+3. **保守误伤扩大**：本页任意位置有分支目标落在 `[LDXR+4, load]`，或任一
+   GPR 恰好持有该区间地址时，即使实际顺序执行，桥也不生效，原生 `STXR`
+   会失败。这是扩大门控范围的代价。
+4. **时间**：每次读取仍一次同步异常；AP 业务调用 288 ns，UXN 约 404 ns。
+5. **PTE 重装窗口、root 可见性、注册事务窗口**：同 §10.7 / §14.5 / §15.4。
+6. **桥的语义**：store 仍是内核 nofault 普通写，不是硬件独占 store；多线程
+   争用同一 scratch、`STLXR` 的 release 顺序和 store 原子性不完全等价原生。
+7. **合作模型**：`caller_count > 0` 时窗口内/外读者差异仍是有意保留的 API
+   语义。
+
+> 2.8.0 后续：`SRC_FILE` 已移除，所有页镜像统一由 `SRC_USER` 提供（每个
+> 描述符一次最多一页）。Dobby 夹具把干净整页读入用户缓冲区后注册；多页
+> `mp-srcfile` 改为 `mp-srcpage`。上述 LL/SC 门控与结果不变，2.8.0 的
+> Dobby 24×1 `accepted_crc=24/24`、多页 5 项、CRC 9 次、消除矩阵 11 次
+> 运行继续 PASS。

@@ -1,9 +1,31 @@
 # UROV-LAB
 
-`urov-y` 2.6.0 将 `prctl` 的 magic 固定为 `UROVYLAB`，保留 ABI v8 请求布局和 MAC 校验。
+`urov-y` 2.8.0 将 `prctl` 的 magic 固定为 `UROVYLAB`，保留 ABI v8 请求布局和 MAC 校验。
 2.4.0 的参数校验、并发镜像发布和陷阱撤销适配继续用于 Android ARM64 的 5.4 起的 5.x 和 6.x 内核，
 支持 4 KiB 及符合条件的 16 KiB 页表。实测、支持边界和复跑命令见
 [UROV-Y 兼容性与审计](COMPATIBILITY_Y.md)。下方日期条目保留各历史版本的行为和证据。
+
+2026-11-07 镜像来源变更：`urov-y` 2.8.0 **移除 `SRC_FILE`**，所有页镜像统一走
+`SRC_USER`，每个描述符一次最多一页（4 KiB/16 KiB）。`SRC_FILE` 常量保留为
+保留位，`REGISTER` 返回 `EINVAL`；`QUERY` 不再报告 `CAP_SRC_FILE`，也不再需要
+`kernel_read`/`vm_pgoff` 的文件布局。Dobby 夹具改为把干净整页读入用户缓冲区，
+用 `SRC_USER(off=0, len=page_size)` 注册；多页夹具的 `mp-srcfile` 改为
+`mp-srcpage`，并用改过的整页镜像验证窗口内读到 `image`、窗口外和注销后读到
+真实页。真机 Dobby 24×1 `accepted_crc=24/24`、NOP/间接探针 0/24；多页 5 项、
+CRC 9 次、消除矩阵 11 次运行均 PASS。构建：
+`urov-y.kpm 82f50d46...`、`urovdetect.apk 5ebc9801...`。
+
+2026-11-07 第八轮消除：`urov-y` 2.7.0 把 `PAGE_AP` 的 LL/SC 门控从“目标等于
+故障 load 的直接分支”扩展到**整页直接分支**，覆盖落在 NOP 间隔上的分支和
+±256 字节外的同页分支；同时解码 `B.cond`（此前漏掉的直接条件分支），并在
+故障时检查 `x0..x30` 是否仍持有 `[LDXR+4, load]` 区间地址，拦住
+`ADR/ADRP + BR`、literal + `BR`、`RET` 等间接形状。门控仍只读，不新增
+hook、PTE/VMA/代码字节改动或 `ctl0` 字段。检测 App 的 Dobby 24×1 活动阶段
+`nop=0/24`、`ind=0/24`、`bridge=0/24`、`spaced=0/24`、`accepted_crc=24/24`
+（2.6.0 的 NOP 探针为 480/480 命中）；消除矩阵 11 次运行、443 条断言，
+`ELIM_BRIDGE` 三项均 `verdict=0 successes=0`；CRC 5×1 与多页 5 项全 PASS。残余（间接
+目标寄存器被覆盖、跨页分支、保守误伤、时间）见
+[设计 §16](ELIMINATION_DESIGN.md#16-第八轮nop-间隔分支与间接分支门控)。
 
 2026-11-07 第七轮消除：`urov-y` 2.6.0 给 `PAGE_AP` 的 LL/SC 桥加**直接分支门控**，
 并把 `LDXR` 与 load 之间 0–3 个 `NOP` 纳入桥。提交桥前扫描故障 load 所在页前后各
@@ -35,12 +57,13 @@
 立即数/寄存器两种形式）与**跨页 load**：一条 64 字节的 `ld1 {v0-v3.16b}` 或 32
 字节的 `ldp q` 可以在两个已注册页之间拼接，未注册段走 nofault uaccess 读真实
 内存。每页有独立整页镜像、窗口、seqlock 与 `SET_PAGE` 更新；`SRC_FILE` 从
-`vm_file` 读原始页，`SRC_USER` 拷贝调用者镜像。真机
+`vm_file` 读原始页（2.8.0 已移除），`SRC_USER` 拷贝调用者镜像。真机
 [multipage-20261106-224709](results/multipage-20261106-224709/summary.json)：
 24 页同时 ARMED 的 96 KiB `memcpy` 整段等于伪页、`SET_PAGE` 换第 7 页后重读一致、
 注销后 24 页全部恢复；LD1 1/2/3/4 寄存器、LD1 8B、post-index 立即数/寄存器、
 LD2/LD3/LD4 去交织全部等于架构解释；跨页 `ldp q`/`ld1` 与"两页镜像拼接"逐字节
-一致，起始于未注册页的跨界读前半段为真实内存；`SRC_FILE` 路径也已上机。同轮
+一致，起始于未注册页的跨界读前半段为真实内存；当时的 `SRC_FILE` 路径也已上机
+（2.8.0 已移除）。同轮
 `crc-*` 回归矩阵全 PASS（含 `crc-ap-big` 的 SIMD 大长度传输）。**16 KiB 基础页
 本轮明确不实现**：`QUERY` 报 `page_shift=12`、caps 不含 `UROV_Y_CAP_16K`，
 `supported_pagetables()` 仍拒绝非 4 KiB 内核。
@@ -238,7 +261,8 @@ adb shell "am start -n com.example.urovdetect/.MainActivity --es key $MODULE_KEY
 
 点击 **Check code CRC32**。首次点击从 ELF 文件取得参考 CRC32，并用 `DobbyHook` 改写 App 自有的
 `.text` 测试函数。替换函数经 Dobby trampoline 调用原函数，再将返回值从 `0x1234` 改为 `0x1235`。
-每次点击用 `PAGE_AP` 和 `SRC_FILE` 注册目标页，逐字节读取该函数的 32 字节机器码并计算一次内存
+每次点击用 `PAGE_AP` 和整页 `SRC_USER` 注册目标页：夹具先把后备文件的干净页读入用户缓冲区，
+模块在 `REGISTER` 时复制这一页，逐字节读取该函数的 32 字节机器码并计算一次内存
 CRC32。覆盖命中且模拟失败数为零、CRC 与文件相符、函数返回 `0x1235`、会话注销成功时显示 PASS。
 [Dobby 测试实现](apps/urov-detect/dobby_crc_fixture.inc)
 
@@ -342,7 +366,7 @@ fake 字节按小端排列：`value` 是字节 0..7，`value_hi[0]` 是 8..15，
 | `tools/run_overlay_device.ps1` | root 设备自动化脚本 |
 | `tools/run_app_device.ps1` | 普通 app 设备自动化脚本 |
 | `APP_OVERLAY.md` / `RESULTS_APP.md` | 普通 app 方案、检测面、限制与真机证据 |
-| `APP_READ_INTEGRITY_AUDIT.md` / `APP_READ_INTEGRITY_RESULTS.md` | 读取完整性检测面、2.4.1 的特征清单与 2.5.0 桥接后复测（Dobby 24×5、消除矩阵、CRC、多页） |
+| `APP_READ_INTEGRITY_AUDIT.md` / `APP_READ_INTEGRITY_RESULTS.md` | 读取完整性检测面、特征清单与 2.7.0 整页/间接分支门控复测（Dobby、消除矩阵、CRC、多页） |
 | `urov_x_backend.c` / `.h` / `urov_x.c` / `urov_x_abi.h` | covert 变体 `urov-x`：密钥化控制通道、读取点绑定、透明生命周期 |
 | `urov_y_backend.c` / `.h` / `urov_y.c` / `urov_y_abi.h` | `urov-y`：BRK 读取点、UXN 页陷阱、AP[1] 数据读陷阱；调用窗口、ABI v8 多页和向量读 |
 | `urov_y_compat.h` / `urov_y_readers.h` | 内核 ABI、页表几何、BTF 校验和会话读侧引用 |

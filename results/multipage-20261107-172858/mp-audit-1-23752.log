@@ -1,0 +1,8 @@
+--------- beginning of main
+10-04 08:03:29.908 23752 23775 I urovdetect: CONTEXT pid=23752 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 08:03:29.908 23752 23775 I urovdetect: BEGIN mode=mp-audit repeats=3
+10-04 08:03:29.908 23752 23775 I urovdetect: MP_QUERY caps=0x77f max_pages=682 page_shift=12 abi=8
+10-04 08:03:30.198 23752 23775 I urovdetect: MP_AUDIT invalid=5 updates=48 reads=903137 errors=0 child_restored=1
+10-04 08:03:30.198 23752 23775 I urovdetect: CONTEXT pid=23752 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 08:03:30.198 23752 23775 I urovdetect: NATIVE_RESULT PASS cases=1 assertions=63 failures=0 mode=mp-audit
+10-04 08:03:30.264 23752 23752 I urovdetect: DETECT_RESULT PASS mode=mp-audit worker_ms=351 ui_ticks=126 ui_max_gap_ms=32 native=PASS cases=1 assertions=63 failures=0

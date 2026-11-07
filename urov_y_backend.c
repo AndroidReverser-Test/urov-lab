@@ -19,8 +19,9 @@
  * native, while every data read is emulated with the same caller-window rules.
  * PAGE_AP does not emulate arbitrary stores.  Because the exception return
  * clears the exclusive reservation, an adjacent LDXR;load;STXR whose LDXR
- * result is still in Rt is completed in the handler (see uy_llsc_prepare);
- * every other store stays native.
+ * result is still in Rt is completed in the handler (see uy_llsc_prepare),
+ * but only when no direct branch on the page or GPR target reaches the
+ * LDXR..load span.  Every other store stays native.
  */
 #include <common.h>
 #include <compiler.h>
@@ -1112,14 +1113,24 @@ static int uy_is_stxr(uint32_t insn, unsigned *size, unsigned *rs, unsigned *rt,
     return 1;
 }
 
-/* A direct branch that lands on the faulting load can enter the read without
- * executing the LDXR that precedes it.  Such a path never took the
- * reservation, so the handler must leave the STXR to report the failure
- * instead of retiring it.  Only direct branches within 256 bytes on either
- * side are decoded; an indirect branch or one from farther away remains a
- * residual.  The after-window catches a loop that jumps back to the load
- * instead of the LDXR. */
-#define UY_BRANCH_SCAN 256U
+/* A branch that lands between the LDXR and the faulting load can enter the
+ * read without executing the LDXR.  Such a path never took the reservation,
+ * so the handler must leave the STXR to report the failure instead of
+ * retiring it.  The old +/-256-byte window missed two shapes: a branch that
+ * landed on a NOP in the gap (not on the load itself) and a branch from
+ * farther away on the same page.  Scan the whole faulting page for targets
+ * in the inclusive span [LDXR+4, load], which covers the gap and the load.
+ *
+ * An indirect branch leaves its numeric target in the register consumed by
+ * BR/BLR/RET.  A normal LDXR..load sequence has no reason to hold an address
+ * from that tiny span in a GPR, so a matching register is treated as a
+ * possible skipped LDXR.  This is a conservative gate, not a static
+ * resolution of indirect control flow: a crafted sequence that clobbers the
+ * target register before the load remains a residual.
+ *
+ * The scan is read-only and bounded to one page.  It runs only for the rare
+ * LL/SC-shaped fault, so ordinary read emulation is unchanged. */
+#define UY_BRANCH_CHUNK 512U
 
 static int uy_branch_target(uint32_t insn, uint64_t at, uint64_t *target)
 {
@@ -1128,6 +1139,9 @@ static int uy_branch_target(uint32_t insn, uint64_t at, uint64_t *target)
     if ((insn & 0x7c000000U) == 0x14000000U) {          /* B, BL */
         off = (int64_t)(insn & 0x03ffffffU) << 2;
         if (off & 0x08000000LL) off -= 0x10000000LL;
+    } else if ((insn & 0xff000010U) == 0x54000000U) {   /* B.cond */
+        off = (int64_t)((insn >> 5) & 0x7ffffU) << 2;
+        if (off & 0x00100000LL) off -= 0x00200000LL;
     } else if ((insn & 0x7e000000U) == 0x34000000U) {   /* CBZ, CBNZ */
         off = (int64_t)((insn >> 5) & 0x7ffffU) << 2;
         if (off & 0x00100000LL) off -= 0x00200000LL;
@@ -1141,43 +1155,65 @@ static int uy_branch_target(uint32_t insn, uint64_t at, uint64_t *target)
     return 1;
 }
 
-static int uy_scan_branch(uint64_t start, uint64_t end, uint64_t target)
+/* Return 1 when a decoded direct branch in [start,end) targets the inclusive
+ * interval [lo,hi].  Instructions must be 4-byte aligned; callers pass page
+ * and PC boundaries, so both ends are aligned.  The chunk keeps the fault
+ * handler's stack use bounded while still covering a whole 4/16 KiB page. */
+static int uy_scan_branch(uint64_t start, uint64_t end, uint64_t lo, uint64_t hi)
 {
-    uint32_t buf[UY_BRANCH_SCAN / 4U];
-    uint64_t at, stop;
-    unsigned n;
+    uint32_t buf[UY_BRANCH_CHUNK / 4U];
+    uint64_t at;
 
-    if (end <= start) return 0;
-    n = (unsigned)((end - start) >> 2);
-    if (n > UY_BRANCH_SCAN / 4U) n = UY_BRANCH_SCAN / 4U;
-    stop = start + (uint64_t)n * 4U;
-    if (!f_copy_in(buf, (const void *)(uintptr_t)start, n * 4U)) {
-        for (at = start; at < stop; at += 4U) {
-            uint64_t t;
-            if (uy_branch_target(buf[(at - start) >> 2], at, &t) && t == target) return 1;
+    if (end <= start || hi < lo) return 0;
+    for (at = start; at < end; at += UY_BRANCH_CHUNK) {
+        uint64_t left = end - at;
+        unsigned bytes = left > UY_BRANCH_CHUNK ? UY_BRANCH_CHUNK : (unsigned)left;
+        unsigned n = bytes >> 2, i;
+        struct uy_page *snap = page_find(page_base(at));
+
+        if (snap && page_base(end - 1U) == snap->base) {
+            memcpy(buf, snap->snapshot + (at - snap->base), n * 4U);
+        } else if (f_copy_in(buf, (const void *)(uintptr_t)at, n * 4U)) {
+            for (i = 0; i < n; ++i) {
+                uint32_t insn;
+                uint64_t t;
+                if (!uy_read_insn(at + 4U * i, &insn) &&
+                    uy_branch_target(insn, at + 4U * i, &t) && t >= lo && t <= hi)
+                    return 1;
+            }
+            continue;
         }
-        return 0;
-    }
-    for (at = start; at < stop; at += 4U) {
-        uint32_t insn;
-        uint64_t t;
-        if (!uy_read_insn(at, &insn) && uy_branch_target(insn, at, &t) && t == target)
-            return 1;
+        for (i = 0; i < n; ++i) {
+            uint64_t t;
+            if (uy_branch_target(buf[i], at + 4U * i, &t) && t >= lo && t <= hi)
+                return 1;
+        }
     }
     return 0;
 }
 
-static int uy_llsc_skipped(uint64_t pc)
+static int uy_llsc_skipped(uint64_t ldxr_pc, uint64_t pc)
 {
     uint64_t page = page_base(pc);
-    uint64_t start = pc - page > UY_BRANCH_SCAN ? pc - UY_BRANCH_SCAN : page;
+    uint64_t lo = ldxr_pc + 4U, hi = pc;
 
-    if (uy_scan_branch(start, pc, pc)) return 1;
-    if (pc + 8U < page + g_page_size) {
-        uint64_t end = page + g_page_size - (pc + 8U) > UY_BRANCH_SCAN ?
-                       pc + 8U + UY_BRANCH_SCAN : page + g_page_size;
-        if (uy_scan_branch(pc + 8U, end, pc)) return 1;
-    }
+    /* A branch into the NOP gap or onto the load itself skipped the LDXR. */
+    if (uy_scan_branch(page, pc, lo, hi)) return 1;
+    if (pc + 8U < page + g_page_size &&
+        uy_scan_branch(pc + 8U, page + g_page_size, lo, hi))
+        return 1;
+    return 0;
+}
+
+/* An indirect branch to the load or to a gap instruction leaves that address
+ * in the branch register.  At the fault the load has not executed yet, so the
+ * GPR file still holds it.  A normal sequence never needs such a value. */
+static int uy_llsc_indirect(const struct uro_regs *regs, uint64_t ldxr_pc, uint64_t pc)
+{
+    unsigned i;
+
+    for (i = 0; i <= 30; ++i)
+        if (regs->x[i] >= ldxr_pc + 4U && regs->x[i] <= pc) return 1;
     return 0;
 }
 
@@ -1187,12 +1223,11 @@ static int uy_llsc_skipped(uint64_t pc)
  * The ERET that resumes EL0 clears the local exclusive monitor, so the original
  * STXR would always fail.  Completing it in the handler restores the native
  * outcome, but only when the LDXR result is still in Rt (execution evidence)
- * and control reached the load sequentially: a direct branch that lands on the
- * load skipped the LDXR, never took the reservation, and must be left to the
- * native STXR.  A caller that pre-reads [Xn] can forge the register value, but
- * it cannot also make the load a branch target without leaving the direct
- * branch in the decoded window.  The store value must still equal memory, so
- * the bridge never changes bytes. */
+ * and control reached the load sequentially.  A caller that pre-reads [Xn] can
+ * forge the register value, but a direct branch into the LDXR..load span, or
+ * an indirect branch that leaves that span in a GPR, still identifies a path
+ * that skipped the LDXR and must be left to the native STXR.  The store value
+ * must still equal memory, so the bridge never changes bytes. */
 static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
                             const struct uro_load *load, struct uy_llsc *out)
 {
@@ -1222,7 +1257,8 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
         if (insn != UY_NOP) break;
     }
     if (!ldxr_pc) return;
-    if (uy_llsc_skipped(pc)) return;
+    if (uy_llsc_skipped(ldxr_pc, pc)) return;
+    if (uy_llsc_indirect(regs, ldxr_pc, pc)) return;
     if (lsize != ssize || lrt != srt || lrn != srn) return;
     if (lrt == 31U || lrn == 31U || srn == 31U) return;
     /* The intervening load must not rewrite the value the STXR stores or the
@@ -1631,35 +1667,9 @@ static void sort_descs(struct uy_page_desc *d, uint32_t n)
     }
 }
 
-/* Look up and use vm_file while its VMA is protected. The access_remote_vm
- * snapshot must run separately since GUP takes the mmap lock itself. */
-static long page_read_file(void *mm, uint64_t base, void *image)
-{
-    const uint64_t max_pos = UINT64_C(0x7fffffffffffffff);
-    void *vma, *file;
-    uint64_t pgoff, delta;
-    int64_t pos;
-    long ret;
-
-    if (!f_kernel_read || !g_layout.vma_pgoff_ok) return -EOPNOTSUPP;
-    uy_mmap_write_lock(mm);
-    vma = f_find_vma(mm, base);
-    ret = validate_target_vma(vma, base);
-    if (ret) goto out;
-    file = *(void **)((char *)vma + g_layout.vma_file);
-    pgoff = *(unsigned long *)((char *)vma + g_layout.vma_pgoff);
-    delta = base - *(unsigned long *)((char *)vma + g_layout.vma_start);
-    if (!file || pgoff > ((max_pos - delta - g_page_size) >> g_page_shift)) {
-        ret = -EINVAL;
-        goto out;
-    }
-    pos = (int64_t)((pgoff << g_page_shift) + delta);
-    ret = f_kernel_read(file, image, g_page_size, &pos) == (long)g_page_size ? 0 : -EIO;
-out:
-    uy_mmap_write_unlock(mm);
-    return ret;
-}
-
+/* The page image is always copied from the caller's SRC_USER buffer.  The
+ * old SRC_FILE path (kernel_read(vm_file, ...)) was removed in 2.8.0; the
+ * caller now provides the clean page explicitly. */
 static int valid_window(unsigned off, unsigned len)
 {
     return len >= 8U && !(len & 7U) && len <= g_page_size && off <= g_page_size - len;
@@ -1671,10 +1681,10 @@ static long validate_page_desc(const struct uy_page_desc *d)
 
     if (d->reserved || page_base(d->base) != d->base || !uy_user_range(d->base, g_page_size))
         return -EINVAL;
-    if (d->flags == UROV_Y_PAGE_SRC_FILE) {
-        if (d->fake_addr || d->fake_off || d->fake_len) return -EINVAL;
-        return (g_caps & UROV_Y_CAP_SRC_FILE) ? 0 : -EOPNOTSUPP;
-    }
+    /* SRC_FILE was the only source that borrowed vm_file.  It is gone in
+     * 2.8.0: the caller supplies the clean page through SRC_USER. */
+    if (d->flags == UROV_Y_PAGE_SRC_FILE)
+        return -EINVAL;
     if (d->flags != UROV_Y_PAGE_SRC_USER || !valid_window(d->fake_off, len) ||
         !uy_user_range(d->fake_addr, len))
         return -EINVAL;
@@ -1689,8 +1699,6 @@ static long page_build_image(struct uy_page *p, const struct uy_page_desc *d,
     if (ret) return ret;
     p->fake_off = d->fake_off;
     p->fake_len = d->fake_len ? d->fake_len : g_page_size;
-    if (d->flags == UROV_Y_PAGE_SRC_FILE)
-        return page_read_file(mm, p->base, p->image);
     memcpy(p->image, p->snapshot, g_page_size);
     if (legacy)
         return copy_request_image(legacy, mm, p->image + p->fake_off, p->fake_len);
@@ -1910,17 +1918,12 @@ static long do_set_page(struct urov_y_request *q)
     if (q->flags || q->reserved2 || q->reserved >> 32) return -EINVAL;
     p = page_by_index((uint32_t)q->reserved);
     if (!p) return -EINVAL;
+    if (p->flags != UROV_Y_PAGE_SRC_USER) return -EOPNOTSUPP;
     if (q->expected_generation != g_sess.generation) return -EAGAIN;
 
-    if (p->flags == UROV_Y_PAGE_SRC_FILE) {
-        ret = page_read_file(g_sess.mm, p->base, p->spare);
-        off = 0;
-        len = g_page_size;
-    } else {
-        if (!valid_window(off, len)) return -EINVAL;
-        memcpy(p->spare, p->snapshot, g_page_size);
-        ret = copy_user_image(g_sess.mm, q->fake_addr, p->spare + off, len);
-    }
+    if (!valid_window(off, len)) return -EINVAL;
+    memcpy(p->spare, p->snapshot, g_page_size);
+    ret = copy_user_image(g_sess.mm, q->fake_addr, p->spare + off, len);
     if (ret) return ret;
     page_swap_image(p, off, len);
     set_reply(q);
@@ -2588,7 +2591,6 @@ long urov_y_backend_init(const char *args)
                   UROV_Y_CAP_PAGE_AP | UROV_Y_CAP_PAGE_UXN;
         if (g_fp_ready)
             g_caps |= UROV_Y_CAP_LD1 | UROV_Y_CAP_LD2 | UROV_Y_CAP_LD3 | UROV_Y_CAP_LD4;
-        if (f_kernel_read && g_layout.vma_pgoff_ok) g_caps |= UROV_Y_CAP_SRC_FILE;
     }
     __atomic_store_n(&g_ready, 1, __ATOMIC_RELEASE);
 

@@ -538,54 +538,65 @@ static void mp_cross_case(const struct uy_ctx *ctx, int repeats)
             "MP cross deactivation did not restore");
 }
 
-/* ------------------------------------------------------------ SRC_FILE */
+/* --------------------------------------------------------- SRC_USER page */
 
 extern char mp_src_start[], mp_src_end[];
 
 __attribute__((noinline))
-static void mp_srcfile_business(void *dst, const void *src)
+static void mp_srcpage_business(void *dst, const void *src)
 {
     __asm__ volatile(".global mp_src_start\nmp_src_start:" ::: "memory");
     mp_memcpy(dst, src, mp_page_size);
     __asm__ volatile("nop\n.global mp_src_end\nmp_src_end:" ::: "memory");
 }
 
-/* Register the page with UROV_Y_PAGE_SRC_FILE.  The file bytes are read with
- * kernel_read() using vm_pgoff, so a wrong offset or a missing kernel_read
- * would return different bytes (or reject the registration). */
-static void mp_srcfile_case(const struct uy_ctx *ctx, int repeats)
+/* Register a full-page SRC_USER image.  The caller supplies exactly one base
+ * page; the module copies it during REGISTER and never dereferences it
+ * again.  A changed word at both ends proves the image, not the live page,
+ * is being returned. */
+static void mp_srcpage_case(const struct uy_ctx *ctx, int repeats)
 {
     static struct uy_page_desc desc;
     static uint8_t native[UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
+    static uint8_t image[UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
     static uint8_t out[UROV_Y_MAX_PAGE] __attribute__((aligned(16)));
     struct urov_y_request q;
     int rc, active = 0;
 
     ++g_cases;
     mp_memcpy(native, mp_ld_blob, mp_page_size);
+    mp_memcpy(image, mp_ld_blob, mp_page_size);
+    image[0] ^= 0x5aU;
+    image[mp_page_size - 1] ^= 0xa5U;
+    REQUIRE(memcmp(native, image, mp_page_size), "MP SRC_PAGE image equals live page");
     memset(&desc, 0, sizeof(desc));
     desc.base = (uintptr_t)mp_ld_blob;
-    desc.flags = UROV_Y_PAGE_SRC_FILE;
+    desc.fake_addr = (uintptr_t)image;
+    desc.fake_off = 0;
+    desc.fake_len = mp_page_size;
+    desc.flags = UROV_Y_PAGE_SRC_USER;
     rc = uy_register_pages(ctx, &desc, 1, (uintptr_t)mp_src_start,
                      (uintptr_t)mp_src_end, &q);
     active = rc == 0;
     REQUIRE(active && q.state == UROV_Y_ACTIVE && q.page_count == 1,
-            "MP SRC_FILE register rc=%d errno=%d state=%u", rc, errno, q.state);
+            "MP SRC_PAGE register rc=%d errno=%d state=%u", rc, errno, q.state);
     if (!active) return;
-    LOG("MP_SRC_FILE register=1 page=1 generation=%llu",
+    LOG("MP_SRC_PAGE register=1 page=1 generation=%llu",
         (unsigned long long)q.generation);
     for (int r = 0; r < repeats; ++r) {
         memset(out, 0, sizeof(out));
-        mp_srcfile_business(out, mp_ld_blob);
-        REQUIRE(!memcmp(out, native, mp_page_size), "MP SRC_FILE view differs from file page");
+        mp_srcpage_business(out, mp_ld_blob);
+        REQUIRE(!memcmp(out, image, mp_page_size), "MP SRC_PAGE view differs from image");
         memset(out, 0, sizeof(out));
         mp_memcpy(out, mp_ld_blob, mp_page_size);
-        REQUIRE(!memcmp(out, native, mp_page_size), "MP SRC_FILE direct read changed");
+        REQUIRE(!memcmp(out, native, mp_page_size), "MP SRC_PAGE outside-window read changed");
     }
-    mp_check_status(ctx, 1, "srcfile");
+    mp_check_status(ctx, 1, "srcpage");
     rc = uy_deactivate(ctx);
-    REQUIRE(rc == 0, "MP SRC_FILE deactivate rc=%d errno=%d", rc, errno);
-    LOG("MP_SRC_FILE_DONE page=1 reads=%d", repeats);
+    REQUIRE(rc == 0, "MP SRC_PAGE deactivate rc=%d errno=%d", rc, errno);
+    mp_memcpy(out, mp_ld_blob, mp_page_size);
+    REQUIRE(!memcmp(out, native, mp_page_size), "MP SRC_PAGE deactivation did not restore");
+    LOG("MP_SRC_PAGE_DONE page=1 reads=%d", repeats);
 }
 
 struct mp_pair {
@@ -744,7 +755,7 @@ static void mp_fixture(const char *mode, const char *key, int repeats)
     if (!strcmp(mode, "mp-multi")) mp_multi_case(&ctx, repeats);
     else if (!strcmp(mode, "mp-ld1")) mp_ld_case(&ctx, repeats);
     else if (!strcmp(mode, "mp-cross")) mp_cross_case(&ctx, repeats);
-    else if (!strcmp(mode, "mp-srcfile")) mp_srcfile_case(&ctx, repeats);
+    else if (!strcmp(mode, "mp-srcpage")) mp_srcpage_case(&ctx, repeats);
     else if (!strcmp(mode, "mp-audit")) mp_audit_case(&ctx);
     else REQUIRE(0, "MP unknown mode %s", mode);
 }

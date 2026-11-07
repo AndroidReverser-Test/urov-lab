@@ -132,6 +132,54 @@ Y 的 ABI v8 通过 `prctl` 校验密钥派生的选择器、固定的 `UROVYLAB
 完整数据见
 [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.6.0 矩阵。
 
+## 2.7.0 NOP/间接分支门控复测（2026-11-07）
+
+同一 Pixel 6、同一 APK 夹具，构建
+`urov-y.kpm ff818b3e...`、`urovdetect.apk e21607a7...`。2.7.0 把
+`uy_llsc_skipped()` 从“目标等于 load 的 ±256 字节直接分支”扩展为**整页**
+`[LDXR+4, load]` 直接分支扫描，补上 `B.cond`，并在故障时检查
+`x0..x30` 是否仍持有该区间地址，以拦住 `ADR/ADRP + BR`、literal + `BR`、
+`RET` 等间接形状。
+
+- Dobby 24×1 活动阶段：`nop=0/24`（2.6.0 报告为 480/480 命中）、
+  `ind=0/24`、`bridge=0/24`、`spaced=0/24`、`accepted_crc=24/24`。执行仍为
+  `0x1235`，内存 CRC 等于文件 `96964c4f`。
+- 消除矩阵 3×1：11 次运行、443 条断言 PASS；`ELIM_BRIDGE` 的直接、NOP、
+  间接三项均 `verdict=0 trials=32 successes=0`；`ELIM_TIMING mode=ap
+  site_call_ns=288`。
+- CRC 5×1：9 次运行 PASS；`crc-ap` 的 `direct=0x0c7da8a0`、
+  `window=file=0xf50bcaf6`，`crc-ap-all` 的 `direct=window=file`。
+- 多页/LD1/跨页/SRC_FILE 3×1：5 次运行 PASS。
+
+残余（与设计 §16 一致）：间接分支的目标寄存器在 load 前被覆盖；跨页直接
+分支；保守误伤扩大（本页任意分支目标或 GPR 值落在区间内即不桥）；每次读取
+仍一次同步异常（AP 288 ns / UXN 404 ns）；PTE 重装窗口、root 可见性、注册
+事务窗口、桥的非硬件独占语义、`caller_count > 0` 的窗口语义不变。
+
+完整数据见
+[APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.7.0 矩阵。
+
+## 2.8.0 镜像来源变更（2026-11-07）
+
+`urov-y` 2.8.0 移除了 `SRC_FILE`：`REGISTER` 遇到 `UROV_Y_PAGE_SRC_FILE`
+返回 `EINVAL`，`QUERY` 不再报告 `UROV_Y_CAP_SRC_FILE`，后端不再调用
+`kernel_read(vm_file, ...)` 或依赖 `vm_pgoff`。所有页镜像改为 `SRC_USER`，
+每个描述符一次最多一页，由调用者在 `REGISTER`/`SET_PAGE` 时提供。
+
+夹具变化：
+
+- Dobby 在 `DobbyHook` 前把目标页的完整干净页读入用户缓冲区，以
+  `SRC_USER(off=0, len=page_size)` 注册；业务读者仍读到文件页，执行仍走
+  Dobby 改码后的页。
+- 多页夹具的 `mp-srcfile` 改名为 `mp-srcpage`：用首尾改过的整页镜像注册，
+  窗口内读到镜像，窗口外和注销后读到真实页；`MP_AUDIT` 仍把 `SRC_FILE`
+  描述符当作非法输入（`EINVAL`）。
+
+真机结果：Dobby 24×1 `accepted_crc=24/24`、直接/NOP/间接探针 0/24；多页
+5 项、CRC 9 次、消除矩阵 11 次运行 PASS；`ELIM_TIMING mode=ap` 271 ns。
+构建 `urov-y.kpm 82f50d46...`、`urovdetect.apk 5ebc9801...`。完整数据见
+[APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.8.0 节。
+
 ## 复跑
 
 在仓库根目录运行。`<KP_KEY>` 为设备的 KernelPatch 密钥，模块密钥由脚本另行生成。

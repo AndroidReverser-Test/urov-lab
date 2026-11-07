@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Test in-process SO patching and CRC32 views on a connected Android device."""
 
 import argparse
@@ -120,6 +120,9 @@ def main():
         marker = "DOBBY_HOOK address=" if dobby else "CRC_FIXTURE dlopen=1"
         if names != expected or marker not in logs:
             raise IncompleteLog(f"{label}: missing CRC records in {log_path.name}")
+        if dobby and active and ("DOBBY_DETECT_RESTORE " not in logs or
+                                 "DOBBY_DETECT_GUARD " not in logs):
+            raise IncompleteLog(f"{label}: missing recovery or guard records in {log_path.name}")
         if mode == "crc-ap-text" and not re.search(
                 r"CRC_VMA name=linker_text .*shared=0 maywrite=1 dc=0 private_dirty_kb=0 "
                 r"anonymous_kb=0", logs):
@@ -137,11 +140,12 @@ def main():
                                "log": log_path.name, "result": result[0], "stages": stages,
                                "details": re.findall(r"(?:CRC_(?:REJECT|PRIVATE|REMAP|MAP|OVERLAY|SITE|"
                                                      r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC|BIG|BIG_OVERLAY|BIG_VMA|MIXED|SET)"
-                                                     r"|ELIM_EXEC|DOBBY_DETECT_(?:STATUS|RESTORE|BUSINESS)) [^\n]+", logs)})
+                                                     r"|ELIM_EXEC|DOBBY_DETECT_(?:STATUS|RESTORE|GUARD|BUSINESS)) [^\n]+", logs)})
         if dobby:
             last = stages[2] if active else stages[-1]
             print(f"{label} PASS execute={last['execute']} file={last['file']} live={last['live']} "
                   f"bridge={last['bridge_match']}/{last['n']} spaced={last['spaced_match']}/{last['n']} "
+                  f"nop={last['match']}/{last['n']} ind={last.get('ind_match', '?')}/{last['n']} "
                   f"unknown={last['unknown']} "
                   f"accepted_crc={last['accepted_crc']}", flush=True)
             return

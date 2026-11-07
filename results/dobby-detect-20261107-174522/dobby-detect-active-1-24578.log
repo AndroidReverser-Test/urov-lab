@@ -1,0 +1,12 @@
+--------- beginning of main
+10-04 08:20:00.756 24578 24602 I urovdetect: CONTEXT pid=24578 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 08:20:00.756 24578 24602 I urovdetect: BEGIN mode=dobby-detect-active repeats=3
+10-04 08:20:00.860 24578 24602 I urovdetect: DOBBY_DETECT stage=clean n=3 execute=1234 file=96964c4f live=96964c4f crc_pass=3 accepted_crc=3 match=0 clean=3 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=288 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=96 bridge_successes=0 nop_trials=96 nop_successes=0 ind_match=0 ind_trials=96 ind_successes=0 probe_mean_ns=6272488 probe_max_ns=9120077
+10-04 08:20:00.861 24578 24602 I urovdetect: DOBBY_HOOK address=0x7a94938000 original=1234 hooked=1235
+10-04 08:20:00.908 24578 24602 I urovdetect: DOBBY_DETECT stage=patch_only n=3 execute=1235 file=96964c4f live=c5bfa781 crc_pass=0 accepted_crc=0 match=0 clean=3 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=288 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=96 bridge_successes=0 nop_trials=96 nop_successes=0 ind_match=0 ind_trials=96 ind_successes=0 probe_mean_ns=3110460 probe_max_ns=3375122
+10-04 08:20:00.908 24578 24602 I urovdetect: DOBBY_SRC_USER base=0x7a94938000 image=0xb400007b69b1b8b0 off=0 len=4096 page=4096
+10-04 08:20:00.908 24578 24602 I urovdetect: FAIL Dobby detection REGISTER errno=22
+10-04 08:20:00.909 24578 24602 I urovdetect: DOBBY_DETECT_BUSINESS ops=29312 errors=0
+10-04 08:20:00.909 24578 24602 I urovdetect: CONTEXT pid=24578 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 08:20:00.909 24578 24602 I urovdetect: NATIVE_RESULT FAIL cases=2 assertions=29 failures=1 mode=dobby-detect-active
+10-04 08:20:01.113 24578 24578 I urovdetect: DETECT_RESULT FAIL mode=dobby-detect-active worker_ms=351 ui_ticks=129 ui_max_gap_ms=15 native=FAIL cases=2 assertions=29 failures=1

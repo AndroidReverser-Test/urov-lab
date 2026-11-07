@@ -83,9 +83,8 @@ enum urov_y_op {
     UROV_Y_DEACTIVATE = 5,
     /* v8: replace the image of one page inside an active session.  The page
      * number is carried in the low 32 bits of `reserved`; `offset`, `length`
-     * and `fake_addr` describe the new SRC_USER window (length 0 or page size
-     * means the whole page).  A SRC_FILE page is re-read from its backing
-     * file instead and ignores the window fields. */
+     * and `fake_addr` describe the new SRC_USER image (length 0 or page size
+     * means the whole page).  SRC_FILE is no longer supported. */
     UROV_Y_SET_PAGE = 6,
 };
 
@@ -95,11 +94,11 @@ enum urov_y_state {
 };
 
 /* Per-page image source (struct uy_page_desc.flags).  Exactly one bit must
- * be set.  SRC_USER copies the caller's window/image; SRC_FILE reads the
- * whole page from the VMA's backing file, which is what hides an in-memory
- * inline patch behind the original file bytes. */
+ * be set.  SRC_USER copies the caller's image, up to one base page per
+ * descriptor.  SRC_FILE is reserved for the older ABI and is rejected by
+ * 2.8.0; callers must provide the clean page through SRC_USER. */
 #define UROV_Y_PAGE_SRC_USER 0x00000001U
-#define UROV_Y_PAGE_SRC_FILE 0x00000002U
+#define UROV_Y_PAGE_SRC_FILE 0x00000002U /* reserved; REGISTER -> EINVAL */
 
 /* Historical REGISTER flag. A replay snapshot is now kept for every page,
  * including for readers that race arming or restoration. */
@@ -112,15 +111,14 @@ enum urov_y_state {
 #define UROV_Y_CAP_LD3 0x00000008U
 #define UROV_Y_CAP_LD4 0x00000010U
 #define UROV_Y_CAP_CROSS 0x00000020U
-#define UROV_Y_CAP_SRC_FILE 0x00000040U
+#define UROV_Y_CAP_SRC_FILE 0x00000040U /* historical; never reported by 2.8.0 */
 #define UROV_Y_CAP_16K 0x00000080U
 #define UROV_Y_CAP_SITE_BRK 0x00000100U
 #define UROV_Y_CAP_PAGE_UXN 0x00000200U
 #define UROV_Y_CAP_PAGE_AP 0x00000400U
 
 #define UROV_Y_CAPS (UROV_Y_CAP_MULTI | UROV_Y_CAP_LD1 | UROV_Y_CAP_LD2 | \
-                     UROV_Y_CAP_LD3 | UROV_Y_CAP_LD4 | UROV_Y_CAP_CROSS | \
-                     UROV_Y_CAP_SRC_FILE)
+                     UROV_Y_CAP_LD3 | UROV_Y_CAP_LD4 | UROV_Y_CAP_CROSS)
 
 /* One page descriptor, laid out behind `pages_addr` as an array of
  * `page_stride` bytes.  `fake_len == 0` is the whole page; otherwise the
@@ -129,10 +127,10 @@ enum urov_y_state {
  * copies it immediately and never dereferences it again. */
 struct uy_page_desc {
     uint64_t base;       /* page-aligned user virtual address */
-    uint64_t fake_addr;  /* SRC_USER image/window; 0 for SRC_FILE */
+    uint64_t fake_addr;  /* SRC_USER image/window */
     uint32_t fake_off;   /* window offset inside the page */
     uint32_t fake_len;   /* window length; 0 == whole page */
-    uint32_t flags;      /* UROV_Y_PAGE_SRC_USER / UROV_Y_PAGE_SRC_FILE */
+    uint32_t flags;      /* UROV_Y_PAGE_SRC_USER only */
     uint32_t reserved;   /* must be zero */
 };
 

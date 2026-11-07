@@ -3,6 +3,7 @@
 #include "urov_observe.h"
 #include <errno.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
@@ -80,7 +81,7 @@ static unsigned spaced_exclusive_once(const void *address, uint64_t *scratch, un
 {
     uint64_t old;
     unsigned value, failed;
-    /* The NOP keeps the target load outside an adjacent LDXR/LDRB/STXR bridge. */
+    /* The NOP distinguishes this from the original adjacent-only bridge. */
     __asm__ volatile("ldxr %0, [%3]\n"
                      "nop\n"
                      "ldrb %w1, [%4]\n"
@@ -93,23 +94,54 @@ static unsigned spaced_exclusive_once(const void *address, uint64_t *scratch, un
 
 static const uint64_t scratch_initial = UINT64_C(0x5a5a5a5aa5a5a5a5);
 
-/* Keep the LDXR in the instruction stream for the bridge's look-behind, but
- * branch over it. The native STXR must see an open exclusive monitor. */
+enum unreserved_branch {
+    UNRESERVED_TO_LOAD,     /* direct branch to the LDRB */
+    UNRESERVED_TO_NOP,      /* direct branch to a NOP in the LDXR gap */
+    UNRESERVED_INDIRECT,    /* ADR + BR to the LDRB, target left in x9 */
+};
+
+/* Keep an unreachable LDXR in the bridge's look-behind and skip it with the
+ * requested control-flow shape.  The load is the branch target (or the NOP
+ * before it for the spaced shape), so the handler can only retire the STXR
+ * if it really observed an LDXR. */
 __attribute__((noinline))
 static int unreserved_store_once(const void *address, uint64_t *scratch,
-                                 uint64_t store_value, unsigned *byte)
+                                 uint64_t store_value, enum unreserved_branch branch,
+                                 unsigned *byte)
 {
     uint64_t value = store_value;
     unsigned status;
 
     *scratch = scratch_initial;
-    __asm__ volatile("clrex\n"
-                     "b 1f\n"
-                     "ldxr %0, [%3]\n"
-                     "1: ldrb %w2, [%4]\n"
-                     "stxr %w1, %0, [%3]\n"
-                     : "+&r"(value), "=&r"(status), "=&r"(*byte)
-                     : "r"(scratch), "r"(address) : "memory");
+    if (branch == UNRESERVED_TO_NOP) {
+        __asm__ volatile("clrex\n"
+                         "b 1f\n"
+                         "ldxr %0, [%3]\n"
+                         "1: nop\n"
+                         "ldrb %w2, [%4]\n"
+                         "stxr %w1, %0, [%3]\n"
+                         : "+&r"(value), "=&r"(status), "=&r"(*byte)
+                         : "r"(scratch), "r"(address) : "memory");
+    } else if (branch == UNRESERVED_INDIRECT) {
+        /* The direct-branch scan cannot resolve this; the target address is
+         * still in x9 when the LDRB faults. */
+        __asm__ volatile("clrex\n"
+                         "adr x9, 1f\n"
+                         "br x9\n"
+                         "ldxr %0, [%3]\n"
+                         "1: ldrb %w2, [%4]\n"
+                         "stxr %w1, %0, [%3]\n"
+                         : "+&r"(value), "=&r"(status), "=&r"(*byte)
+                         : "r"(scratch), "r"(address) : "x9", "memory");
+    } else {
+        __asm__ volatile("clrex\n"
+                         "b 1f\n"
+                         "ldxr %0, [%3]\n"
+                         "1: ldrb %w2, [%4]\n"
+                         "stxr %w1, %0, [%3]\n"
+                         : "+&r"(value), "=&r"(status), "=&r"(*byte)
+                         : "r"(scratch), "r"(address) : "memory");
+    }
     uint64_t observed = *scratch;
     if (status == 1 && observed == scratch_initial) return 0;
     if (status == 0 && observed == store_value) return 1;
@@ -118,6 +150,7 @@ static int unreserved_store_once(const void *address, uint64_t *scratch,
 
 static void observe_unreserved_store(const void *address, const void *reference,
                                      int backing_fd, off_t offset, uint64_t store_value,
+                                     enum unreserved_branch branch,
                                      struct ud_store_observation *out)
 {
     struct sample_identity target, control, after;
@@ -139,9 +172,9 @@ static void observe_unreserved_store(const void *address, const void *reference,
 
     for (unsigned i = 0; i < UD_STORE_TRIALS; ++i) {
         unsigned a, b, c;
-        int before = unreserved_store_once(reference, &scratch, store_value, &a);
-        int tested = unreserved_store_once(address, &scratch, store_value, &b);
-        int after_control = unreserved_store_once(reference, &scratch, store_value, &c);
+        int before = unreserved_store_once(reference, &scratch, store_value, branch, &a);
+        int tested = unreserved_store_once(address, &scratch, store_value, branch, &b);
+        int after_control = unreserved_store_once(reference, &scratch, store_value, branch, &c);
         if (before != 0 || after_control != 0 || tested < 0 ||
             a != file_byte || c != file_byte || (i && b != target_byte) ||
             (store_value != scratch_initial && b != file_byte)) {
@@ -172,14 +205,31 @@ void ud_observe_unreserved_store(const void *address, const void *reference,
                                  struct ud_store_observation *out)
 {
     observe_unreserved_store(address, reference, backing_fd, offset,
-                             UINT64_C(0xc3175ed9246ab08f), out);
+                             UINT64_C(0xc3175ed9246ab08f), UNRESERVED_TO_LOAD, out);
 }
 
 void ud_observe_unreserved_status(const void *address, const void *reference,
                                   int backing_fd, off_t offset,
                                   struct ud_store_observation *out)
 {
-    observe_unreserved_store(address, reference, backing_fd, offset, scratch_initial, out);
+    observe_unreserved_store(address, reference, backing_fd, offset, scratch_initial,
+                             UNRESERVED_TO_LOAD, out);
+}
+
+void ud_observe_unreserved_nop_status(const void *address, const void *reference,
+                                      int backing_fd, off_t offset,
+                                      struct ud_store_observation *out)
+{
+    observe_unreserved_store(address, reference, backing_fd, offset, scratch_initial,
+                             UNRESERVED_TO_NOP, out);
+}
+
+void ud_observe_unreserved_indirect_status(const void *address, const void *reference,
+                                           int backing_fd, off_t offset,
+                                           struct ud_store_observation *out)
+{
+    observe_unreserved_store(address, reference, backing_fd, offset, scratch_initial,
+                             UNRESERVED_INDIRECT, out);
 }
 
 static uint64_t scalar_word(const void *address)

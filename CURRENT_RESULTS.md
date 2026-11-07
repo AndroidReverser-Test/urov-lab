@@ -2,9 +2,10 @@
 
 更新于 2026-11-05（Asia/Shanghai）。
 
-> 2026-11-07：`urov-y` 2.6.0 的 LL/SC 直接分支门控、无密钥复核矩阵和残余见
-> [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 与
-> [ELIMINATION_DESIGN.md §15](ELIMINATION_DESIGN.md#15-第七轮直接分支门控与-nop-间隔桥)。
+> 2026-11-07：`urov-y` 2.8.0 移除 `SRC_FILE`，所有页镜像统一由 `SRC_USER`
+> 提供（每页一次最多一页）；Dobby/多页/CRC/消除矩阵已复跑。2.7.0 的整页直接
+> 分支/NOP/间接分支门控见 [ELIMINATION_DESIGN.md §16](ELIMINATION_DESIGN.md#16-第八轮nop-间隔分支与间接分支门控)，
+> 最新真机数据见 [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md)。
 
 **独立 KPM 已在 Pixel 6 上完成活动覆盖验收。** `urov-lab.kpm` 自带解码/模拟核心、EL0 数据异常后端和控制 syscall hook，不再依赖任何外部宿主补丁或内置内核后端。普通 `load` 读取注册页时获得伪造值，同一页的取指仍执行原始机器码；更新、注销和卸载均已验证。
 

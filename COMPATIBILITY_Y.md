@@ -1,4 +1,4 @@
-# UROV-Y 2.6.0：实现、兼容性与代码审计
+# UROV-Y 2.8.0：实现、兼容性与代码审计
 
 ## 实现
 
@@ -6,14 +6,15 @@
 [软件模拟核心](emulate.c)。基础版让目标页的 EL0 数据读产生权限异常；X 变体增加
 进程和读取点约束；Y 变体支持以下三种陷阱。三种模式都在异常中改写受支持的 load 的
 目标寄存器与 PC，目标代码本身仍执行原字节。BRK 模式会改动另一处的读取指令。
-2.5.0 只改变 `PAGE_AP` 的相邻 LL/SC 处理；2.6.0 在同一路径上增加 NOP 间隔与直接
-分支门控；2.4.0 的内核接口、BTF 兼容矩阵和静态检查继续适用。
+2.8.0 移除 `SRC_FILE`，所有页镜像统一由 `SRC_USER` 提供，每个描述符一次最多
+一页；2.7.0 的整页 LL/SC 门控和 2.4.0 的内核接口、BTF 兼容矩阵、静态检查
+继续适用。
 
 | 模式 | 陷阱与模拟边界 |
 | --- | --- |
 | `SITE_BRK` | 用内核 COW 路径把登记的私有只读读取指令换成 BRK。按 `mm`、PC 和 BRK 立即数匹配，只模拟登记的标量 load。恢复原指令后，该页仍可能保留 COW。 |
 | `PAGE_UXN` | 在读取点页设置 UXN，按 EL0 叶级取指权限异常接管。读取点支持标量 load；同一页只放受支持的 `RET X30`、NOP 和 BTI hint，拒绝带 BTI Guarded Page 位的 PTE。 |
-| `PAGE_AP` | 清目标页叶子 PTE 的 AP[1]，处理 EL0 数据读权限异常；取指仍由硬件执行。支持多页、跨页、FPSIMD、LD1/2/3/4，拒绝任意写、缓存维护及其他来源的异常。2.5.0 对紧邻且执行存证成立的 `LDXR/LDAXR; load; STXR/STLXR` 完成原 store；2.6.0 允许中间 0–3 个 NOP，并在代写前扫描 ±256 字节的直接分支，目标落到 load 时不代写。 |
+| `PAGE_AP` | 清目标页叶子 PTE 的 AP[1]，处理 EL0 数据读权限异常；取指仍由硬件执行。支持多页、跨页、FPSIMD、LD1/2/3/4，拒绝任意写、缓存维护及其他来源的异常。2.5.0 对紧邻且执行存证成立的 `LDXR/LDAXR; load; STXR/STLXR` 完成原 store；2.6.0 允许中间 0–3 个 NOP；2.7.0 扫描整页直接分支（含 `B.cond`）到 `[LDXR+4, load]`，并检查 GPR 是否仍持有该区间地址，命中即不代写；2.8.0 镜像只来自 `SRC_USER`（每页一次最多一页），`SRC_FILE` 描述符返回 `EINVAL`。 |
 
 [控制 ABI](urov_y_abi.h) 使用带 MAC 的 `prctl` 请求。`REGISTER` 绑定调用者 `mm`，
 核对目标 RX 映射与页数组，复制原始快照并为每页构建覆盖镜像。故障先匹配会话与陷阱，
@@ -35,7 +36,7 @@ nofault 读真实地址。未知指令或不可安全读取的地址会走信号
 | 缺页和异常入口 | 接受三、四参数 `handle_mm_fault` 及 BTF 验证的五参数厂商入口；公有入口缺少原型时保留八个参数寄存器。BRK 支持 `brk_handler` 和 `do_el0_brk64`；数据异常支持 32/64 位 ESR 形参，仅在 BTF 确认全宽时检查 ISS2。缺页回调提前取 `mm` 和地址，返回后不访问可能失效的 VMA，跳过未完成的 fault。 |
 | 远程内存与分配 | 优先公有五参数 `access_remote_vm`，私有 `__access_remote_vm` 按 BTF 匹配的五/六参数原型调用。用户读取可用 `copy_from_user_nofault` 或旧 `probe_user_read`；无 nofault 写时仅 App 控制回包可使用普通可写 GUP。`FOLL_FORCE` 优先取 BTF，缺少枚举时用 6.3 作为回退分界。分配器支持原名及 `_noprof`，与各自释放接口配对。 |
 | FPSIMD | 优先 `fpsimd_save_and_flush_current_state`，旧内核回退到 `fpsimd_signal_preserve_current_state`，用对齐的局部副本交给 `fpsimd_update_current_state`。保存状态布局和 helper 不匹配时不给向量能力；拒绝操作有 SVE/SME 状态的任务。 |
-| 能力发现 | ABI v8 请求仍为 288 字节；`QUERY` 报告 `page_stride`（页位移 12/14）、`page_count`（有效上限）和 `session_flags`（支持模式及功能）。BRK 与页陷阱独立探测，均不可用则拒绝加载；缺文件布局/接口时不报告 `SRC_FILE`。 |
+| 能力发现 | ABI v8 请求仍为 288 字节；`QUERY` 报告 `page_stride`（页位移 12/14）、`page_count`（有效上限）和 `session_flags`（支持模式及功能）。BRK 与页陷阱独立探测，均不可用则拒绝加载；2.8.0 不再报告 `SRC_FILE`，镜像统一由 `SRC_USER` 提供。 |
 
 接口核对依据：[Linux 5.4 缺页 ABI](https://raw.githubusercontent.com/torvalds/linux/v5.4/mm/memory.c)、
 [5.4 nofault 读取](https://raw.githubusercontent.com/torvalds/linux/v5.4/mm/maccess.c)、

@@ -1,0 +1,56 @@
+--------- beginning of main
+10-04 07:23:18.718 14108 14132 I urovdetect: CONTEXT pid=14108 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 07:23:18.718 14108 14132 I urovdetect: BEGIN mode=w-active repeats=12
+10-04 07:23:18.919 14108 14132 I urovdetect: ELIM_CASE name=baseline result=PASS n=12 exclusive_match=0 exclusive_clean=12 exclusive_unknown=0 accepted=1152 failed=0 control_failed=0 reader_match=0 reader_clean=12 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-04 07:23:18.954 14108 14132 I urovdetect: ELIM_EXEC name=baseline n=12 expected=0 match=0 clean=12 unknown=0 accepted=1152 failed=0 control_failed=0 total_ns=34119344 max_ns=3083455
+10-04 07:23:18.988 14108 14132 I urovdetect: ELIM_STORE name=baseline n=12 expected=0 match=0 clean=12 unknown=0 completed=384 stores=0 total_ns=34104534 max_ns=2896566
+10-04 07:23:18.999 14108 14132 I urovdetect: ELIM_RESIDUAL mode=ap site_file_word=f9400000 site_live_word=f9400000 differs=0 site_cow_private=0 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0
+10-04 07:23:19.081 14108 14132 I urovdetect: ELIM_CASE name=active_page result=PASS n=12 exclusive_match=0 exclusive_clean=12 exclusive_unknown=0 accepted=1152 failed=0 control_failed=0 reader_match=0 reader_clean=12 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-04 07:23:19.164 14108 14132 I urovdetect: ELIM_CASE name=active_outside_window result=PASS n=12 exclusive_match=0 exclusive_clean=12 exclusive_unknown=0 accepted=1152 failed=0 control_failed=0 reader_match=0 reader_clean=12 reader_unknown=0 direct=0x0 file=0x0
+10-04 07:23:19.200 14108 14132 I urovdetect: ELIM_EXEC name=active_changed n=12 expected=0 match=0 clean=12 unknown=0 accepted=1152 failed=0 control_failed=0 total_ns=34468505 max_ns=3000651
+10-04 07:23:19.254 14108 14132 I urovdetect: ELIM_EXEC name=active_cpu_0 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=51732300 max_ns=17569621
+10-04 07:23:19.305 14108 14132 I urovdetect: ELIM_EXEC name=active_cpu_1 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=48520508 max_ns=16422364
+10-04 07:23:19.356 14108 14132 I urovdetect: ELIM_EXEC name=active_cpu_2 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=48259888 max_ns=16295614
+10-04 07:23:19.406 14108 14132 I urovdetect: ELIM_EXEC name=active_cpu_3 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=48213826 max_ns=16182495
+10-04 07:23:19.424 14108 14132 I urovdetect: ELIM_EXEC name=active_cpu_4 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=16355916 max_ns=5640015
+10-04 07:23:19.441 14108 14132 I urovdetect: ELIM_EXEC name=active_cpu_5 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=16163329 max_ns=5421915
+10-04 07:23:19.453 14108 14132 I urovdetect: ELIM_EXEC name=active_cpu_6 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=10997355 max_ns=5277466
+10-04 07:23:19.462 14108 14132 I urovdetect: ELIM_EXEC name=active_cpu_7 n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=8628335 max_ns=2954142
+10-04 07:23:19.462 14108 14132 I urovdetect: ELIM_EXEC_STATE unchanged=1 generation=1 hits=2 replays=2849 failures=0
+10-04 07:23:19.497 14108 14132 I urovdetect: ELIM_STORE name=active_changed n=12 expected=0 match=0 clean=12 unknown=0 completed=384 stores=0 total_ns=34401897 max_ns=2935872
+10-04 07:23:19.532 14108 14132 I urovdetect: ELIM_STORE name=active_outside_window n=12 expected=0 match=0 clean=12 unknown=0 completed=384 stores=0 total_ns=34399413 max_ns=2933919
+10-04 07:23:19.538 14108 14132 I urovdetect: ELIM_BRIDGE name=active_changed expected=0 verdict=0 trials=32 successes=0 elapsed_ns=2960449 nop_expected=1 nop_verdict=1 nop_trials=32 nop_successes=32 nop_elapsed_ns=2869182
+10-04 07:23:19.544 14108 14132 I urovdetect: ELIM_BRIDGE name=active_outside_window expected=0 verdict=0 trials=32 successes=0 elapsed_ns=2873047 nop_expected=1 nop_verdict=1 nop_trials=32 nop_successes=32 nop_elapsed_ns=2845663
+10-04 07:23:19.599 14108 14132 I urovdetect: ELIM_STORE name=active_cpu_0 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=52174805 max_ns=17714559
+10-04 07:23:19.633 14108 14132 I urovdetect: ELIM_BRIDGE name=active_cpu_0 expected=0 verdict=0 trials=32 successes=0 elapsed_ns=16689332 nop_expected=1 nop_verdict=1 nop_trials=32 nop_successes=32 nop_elapsed_ns=17132284
+10-04 07:23:19.685 14108 14132 I urovdetect: ELIM_STORE name=active_cpu_1 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=48958537 max_ns=16521159
+10-04 07:23:19.718 14108 14132 I urovdetect: ELIM_BRIDGE name=active_cpu_1 expected=0 verdict=0 trials=32 successes=0 elapsed_ns=16331014 nop_expected=1 nop_verdict=1 nop_trials=32 nop_successes=32 nop_elapsed_ns=16448404
+10-04 07:23:19.769 14108 14132 I urovdetect: ELIM_STORE name=active_cpu_2 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=48877278 max_ns=16538330
+10-04 07:23:19.802 14108 14132 I urovdetect: ELIM_BRIDGE name=active_cpu_2 expected=0 verdict=0 trials=32 successes=0 elapsed_ns=16129151 nop_expected=1 nop_verdict=1 nop_trials=32 nop_successes=32 nop_elapsed_ns=16190389
+10-04 07:23:19.854 14108 14132 I urovdetect: ELIM_STORE name=active_cpu_3 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=49258992 max_ns=16559855
+10-04 07:23:19.888 14108 14132 I urovdetect: ELIM_BRIDGE name=active_cpu_3 expected=0 verdict=0 trials=32 successes=0 elapsed_ns=16643840 nop_expected=1 nop_verdict=1 nop_trials=32 nop_successes=32 nop_elapsed_ns=16801554
+10-04 07:23:19.906 14108 14132 I urovdetect: ELIM_STORE name=active_cpu_4 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=16558838 max_ns=5550822
+10-04 07:23:19.917 14108 14132 I urovdetect: ELIM_BRIDGE name=active_cpu_4 expected=0 verdict=0 trials=32 successes=0 elapsed_ns=5429077 nop_expected=1 nop_verdict=1 nop_trials=32 nop_successes=32 nop_elapsed_ns=5435913
+10-04 07:23:19.934 14108 14132 I urovdetect: ELIM_STORE name=active_cpu_5 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=16361775 max_ns=5568196
+10-04 07:23:19.945 14108 14132 I urovdetect: ELIM_BRIDGE name=active_cpu_5 expected=0 verdict=0 trials=32 successes=0 elapsed_ns=5413493 nop_expected=1 nop_verdict=1 nop_trials=32 nop_successes=32 nop_elapsed_ns=5436889
+10-04 07:23:19.955 14108 14132 I urovdetect: ELIM_STORE name=active_cpu_6 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=8750000 max_ns=3011474
+10-04 07:23:19.960 14108 14132 I urovdetect: ELIM_BRIDGE name=active_cpu_6 expected=0 verdict=0 trials=32 successes=0 elapsed_ns=2908000 nop_expected=1 nop_verdict=1 nop_trials=32 nop_successes=32 nop_elapsed_ns=2871460
+10-04 07:23:19.970 14108 14132 I urovdetect: ELIM_STORE name=active_cpu_7 n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=9093710 max_ns=3288900
+10-04 07:23:19.976 14108 14132 I urovdetect: ELIM_BRIDGE name=active_cpu_7 expected=0 verdict=0 trials=32 successes=0 elapsed_ns=2903320 nop_expected=1 nop_verdict=1 nop_trials=32 nop_successes=32 nop_elapsed_ns=2851644
+10-04 07:23:19.976 14108 14132 I urovdetect: ELIM_STORE_STATE mode=ap preserved=1 generation=1 hits=2 failures=0 replays_before=2849 replays_after=5025
+10-04 07:23:19.979 14108 14132 I urovdetect: ELIM_FEATURE business_reader=1 direct=0xf2c66881f2aaacc1 reader=0x8877665544332211 file=0xf2c66881f2aaacc1
+10-04 07:23:19.979 14108 14132 I urovdetect: ELIM_TIMING mode=ap site_call_ns=293
+10-04 07:23:20.062 14108 14132 I urovdetect: ELIM_CASE name=active_after_set result=PASS n=12 exclusive_match=0 exclusive_clean=12 exclusive_unknown=0 accepted=1152 failed=0 control_failed=0 reader_match=0 reader_clean=12 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-04 07:23:20.146 14108 14132 I urovdetect: ELIM_CASE name=active_equal_value result=PASS n=12 exclusive_match=0 exclusive_clean=12 exclusive_unknown=0 accepted=1152 failed=0 control_failed=0 reader_match=0 reader_clean=12 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-04 07:23:20.182 14108 14132 I urovdetect: ELIM_EXEC name=active_equal_value n=12 expected=0 match=0 clean=12 unknown=0 accepted=1152 failed=0 control_failed=0 total_ns=35027383 max_ns=2980876
+10-04 07:23:20.218 14108 14132 I urovdetect: ELIM_STORE name=active_equal_value n=12 expected=0 match=0 clean=12 unknown=0 completed=384 stores=0 total_ns=35420940 max_ns=3064006
+10-04 07:23:20.224 14108 14132 I urovdetect: ELIM_BRIDGE name=active_equal_value expected=0 verdict=0 trials=32 successes=0 elapsed_ns=3178263 nop_expected=1 nop_verdict=1 nop_trials=32 nop_successes=32 nop_elapsed_ns=2938964
+10-04 07:23:20.234 14108 14132 I urovdetect: ELIM_RESIDUAL restored_site_file_word=f9400000 live_word=f9400000 equal=1 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0
+10-04 07:23:20.319 14108 14132 I urovdetect: ELIM_CASE name=deactivated result=PASS n=12 exclusive_match=0 exclusive_clean=12 exclusive_unknown=0 accepted=1152 failed=0 control_failed=0 reader_match=0 reader_clean=12 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1
+10-04 07:23:20.355 14108 14132 I urovdetect: ELIM_EXEC name=deactivated n=12 expected=0 match=0 clean=12 unknown=0 accepted=1152 failed=0 control_failed=0 total_ns=35325641 max_ns=3042928
+10-04 07:23:20.391 14108 14132 I urovdetect: ELIM_STORE name=deactivated n=12 expected=0 match=0 clean=12 unknown=0 completed=384 stores=0 total_ns=35588582 max_ns=3027914
+10-04 07:23:20.397 14108 14132 I urovdetect: ELIM_BRIDGE name=deactivated expected=0 verdict=0 trials=32 successes=0 elapsed_ns=2983602 nop_expected=0 nop_verdict=0 nop_trials=32 nop_successes=0 nop_elapsed_ns=2946411
+10-04 07:23:20.398 14108 14132 I urovdetect: ELIM_BUSINESS ops=324736 errors=0 execution=original
+10-04 07:23:20.398 14108 14132 I urovdetect: CONTEXT pid=14108 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 07:23:20.398 14108 14132 I urovdetect: NATIVE_RESULT PASS cases=32 assertions=863 failures=0 mode=w-active
+10-04 07:23:20.402 14108 14108 I urovdetect: DETECT_RESULT PASS mode=w-active worker_ms=1681 ui_ticks=258 ui_max_gap_ms=15 native=PASS cases=32 assertions=863 failures=0

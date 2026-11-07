@@ -50,7 +50,7 @@ void ud_observe_exclusive(const void *address, const void *reference,
                           struct ud_exclusive_observation *out);
 
 /* Same paired controls as ud_observe_exclusive, with a NOP between LDXR and
- * LDRB to measure reservation loss outside the adjacent PAGE_AP bridge. */
+ * LDRB. UROV-Y 2.6.0+ recognizes this spacing in its PAGE_AP bridge. */
 void ud_observe_spaced_exclusive(const void *address, const void *reference,
                                  int backing_fd, off_t offset,
                                  struct ud_exclusive_observation *out);
@@ -76,6 +76,22 @@ void ud_observe_unreserved_store(const void *address, const void *reference,
 void ud_observe_unreserved_status(const void *address, const void *reference,
                                   int backing_fd, off_t offset,
                                   struct ud_store_observation *out);
+
+/* Same status and mapping contract. The branch skips LDXR by landing on a
+ * NOP immediately before LDRB. This is the regression probe for the UROV-Y
+ * 2.6.0 PAGE_AP bridge, which matched this shape; a consistent MATCH means a
+ * store was retired without a reservation. */
+void ud_observe_unreserved_nop_status(const void *address, const void *reference,
+                                      int backing_fd, off_t offset,
+                                      struct ud_store_observation *out);
+
+/* Same contract, but the skipped LDXR is reached through ADR + BR.  The
+ * target address remains in x9 when LDRB faults; a handler that retires the
+ * STXR here has neither resolved the direct branch nor checked the register
+ * file.  This is the regression probe for the indirect-branch gate. */
+void ud_observe_unreserved_indirect_status(const void *address, const void *reference,
+                                           int backing_fd, off_t offset,
+                                           struct ud_store_observation *out);
 
 /* Observe instruction fetch on an app-owned canary. Both addresses must be
  * 8-byte aligned, callable immutable RX entries for the same file bytes in
