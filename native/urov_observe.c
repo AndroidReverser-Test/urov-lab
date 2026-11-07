@@ -98,12 +98,11 @@ enum unreserved_branch {
     UNRESERVED_TO_LOAD,     /* direct branch to the LDRB */
     UNRESERVED_TO_NOP,      /* direct branch to a NOP in the LDXR gap */
     UNRESERVED_INDIRECT,    /* ADR + BR to the LDRB, target left in x9 */
+    UNRESERVED_CROSS_PAGE,
 };
 
 /* Keep an unreachable LDXR in the bridge's look-behind and skip it with the
- * requested control-flow shape.  The load is the branch target (or the NOP
- * before it for the spaced shape), so the handler can only retire the STXR
- * if it really observed an LDXR. */
+ * requested control-flow shape. CLREX makes a native STXR fail in every case. */
 __attribute__((noinline))
 static int unreserved_store_once(const void *address, uint64_t *scratch,
                                  uint64_t store_value, enum unreserved_branch branch,
@@ -133,6 +132,18 @@ static int unreserved_store_once(const void *address, uint64_t *scratch,
                          "stxr %w1, %0, [%3]\n"
                          : "+&r"(value), "=&r"(status), "=&r"(*byte)
                          : "r"(scratch), "r"(address) : "x9", "memory");
+    } else if (branch == UNRESERVED_CROSS_PAGE) {
+        /* Align the skipped LDXR so the branch is outside the faulting PC's
+         * page on both supported page sizes. B does not leave a target in a
+         * GPR for the bridge's indirect-branch check. */
+        __asm__ volatile("clrex\n"
+                         "b 1f\n"
+                         ".p2align 14\n"
+                         "ldxr %0, [%3]\n"
+                         "1: ldrb %w2, [%4]\n"
+                         "stxr %w1, %0, [%3]\n"
+                         : "+&r"(value), "=&r"(status), "=&r"(*byte)
+                         : "r"(scratch), "r"(address) : "memory");
     } else {
         __asm__ volatile("clrex\n"
                          "b 1f\n"
@@ -163,6 +174,13 @@ static void observe_unreserved_store(const void *address, const void *reference,
     memset(out, 0, sizeof(*out));
     out->verdict = UD_UNKNOWN;
     if (address == reference) { out->error = EINVAL; goto done; }
+    if (branch == UNRESERVED_CROSS_PAGE) {
+        long page_size = sysconf(_SC_PAGESIZE);
+        if (page_size != 4096 && page_size != 16384) {
+            out->error = EOPNOTSUPP;
+            goto done;
+        }
+    }
     out->error = identity(address, 1, backing_fd, offset, &target);
     if (out->error) goto done;
     out->error = identity(reference, 1, backing_fd, offset, &control);
@@ -230,6 +248,14 @@ void ud_observe_unreserved_indirect_status(const void *address, const void *refe
 {
     observe_unreserved_store(address, reference, backing_fd, offset, scratch_initial,
                              UNRESERVED_INDIRECT, out);
+}
+
+void ud_observe_unreserved_cross_page_status(const void *address, const void *reference,
+                                             int backing_fd, off_t offset,
+                                             struct ud_store_observation *out)
+{
+    observe_unreserved_store(address, reference, backing_fd, offset, scratch_initial,
+                             UNRESERVED_CROSS_PAGE, out);
 }
 
 static uint64_t scalar_word(const void *address)

@@ -18,10 +18,11 @@
  * only AP[1] on the target page: fetch (including a BTI/RET canary) stays
  * native, while every data read is emulated with the same caller-window rules.
  * PAGE_AP does not emulate arbitrary stores.  Because the exception return
- * clears the exclusive reservation, an adjacent LDXR;load;STXR whose LDXR
- * result is still in Rt is completed in the handler (see uy_llsc_prepare),
- * but only when no direct branch on the page or GPR target reaches the
- * LDXR..load span.  Every other store stays native.
+ * clears the exclusive reservation, an adjacent LDXR;load;STXR is completed
+ * in the handler (see uy_llsc_prepare), but only when the LDXR result is still
+ * in Rt and no direct branch in any executable mapping of the process, or
+ * indirect branch target left in a GPR, reaches the LDXR..load span.  Every
+ * other store stays native.
  */
 #include <common.h>
 #include <compiler.h>
@@ -238,6 +239,8 @@ static mmput_t f_mmput;
 static find_vma_t f_find_vma;
 static mmap_write_fn f_mmap_write_lock;
 static mmap_write_fn f_mmap_write_unlock;
+static mmap_write_fn f_mmap_read_lock;
+static mmap_write_fn f_mmap_read_unlock;
 static force_sig_fault_t f_force_sig_fault;
 static copy_nofault_t f_copy_in, f_copy_out;
 static access_remote_vm_t f_access_vm;
@@ -1113,24 +1116,38 @@ static int uy_is_stxr(uint32_t insn, unsigned *size, unsigned *rs, unsigned *rt,
     return 1;
 }
 
-/* A branch that lands between the LDXR and the faulting load can enter the
- * read without executing the LDXR.  Such a path never took the reservation,
- * so the handler must leave the STXR to report the failure instead of
- * retiring it.  The old +/-256-byte window missed two shapes: a branch that
- * landed on a NOP in the gap (not on the load itself) and a branch from
- * farther away on the same page.  Scan the whole faulting page for targets
- * in the inclusive span [LDXR+4, load], which covers the gap and the load.
- *
- * An indirect branch leaves its numeric target in the register consumed by
- * BR/BLR/RET.  A normal LDXR..load sequence has no reason to hold an address
- * from that tiny span in a GPR, so a matching register is treated as a
- * possible skipped LDXR.  This is a conservative gate, not a static
- * resolution of indirect control flow: a crafted sequence that clobbers the
- * target register before the load remains a residual.
- *
- * The scan is read-only and bounded to one page.  It runs only for the rare
- * LL/SC-shaped fault, so ordinary read emulation is unchanged. */
-#define UY_BRANCH_CHUNK 512U
+/* A direct branch can enter the load without executing the LDXR.  Retiring
+ * the STXR on such a path would report a success the hardware never produced.
+ * 2.7.0 scanned only the faulting page; the 2.8.0 cross-page probe puts the
+ * branch in the previous page, so the scan missed it.  Build, once per
+ * REGISTER and therefore before any target page is armed, a bitmap of every
+ * direct branch target in every readable executable VMA of the session mm.
+ * A branch from any distance, another page or another mapping is then seen.
+ * The build is read-only (mmap read lock, nofault code copies); the fault path
+ * only tests bits, so the read latency does not change after registration.
+ * Indirect branches are covered separately by the GPR gate below. */
+
+#define UY_CODE_MAX_REGIONS 512U
+#define UY_CODE_BITMAP_MAX (16U << 20)
+#define UY_BRANCH_CHUNK 4096U
+#define UY_BRANCH_SCAN_CHUNK 512U
+
+struct uy_code_region {
+    uint64_t start;
+    uint64_t end;
+    uint64_t bitmap_off;
+};
+
+struct uy_code_map {
+    struct uy_code_region region[UY_CODE_MAX_REGIONS];
+    uint8_t *arena;
+    uint64_t arena_size;
+    uint32_t count;
+    uint32_t valid;
+};
+
+static struct uy_code_map g_code;
+static uint32_t g_code_buf[UY_BRANCH_CHUNK / 4U];
 
 static int uy_branch_target(uint32_t insn, uint64_t at, uint64_t *target)
 {
@@ -1155,34 +1172,158 @@ static int uy_branch_target(uint32_t insn, uint64_t at, uint64_t *target)
     return 1;
 }
 
-/* Return 1 when a decoded direct branch in [start,end) targets the inclusive
- * interval [lo,hi].  Instructions must be 4-byte aligned; callers pass page
- * and PC boundaries, so both ends are aligned.  The chunk keeps the fault
- * handler's stack use bounded while still covering a whole 4/16 KiB page. */
-static int uy_scan_branch(uint64_t start, uint64_t end, uint64_t lo, uint64_t hi)
+static void uy_read_lock(void *mm)
 {
-    uint32_t buf[UY_BRANCH_CHUNK / 4U];
+    if (f_mmap_read_lock) f_mmap_read_lock(mm);
+    else f_mmap_write_lock(mm);
+}
+
+static void uy_read_unlock(void *mm)
+{
+    if (f_mmap_read_unlock) f_mmap_read_unlock(mm);
+    else f_mmap_write_unlock(mm);
+}
+
+static void uy_code_free(void)
+{
+    uint8_t *arena = g_code.arena;
+
+    memset(&g_code, 0, sizeof(g_code));
+    if (arena) uy_free(arena);
+}
+
+static int uy_code_region_read(void *vma, uint64_t *start, uint64_t *end, uint64_t *flags)
+{
+    *start = *(uint64_t *)((char *)vma + g_layout.vma_start);
+    *end = *(uint64_t *)((char *)vma + g_layout.vma_end);
+    *flags = *(uint64_t *)((char *)vma + g_layout.vma_flags);
+    return (*end > *start && *start < g_user_limit) ? 0 : -1;
+}
+
+static void uy_code_mark(uint64_t target)
+{
+    unsigned i;
+
+    for (i = 0; i < g_code.count; ++i) {
+        struct uy_code_region *r = &g_code.region[i];
+        uint64_t off;
+
+        if (target < r->start || target >= r->end) continue;
+        off = (target - r->start) >> 2;
+        g_code.arena[r->bitmap_off + (off >> 3)] |= (uint8_t)(1U << (off & 7U));
+        return;
+    }
+}
+
+/* Enumerate readable executable VMAs, collecting their target bitmaps.  The
+ * bitmap has one bit per 4-byte slot, so it is 1/32 of the code size. */
+static int uy_code_collect(uint64_t *bytes)
+{
+    uint64_t addr = 0, total = 0;
+    unsigned n = 0, iter;
+
+    for (iter = 0; iter < 65536U; ++iter) {
+        void *vma = f_find_vma(g_sess.mm, (unsigned long)addr);
+        uint64_t start, end, flags;
+
+        if (!vma) break;
+        if (uy_code_region_read(vma, &start, &end, &flags) || end <= addr ||
+            start >= g_user_limit)
+            break;
+        if ((flags & (UY_VM_EXEC | UY_VM_READ)) == (UY_VM_EXEC | UY_VM_READ)) {
+            if (n == UY_CODE_MAX_REGIONS) return -E2BIG;
+            total += ((end - start) >> 2) / 8U + 1U;
+            if (total > UY_CODE_BITMAP_MAX) return -E2BIG;
+            g_code.region[n].start = start;
+            g_code.region[n].end = end;
+            ++n;
+        }
+        addr = end;
+        if (addr >= g_user_limit) break;
+    }
+    g_code.count = n;
+    *bytes = total;
+    return n ? 0 : -ENOENT;
+}
+
+static void uy_code_build(void)
+{
+    uint64_t bytes = 0, off = 0, addr = 0;
+    uint32_t *buf = g_code_buf;
+    unsigned i, iter;
+
+    uy_code_free();
+    uy_read_lock(g_sess.mm);
+    if (uy_code_collect(&bytes)) goto done;
+    g_code.arena = uy_alloc(bytes ? bytes : 1);
+    if (!g_code.arena) goto done;
+    g_code.arena_size = bytes;
+    memset(g_code.arena, 0, bytes);
+    for (i = 0; i < g_code.count; ++i) {
+        g_code.region[i].bitmap_off = off;
+        off += ((g_code.region[i].end - g_code.region[i].start) >> 2) / 8U + 1U;
+    }
+    for (iter = 0; iter < 65536U; ++iter) {
+        void *vma = f_find_vma(g_sess.mm, (unsigned long)addr);
+        uint64_t start, end, flags;
+
+        if (!vma) break;
+        if (uy_code_region_read(vma, &start, &end, &flags) || end <= addr ||
+            start >= g_user_limit)
+            break;
+        if ((flags & (UY_VM_EXEC | UY_VM_READ)) == (UY_VM_EXEC | UY_VM_READ)) {
+            uint64_t at;
+            for (at = start; at < end; at += UY_BRANCH_CHUNK) {
+                uint64_t left = end - at;
+                unsigned n = (left > UY_BRANCH_CHUNK ? UY_BRANCH_CHUNK : (unsigned)left) >> 2;
+                unsigned k;
+
+                if (f_copy_in(buf, (const void *)(uintptr_t)at, n * 4U)) continue;
+                for (k = 0; k < n; ++k) {
+                    uint64_t t;
+                    if (uy_branch_target(buf[k], at + 4U * k, &t)) uy_code_mark(t);
+                }
+            }
+        }
+        addr = end;
+        if (addr >= g_user_limit) break;
+    }
+    __atomic_store_n(&g_code.valid, 1, __ATOMIC_RELEASE);
+done:
+    if (g_verbose)
+        pr_info("urov-y: codemap count=%u bytes=%llu valid=%u\n", g_code.count,
+                (unsigned long long)g_code.arena_size, g_code.valid);
+    uy_read_unlock(g_sess.mm);
+}
+
+static int uy_code_hit(uint64_t addr)
+{
+    unsigned i;
+
+    for (i = 0; i < g_code.count; ++i) {
+        struct uy_code_region *r = &g_code.region[i];
+        uint64_t off;
+
+        if (addr < r->start || addr >= r->end) continue;
+        off = (addr - r->start) >> 2;
+        return (g_code.arena[r->bitmap_off + (off >> 3)] >> (off & 7U)) & 1U;
+    }
+    return 0;
+}
+
+/* Last-resort same-page scan if REGISTER could not build the map. */
+static int uy_scan_page(uint64_t start, uint64_t end, uint64_t lo, uint64_t hi)
+{
+    uint32_t buf[UY_BRANCH_SCAN_CHUNK / 4U];
     uint64_t at;
 
     if (end <= start || hi < lo) return 0;
-    for (at = start; at < end; at += UY_BRANCH_CHUNK) {
+    for (at = start; at < end; at += UY_BRANCH_SCAN_CHUNK) {
         uint64_t left = end - at;
-        unsigned bytes = left > UY_BRANCH_CHUNK ? UY_BRANCH_CHUNK : (unsigned)left;
-        unsigned n = bytes >> 2, i;
-        struct uy_page *snap = page_find(page_base(at));
+        unsigned n = (left > UY_BRANCH_SCAN_CHUNK ? UY_BRANCH_SCAN_CHUNK : (unsigned)left) >> 2;
+        unsigned i;
 
-        if (snap && page_base(end - 1U) == snap->base) {
-            memcpy(buf, snap->snapshot + (at - snap->base), n * 4U);
-        } else if (f_copy_in(buf, (const void *)(uintptr_t)at, n * 4U)) {
-            for (i = 0; i < n; ++i) {
-                uint32_t insn;
-                uint64_t t;
-                if (!uy_read_insn(at + 4U * i, &insn) &&
-                    uy_branch_target(insn, at + 4U * i, &t) && t >= lo && t <= hi)
-                    return 1;
-            }
-            continue;
-        }
+        if (f_copy_in(buf, (const void *)(uintptr_t)at, n * 4U)) continue;
         for (i = 0; i < n; ++i) {
             uint64_t t;
             if (uy_branch_target(buf[i], at + 4U * i, &t) && t >= lo && t <= hi)
@@ -1194,13 +1335,15 @@ static int uy_scan_branch(uint64_t start, uint64_t end, uint64_t lo, uint64_t hi
 
 static int uy_llsc_skipped(uint64_t ldxr_pc, uint64_t pc)
 {
-    uint64_t page = page_base(pc);
-    uint64_t lo = ldxr_pc + 4U, hi = pc;
+    uint64_t at;
 
-    /* A branch into the NOP gap or onto the load itself skipped the LDXR. */
-    if (uy_scan_branch(page, pc, lo, hi)) return 1;
-    if (pc + 8U < page + g_page_size &&
-        uy_scan_branch(pc + 8U, page + g_page_size, lo, hi))
+    if (__atomic_load_n(&g_code.valid, __ATOMIC_ACQUIRE)) {
+        for (at = ldxr_pc + 4U; at <= pc; at += 4U)
+            if (uy_code_hit(at)) return 1;
+        return 0;
+    }
+    /* Map unavailable: keep the 2.7.0 single-page gate. */
+    if (uy_scan_page(page_base(pc), page_base(pc) + g_page_size, ldxr_pc + 4U, pc))
         return 1;
     return 0;
 }
@@ -1224,10 +1367,10 @@ static int uy_llsc_indirect(const struct uro_regs *regs, uint64_t ldxr_pc, uint6
  * STXR would always fail.  Completing it in the handler restores the native
  * outcome, but only when the LDXR result is still in Rt (execution evidence)
  * and control reached the load sequentially.  A caller that pre-reads [Xn] can
- * forge the register value, but a direct branch into the LDXR..load span, or
- * an indirect branch that leaves that span in a GPR, still identifies a path
- * that skipped the LDXR and must be left to the native STXR.  The store value
- * must still equal memory, so the bridge never changes bytes. */
+ * forge the register value, but a direct branch into the LDXR..load span is
+ * now found in every executable mapping of the process, and an indirect
+ * branch that leaves that span in a GPR is rejected.  The store value must
+ * still equal memory, so the bridge never changes bytes. */
 static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
                             const struct uro_load *load, struct uy_llsc *out)
 {
@@ -1301,8 +1444,8 @@ static void uy_llsc_commit(struct pt_regs *regs, uint64_t fault_pc,
         return;
     if (f_copy_out((void *)(uintptr_t)plan->base, &plan->value, plan->size))
         return;
-    if (plan->acquire) __asm__ volatile("dmb ishld" ::: "memory");
-    if (plan->release) __asm__ volatile("dmb ishst" ::: "memory");
+    if (plan->acquire) __asm__ volatile("dmb ishld" : : : "memory");
+    if (plan->release) __asm__ volatile("dmb ishst" : : : "memory");
     if (plan->status_reg != 31U) regs->regs[plan->status_reg] = 0;
     regs->pc += 4U;
     __atomic_fetch_add(&g_sess.llsc, 1, __ATOMIC_RELAXED);
@@ -1605,6 +1748,7 @@ static void session_free_storage(void)
 {
     void *mm = g_sess.mm;
 
+    uy_code_free();
     uy_free(g_sess.pages);
     uy_free(g_sess.arena);
     memset(&g_sess, 0, sizeof(g_sess));
@@ -1835,6 +1979,9 @@ static long do_register(struct urov_y_request *q)
     __atomic_store_n(&g_state, UY_STATE_LIVE, __ATOMIC_RELEASE);
     uy_readers_open(&g_readers);
     if (mode == UROV_Y_MODE_PAGE_AP) {
+        /* Resolve the whole process's direct-branch targets before the first
+         * AP page is armed, so the read path only tests bitmap bits. */
+        uy_code_build();
         ret = ap_arm_pages(&g_sess, mm);
     } else {
         for (i = 0; i < g_sess.site_count; ++i) {
@@ -2318,6 +2465,14 @@ static long resolve_symbols(const struct kclf_btf *btf, int *brk_argc, int *mmf_
 
     f_mmap_write_lock = (mmap_write_fn)lookup("mmap_write_lock");
     f_mmap_write_unlock = (mmap_write_fn)lookup("mmap_write_unlock");
+    f_mmap_read_lock = (mmap_write_fn)lookup("mmap_read_lock");
+    f_mmap_read_unlock = (mmap_write_fn)lookup("mmap_read_unlock");
+    if (!f_mmap_read_lock || !f_mmap_read_unlock ||
+        !uy_symbol_abi(btf, "mmap_read_lock", "vm") ||
+        !uy_symbol_abi(btf, "mmap_read_unlock", "vm")) {
+        f_mmap_read_lock = 0;
+        f_mmap_read_unlock = 0;
+    }
     g_use_rwsem = !f_mmap_write_lock || !f_mmap_write_unlock ||
                   !uy_symbol_abi(btf, "mmap_write_lock", "vm") ||
                   !uy_symbol_abi(btf, "mmap_write_unlock", "vm");

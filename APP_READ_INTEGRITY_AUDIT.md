@@ -12,12 +12,13 @@
 | `urov-y` 2.4.1 `PAGE_UXN` | 置读取点页 PTE 的 UXN，接管该页的 EL0 取指权限异常。解释登记的 load 和受支持的 RET、NOP、BTI。读取点的字节和 VMA 可保持原样。 |
 | `urov-y` 2.5.0 `PAGE_AP` | 清目标页叶子 PTE 的 AP[1]。数据读取进 `do_mem_abort`，取指仍执行该页的真实字节。支持普通私有 `.text`、多页、跨页、FPSIMD 与 LD1/2/3/4。2.5.0 对紧邻 `LDXR/LDAXR; load; STXR/STLXR`、`Rt==[Xn]` 且待写值等于内存的序列完成原 store，`ERET` 后不再出现确定性的目标 `STXR` 失败。 |
 | `urov-y` 2.6.0 `PAGE_AP` | 在 2.5.0 之上允许 `LDXR` 与 load 之间 0–3 个 `NOP`，并在提交桥前扫描故障 PC 两侧各 256 字节，解码直接分支；只要有 `B/BL/CBZ/CBNZ/TBZ/TBNZ` 落到 load 上，就不代写，让原生 `STXR` 报告失败。这样“预置 `Rt==[Xn]` 后分支跳过 `LDXR`”的探针不再得到伪造成功。 |
+| `urov-y` 2.9.0 `PAGE_AP` | 在 2.8.0 基础上把“是否顺序到达 load”从单页扫描改为 `REGISTER` 期全进程直接分支目标位图：清 `AP[1]` 之前枚举会话 `mm` 的所有可读可执行 VMA，按 4 字节指令记录 `B/BL/B.cond/CBZ/CBNZ/TBZ/TBNZ` 的静态目标；故障时只查 `[LDXR+4, load]`。2.8.0 的跨页探针不再命中，读取路径耗时不变。 |
 
 [基础版后端](urov_backend.c) · [X 后端](urov_x_backend.c) · [Y 后端](urov_y_backend.c) · [指令解码](decode.c) · [软件模拟](emulate.c)
 
 基础版保留 `mm` 和 pin 页引用，同时修改 `vm_page_prot` 与叶子 PTE，使用 seqlock 取得一致的伪值快照。相交的映射变更会返回 `EBUSY`。它写入的 `0x10000` 在本机对应 `smaps` 的 `rr`，合法的 `MADV_RANDOM` 对照也会出现该标记。X 只调整页保护，重叠映射操作会撤销覆盖后按原生路径执行。 [基础版注册和映射门控](urov_backend.c#L491) · [X 映射门控](urov_x_backend.c#L883)
 
-Y 的 ABI v8 通过 `prctl` 校验密钥派生的选择器、固定的 `UROVYLAB` magic 和请求 MAC。注册按调用者 `mm` 绑定会话，先保存目标页快照。`SRC_USER` 取调用者提供的镜像，`SRC_FILE` 取 VMA 后备文件里的原始字节。故障发生时先检查陷阱来源，再用 `x30` 和最多 16 层 `x29` 帧链判断调用窗口，比较时剥离返回地址的 PAC。窗口内返回镜像，窗口外回放快照，无窗口时覆盖该会话的所有调用。模拟结束写回 GPR 或 FPSIMD、地址回写和 PC。跨页未登记部分走 nofault 读取。`SET` 和 `SET_PAGE` 校验代际后发布新镜像。注销先恢复陷阱，再等待读侧退出并回收会话。
+Y 的 ABI v8 通过 `prctl` 校验密钥派生的选择器、固定的 `UROVYLAB` magic 和请求 MAC。注册按调用者 `mm` 绑定会话，先保存目标页快照。`SRC_USER` 取调用者提供的整页镜像（2.8.0 起移除 `SRC_FILE`）。故障发生时先检查陷阱来源，再用 `x30` 和最多 16 层 `x29` 帧链判断调用窗口，比较时剥离返回地址的 PAC。窗口内返回镜像，窗口外回放快照，无窗口时覆盖该会话的所有调用。模拟结束写回 GPR 或 FPSIMD、地址回写和 PC。跨页未登记部分走 nofault 读取。`SET` 和 `SET_PAGE` 校验代际后发布新镜像。注销先恢复陷阱，再等待读侧退出并回收会话。
 
 当前 `PAGE_AP` 的 2.5.0 版本恢复了历史版本的相邻 LL/SC 桥，但加了执行存证：仅当
 故障 PC 前一条 `LDXR/LDAXR` 的目的寄存器仍等于 `[Xn]`、后一条 `STXR/STLXR` 使用同一
@@ -42,7 +43,7 @@ Y 的 ABI v8 通过 `prctl` 校验密钥派生的选择器、固定的 `UROVYLAB
 ## 阻断的边界
 
 - **拒绝采信伪造的完整性结果。** 本次 App 演示把传统 CRC 通过和读路径异常分开计数。若探针为 `MATCH` 或 `UNKNOWN`，该次 CRC 通过不计为有效完整性证据，测试函数仍按原业务路径执行。生产中可让高风险操作由服务端核验绑定请求的 Play Integrity 或硬件 Key Attestation，普通业务继续，设备证据缺失按未知分级。该信任覆盖设备和启动状态，内存页的读值仍需应用侧证据。 [Play Integrity 请求绑定](https://developer.android.com/google/play/integrity/standard) · [硬件密钥证明校验](https://developer.android.com/privacy-and-security/security-key-attestation)
-- **结束当前实验会话。** 持有模块密钥的 owner 可发 `DEACTIVATE`，测试后由 root 卸载。多页回归也证实当前 Y 会在重叠 `mprotect`、fork 等生命周期事件中恢复映射。这类操作有应用语义和并发影响，还允许再次注册，适合测试恢复而非业务防护。 [映射门控源码](urov_y_backend.c#L1920) · [多页回归](results/multipage-20261107-132907/summary.json)
+- **结束当前实验会话。** 持有模块密钥的 owner 可发 `DEACTIVATE`，测试后由 root 卸载。多页回归也证实当前 Y 会在重叠 `mprotect`、fork 等生命周期事件中恢复映射。这类操作有应用语义和并发影响，还允许再次注册，适合测试恢复而非业务防护。 [映射门控源码](urov_y_backend.c#L2317) · [多页回归](results/multipage-20261107-132907/summary.json)
 - **阻止该类内核改写。** 普通 App 位于 EL0，已取得内核执行权的一方能控制页表、系统调用和探针本身。设备侧应由可信启动链约束可加载的内核，在可管理设备上使用锁定引导程序与可信签名系统镜像。服务端校验硬件证明、启动状态和新鲜挑战，可以独立于 App 的本地检测结果决定是否授权敏感请求。 [Android Verified Boot](https://source.android.com/docs/security/features/verifiedboot) · [硬件证明的启动字段](https://source.android.com/docs/security/features/keystore/attestation#rootoftrust-fields)
 
 ## 本轮设备数据
@@ -180,6 +181,127 @@ Y 的 ABI v8 通过 `prctl` 校验密钥派生的选择器、固定的 `UROVYLAB
 构建 `urov-y.kpm 82f50d46...`、`urovdetect.apk 5ebc9801...`。完整数据见
 [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.8.0 节。
 
+## 当前 2.8.0 的跨页分支复核
+
+复核以 `5ba3a1c` 的 `urov-y` 2.8.0 和 ABI v8 为准。`REGISTER` 绑定当前 `mm`，
+复制每个目标页的原始快照和调用者提供的 `SRC_USER` 镜像。`PAGE_AP` 清目标页叶子
+PTE 的 `AP[1]`，保持硬件取指。低异常级的读权限异常由 `do_mem_abort` 接管，按
+`x30` 和最多 16 层 `x29` 帧链匹配业务窗口，再把镜像或原始快照的读值写回寄存器。
+`SITE_BRK` 与 `PAGE_UXN` 则在读取点触发，分别改写私有指令字和改变取指权限。
+[注册事务](urov_y_backend.c#L1852) · [异常处理](urov_y_backend.c#L1611)
+
+[设计 §16.5](ELIMINATION_DESIGN.md#165-残余特征与限制诚实清单) 的跨页分支残余在
+2.8.0 仍可复现。新探针执行 `CLREX`，从另一代码页用直接 `B` 跳过 `LDXR`，进入
+`LDRB; STXR`。原生 `STXR` 缺少预约，返回 1。AP 桥只扫描故障指令所在页内的分支，
+直接 `B` 也没有在通用寄存器里留下跳转目标。探针提前把待写寄存器置为私有 scratch
+的当前值，满足桥的寄存器校验，handler 写回同一值并把 `STXR` 状态置 0。
+成品 ELF 中的 `B` 位于 `0xc8054`，`LDRB` 位于 `0xcc004`，对齐布局跨越 4 KiB
+和 16 KiB 页边界。 [LL/SC 桥](urov_y_backend.c#L1374) ·
+[无密钥探针](native/urov_observe.c#L253) ·
+[Arm A64 独占监视器](https://documentation-service.arm.com/static/68c223238a337a2bc6645c0a)
+
+每次观测做 32 组同文件、同偏移的 RX 别名与目标页对照。两侧对照每次都返回 1、
+目标每次都返回 0、scratch 值和映射身份保持稳定时输出 `MATCH`。结果混合或对照
+异常时输出 `UNKNOWN`。检测只读目标页，写入限于线程私有 scratch，在 worker 上
+执行。`MATCH` 表示该页的读取路径出现模拟证据。`NO_MATCH` 的范围限于本次采样的
+地址与时段。此探针依赖当前 AP 桥及其 nofault 写能力，16 KiB 只有布局验证。
+[探针契约](native/urov_observe.h#L96)
+
+BRK 以已知读取点的原始 load 与活跃 BRK 指令字差异为主，私有脏页为辅。
+UXN 以已校验且可调用的同页 `BTI C; RET` canary 为目标，和独立 RX 别名对照
+取指时的独占预约状态。能安全复现真实调用窗口时，可对三种模式补充业务读值与
+文件字节的差异证据。 [模式夹具](apps/urov-detect/uy_fixture.inc)
+
+### 真机结果
+
+Pixel 6，Android 16，内核 `6.1.134-android14-11`，4 KiB，KernelPatch `0xc00`。
+探针运行在 `untrusted_app`，`CapEff=0`、`Seccomp=2`、SELinux `Enforcing`。
+KPM SHA-256 以 `82f50d46` 开头，测试 APK 以 `3bd329ec` 开头。
+
+| Dobby 阶段 | 样本 | 执行返回 | 内存 CRC32 | 跨页探针 `MATCH` | 采信 CRC |
+| --- | ---: | --- | --- | ---: | ---: |
+| 原始代码 | 624 | `0x1234` | `96964c4f` | 0 | 624 |
+| 仅 Dobby 改码 | 624 | `0x1235` | `8001aa03` | 0 | 0 |
+| 改码并开启 `PAGE_AP + SRC_USER` | 480 | `0x1235` | `96964c4f` | 480 | 0 |
+| 恢复页权限 | 480 | `0x1235` | `8001aa03` | 0 | 0 |
+
+活动阶段 15,360 个目标 `STXR` 全部被代报成功，1,728 次观测对照零命中，跨页探针
+全矩阵零未知。活动阶段单次跨页观测平均 3.21 ms，全矩阵最大 7.90 ms。并行业务
+完成 8,578,176 次迭代，零错误，测试 UI 心跳最大间隔 20 ms。
+[Dobby 矩阵](results/dobby-detect-20261107-180809/summary.json)
+
+模式与生命周期矩阵 14 次 App 运行通过。BRK 两轮均观测到指令字变化与 COW，UXN
+的活动 canary 83/83 命中。AP 的覆盖字节范围内外、等值覆盖和 8 个 CPU 上均命中跨页探针。
+其他 UID 的对照为阴性，卸载前的 owner 注销后读值恢复。
+[三模式矩阵](results/eliminate-20261107-180922/summary.json)
+
+CRC 回归 9 项和多页、向量、跨页回归 5 项全部通过。测试前后 boot ID 一致，测试模块
+已卸载，四组矩阵的内核增量日志未发现 Oops、BUG、WARNING 或挂起。
+[CRC 矩阵](results/crc-20261107-181043/summary.json) ·
+[多页矩阵](results/multipage-20261107-181101/summary.json)
+
+### 恢复和阻止重新注册
+
+- **保留普通业务。** Dobby 夹具只在完整性判定中剔除 `MATCH` 或 `UNKNOWN` 下的
+  CRC 通过记录，执行路径照常运行。生产中在后台检查稳定自有 RX 页，并持有映射
+  及文件生命周期。
+- **撤销当前会话。** 对已采用默认 advice 的自有测试页调用 `madvise(MADV_NORMAL)`，
+  Y 的重叠门控会恢复会话涉及的页权限并结束会话，再放行原生 syscall。10/10 次由
+  active 变为 inactive，随后 CRC 恢复到仅改码阶段的值。此动作允许未来重新注册，
+  并可能与并发控制请求竞争。 [映射门控](urov_y_backend.c#L2317)
+- **阻止同进程重新注册。** 已有 opt-in seccomp TSYNC 规则只对 ARM64、固定 magic、
+  `REGISTER` 和 288 字节请求的组合返回 `EPERM`。10/10 次安装成功，调用线程与
+  既存线程各 10/10 次重试被拦截。`NoNewPrivs` 和过滤器的进程内持久性适合明确采用
+  此策略的进程。已有会话需另行撤销，具备内核执行权的代码仍可改变过滤器或探针结果。
+  [恢复与过滤器夹具](apps/urov-detect/dobby_crc_fixture.inc#L156) ·
+  [Linux seccomp 文档](https://docs.kernel.org/userspace-api/seccomp_filter.html)
+
+## 2.9.0 跨页直接分支消除（2026-11-07）
+
+2.9.0 消除的是 2.8.0 复核里仍能稳定命中的跨页直接分支探针。`REGISTER` 在给
+任何目标页清 `AP[1]` **之前**，先在 `mmap` 读锁下枚举会话 `mm` 的全部可读可执行
+VMA，把每个 `B/BL/B.cond/CBZ/CBNZ/TBZ/TBNZ` 的静态目标写入按 VMA 划分的位图
+（每 4 字节指令一位，约为可执行虚拟地址跨度的 1/32）。故障时
+`uy_llsc_skipped()` 只查 `[LDXR+4, load]` 的 1–4 个槽位；任一位命中就不代写，
+交回原生 `STXR` 报失败。分支源可以在任意页、任意距离、甚至另一个映射，只要它
+在 `REGISTER` 时已经存在。扫描只读，不改 hook、syscall、PTE、代码字节或
+`ctl0` 字段；故障路径只做位测试，读取延迟不变。
+
+同一轮先试过更直接的执行存证：在 handler 里清 `PAN`，对 STXR 目标发真实
+`STXR`，用硬件独占监视器判断 `LDXR` 是否真的执行。Pixel 6 上 2656 次尝试全部
+失败，说明异常进入已经让本地监视器回到 Open Access，该方案不可用；寄存器存证、
+直接分支位图和 GPR 门控因此保留。
+
+真机结果（Pixel 6，`6.1.134-android14-11`，4 KiB，KernelPatch `0xc00`；
+`urov-y.kpm f7d55fd8...`、`urovdetect.apk 2ad6df70...`）：
+
+| 矩阵 | 结果 |
+| --- | --- |
+| Dobby 检测 24×5 | PASS；活动阶段 `execute=0x1235`、`live=96964c4f`（等于文件）、`accepted_crc=24/24`、`cross_page_successes=0/768`、`bridge/nop/ind` 均 0；平均探针 3.03–3.27 ms，最大 7.68 ms |
+| 消除矩阵 3×1 | PASS，11 次运行、1438 条断言；`ELIM_BRIDGE` 直接/NOP/间接/跨页均 `verdict=0 trials=32 successes=0`；`ELIM_TIMING mode=ap site_call_ns=283` |
+| CRC 5×1 | PASS，9 次运行（BRK/UXN/AP/AP-all/text/libc/big） |
+| 多页 3×1 | PASS，5 次运行 |
+
+测试进程上分支位图为 358 个可执行 VMA、6,000,742 字节，`REGISTER` 扫描约
+240 ms；这段成本只在显式注册路径，读取路径的 `site_call_ns` 与 2.8.0 相同
+（281→283 ns）。完整数据见
+[APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md)。
+
+残余（新增/仍存）：
+
+1. **`REGISTER` 之后新建的可执行映射不在位图中**。位图只在注册时构建一次，
+   不随 VMA 变化更新；从这种映射跳入 span 的跨映射直接分支仍可绕过。
+2. **不可读或注册时未驻留的可执行页**：XOM 页不能用 nofault 读取复制，被换出的
+   代码页在 `REGISTER` 时也不会触发缺页；其中的直接分支源不被扫描。目标 `PC`
+   若落在位图外，`uy_code_hit()` 返回 0。
+3. **间接分支的目标寄存器在 load 前被覆盖**：GPR 门控看不到区间地址
+   （同 §16.5 残余）。
+4. **注册路径成本**：一次全进程代码扫描，测试进程约 240 ms、6.0 MB 内核位图；
+   读取路径不变。
+5. PTE 重装窗口、root 可见性、注册事务窗口不变；每次读取仍一次同步异常；
+   桥的 store 仍是内核 nofault 普通写，不是硬件独占 store；`caller_count > 0`
+   的窗口语义不变。
+
 ## 复跑
 
 在仓库根目录运行。`<KP_KEY>` 为设备的 KernelPatch 密钥，模块密钥由脚本另行生成。
@@ -188,9 +310,9 @@ Y 的 ABI v8 通过 `prctl` 校验密钥派生的选择器、固定的 `UROVYLAB
 .\kpms\urov-lab\build.ps1
 .\kpms\urov-lab\apps\urov-detect\build.ps1
 .\kpms\urov-lab\apps\urov-detect\build.ps1 -Observer
-python kpms/urov-lab/tools/run_crc_device.py --serial <SERIAL> --key <KP_KEY> --dobby-detection --repeats 24 --cycles 5
-python kpms/urov-lab/tools/run_elimination_device.py --serial <SERIAL> --key <KP_KEY> --repeats 12 --cycles 3
-python kpms/urov-lab/tools/run_detection_device.py --serial <SERIAL> --key <KP_KEY> --skip-live-unload --repeats 20 --cycles 3
+python kpms/urov-lab/tools/run_crc_device.py --serial <SERIAL> --key <KP_KEY> --dobby-detection --repeats 48 --cycles 10
+python kpms/urov-lab/tools/run_elimination_device.py --serial <SERIAL> --key <KP_KEY> --skip-x-control --repeats 8 --cycles 2
+python kpms/urov-lab/tools/run_crc_device.py --serial <SERIAL> --key <KP_KEY> --skip-install --repeats 5 --cycles 1
+python kpms/urov-lab/tools/run_multipage_device.py --serial <SERIAL> --key <KP_KEY> --skip-install --repeats 3 --cycles 1
 ```
 
-(End of file - total 68 lines)

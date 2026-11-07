@@ -10,6 +10,8 @@
  *   - ud_observe_unreserved_status() and ud_observe_unreserved_nop_status()
  *     see no PAGE_AP store after CLREX: a direct branch to the load or to a
  *     NOP in the LDXR gap is rejected by the bridge.
+ *   - the cross-page branch probe matches on active PAGE_AP, including
+ *     reads outside the caller window and equal-value overlays.
  *   - ud_observe_reader() outside the business window returns original bytes.
  *   - ud_observe_execution() on the canary matches only in active PAGE_UXN.
  *   - ud_observe_unreserved_store() confirms STXR never writes without an
@@ -165,11 +167,11 @@ static void elimination_exec_case(const char *name, const struct page *reference
 }
 
 static void elimination_bridge_case(const char *name, const struct page *page, unsigned delta,
-                                    enum ud_verdict expected_nop)
+                                    enum ud_verdict expected_cross_page)
 {
     const void *target = page->address + page->entry + delta;
     const void *control = (const uint8_t *)(uintptr_t)&ud_payload + delta;
-    struct ud_store_observation obs, nop, indirect;
+    struct ud_store_observation obs, nop, indirect, cross_page;
     errno = EDOM;
     ud_observe_unreserved_status(target, control, page->fd,
                                  page->file_offset + page->entry + delta, &obs);
@@ -178,10 +180,10 @@ static void elimination_bridge_case(const char *name, const struct page *page, u
             name, obs.verdict, obs.completed, obs.error);
     ud_observe_unreserved_nop_status(target, control, page->fd,
                                      page->file_offset + page->entry + delta, &nop);
-    REQUIRE(errno == EDOM && nop.verdict == expected_nop && nop.completed == UD_STORE_TRIALS &&
+    REQUIRE(errno == EDOM && nop.verdict == UD_NO_MATCH && nop.completed == UD_STORE_TRIALS &&
             !nop.unexpected_stores,
-            "UY NOP branch %s expected=%d verdict=%d trials=%u stores=%u error=%d",
-            name, expected_nop, nop.verdict, nop.completed, nop.unexpected_stores, nop.error);
+            "UY NOP branch %s verdict=%d trials=%u stores=%u error=%d",
+            name, nop.verdict, nop.completed, nop.unexpected_stores, nop.error);
     ud_observe_unreserved_indirect_status(target, control, page->fd,
                                           page->file_offset + page->entry + delta, &indirect);
     REQUIRE(errno == EDOM && indirect.verdict == UD_NO_MATCH &&
@@ -189,14 +191,24 @@ static void elimination_bridge_case(const char *name, const struct page *page, u
             "UY indirect branch %s verdict=%d trials=%u stores=%u error=%d",
             name, indirect.verdict, indirect.completed, indirect.unexpected_stores,
             indirect.error);
+    ud_observe_unreserved_cross_page_status(target, control, page->fd,
+                                            page->file_offset + page->entry + delta, &cross_page);
+    REQUIRE(errno == EDOM && cross_page.verdict == expected_cross_page &&
+            cross_page.completed == UD_STORE_TRIALS,
+            "UY cross-page branch %s expected=%d verdict=%d trials=%u successes=%u error=%d",
+            name, expected_cross_page, cross_page.verdict, cross_page.completed,
+            cross_page.unexpected_stores, cross_page.error);
     LOG("ELIM_BRIDGE name=%s expected=%d verdict=%d trials=%u successes=%u elapsed_ns=%llu "
         "nop_expected=%d nop_verdict=%d nop_trials=%u nop_successes=%u nop_elapsed_ns=%llu "
-        "indirect_verdict=%d indirect_trials=%u indirect_successes=%u indirect_elapsed_ns=%llu",
+        "indirect_verdict=%d indirect_trials=%u indirect_successes=%u indirect_elapsed_ns=%llu "
+        "cross_page_expected=%d cross_page_verdict=%d cross_page_trials=%u cross_page_successes=%u "
+        "cross_page_elapsed_ns=%llu",
         name, UD_NO_MATCH, obs.verdict, obs.completed, obs.unexpected_stores,
-        (unsigned long long)obs.elapsed_ns, expected_nop, nop.verdict, nop.completed,
+        (unsigned long long)obs.elapsed_ns, UD_NO_MATCH, nop.verdict, nop.completed,
         nop.unexpected_stores, (unsigned long long)nop.elapsed_ns, indirect.verdict,
         indirect.completed, indirect.unexpected_stores,
-        (unsigned long long)indirect.elapsed_ns);
+        (unsigned long long)indirect.elapsed_ns, expected_cross_page, cross_page.verdict,
+        cross_page.completed, cross_page.unexpected_stores, (unsigned long long)cross_page.elapsed_ns);
 }
 
 static void elimination_each_cpu(const struct page *page, enum ud_verdict expected,
@@ -451,7 +463,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     enum ud_verdict expected_exclusive = UD_NO_MATCH;
     /* A failed native STXR must not write the sentinel. */
     enum ud_verdict expected_store = UD_NO_MATCH;
-    enum ud_verdict expected_nop = UD_NO_MATCH;
+    enum ud_verdict expected_cross_page = UD_NO_MATCH;
     unsigned base_dirty = 0, base_anon = 0;
     const uint64_t fake = UINT64_C(0x8877665544332211);
 
@@ -550,8 +562,8 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     before = st;
     store_case("active_changed", &p, 8, repeats, expected_store);
     store_case("active_outside_window", &p, 96, repeats, expected_store);
-    elimination_bridge_case("active_changed", &p, 8, expected_nop);
-    elimination_bridge_case("active_outside_window", &p, 96, expected_nop);
+    elimination_bridge_case("active_changed", &p, 8, expected_cross_page);
+    elimination_bridge_case("active_outside_window", &p, 96, expected_cross_page);
     if (mode == UROV_Y_MODE_PAGE_AP) elimination_each_cpu(&p, expected_store, 1);
     same_session = !uy_status(&ctx, &st) && st.state == UROV_Y_ACTIVE &&
         st.mode == before.mode && st.generation == before.generation && st.value == before.value &&
@@ -594,7 +606,7 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     elimination_case("active_equal_value", &p, 8, repeats, expected_exclusive);
     elimination_exec_case("active_equal_value", &reference, repeats, expected_exec);
     store_case("active_equal_value", &p, 8, repeats, expected_store);
-    elimination_bridge_case("active_equal_value", &p, 8, expected_nop);
+    elimination_bridge_case("active_equal_value", &p, 8, expected_cross_page);
 
     REQUIRE(!uy_status(&ctx, &st) && st.state == UROV_Y_ACTIVE &&
             st.generation == generation + 2 && st.failures == 0 &&

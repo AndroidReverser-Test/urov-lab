@@ -1,6 +1,81 @@
 # UROV-Y 读取完整性复核结果
 
-本文保留 2.7.0 及更早的复核记录；最新一轮 2.8.0 的结果在前。
+本文最新一轮 2.9.0 的结果在前；2.8.0 及更早保留在后。
+
+## 2.9.0：REGISTER 期全进程分支目标位图
+
+2026-11-07，Pixel 6（oriole），Android 16，`6.1.134-android14-11`，4 KiB，
+KernelPatch `0xc00`。被测构建：
+
+```text
+urov-y.kpm      f7d55fd8e96c6f6ba3a5e3af5aab8b33f2c6cdca300f5df074d7eccff30cb96d
+urovdetect.apk  2ad6df7061ad2e3a307b265cca407de37a6e7e6197f9e3476b0310d86df8132e
+```
+
+本轮消除 2.8.0 的现役特征：跨页直接分支探针。`REGISTER` 在清任何 `AP[1]`
+之前，先枚举会话 `mm` 的所有可读可执行 VMA，把全部
+`B/BL/B.cond/CBZ/CBNZ/TBZ/TBNZ` 的静态目标写入按 VMA 划分的位图；故障时只查
+`[LDXR+4, load]`。`uy_llsc_prepare()` 的寄存器、宽度、自然对齐和
+`Rt == [Xn]` 条件不变；`uy_llsc_commit()` 仍是同一地址、宽度和值的 nofault
+普通写。
+
+先试的硬件独占监视器方案在异常进入时失效：handler 内清 `PAN` 后发出的真实
+`STXR` 在 2656 次尝试中全部失败（`dbg prepare=2656 pte=0 ok=0 fail=2656`），
+因此改为注册期位图，避免读取路径出现首次扫描的 50–130 ms 尖峰。最终读取路径
+的 `ELIM_TIMING mode=ap site_call_ns=283` 与 2.8.0 的 281 同量级。
+
+### 真机结果
+
+| 矩阵 | 结果 | 目录 |
+| --- | --- | --- |
+| Dobby 检测 24×5 | PASS；活动阶段 `execute=0x1235`、`live=96964c4f`（等于文件）、`accepted_crc=24/24`、`cross_page_successes=0/768`、`bridge/nop/ind` 均 0；平均探针 3.03–3.27 ms，最大 7.68 ms | [dobby-detect-20261107-184405](results/dobby-detect-20261107-184405/summary.json) |
+| 消除矩阵 3×1 | PASS，11 次运行、1438 条断言；`ELIM_BRIDGE` 四项均 `verdict=0 trials=32 successes=0`；`ELIM_TIMING mode=ap site_call_ns=283` | [eliminate-20261107-184445](results/eliminate-20261107-184445/summary.json) |
+| CRC 5×1 | PASS，9 次运行（BRK/UXN/AP/AP-all/text/libc/big） | [crc-20261107-184601](results/crc-20261107-184601/summary.json) |
+| 多页 3×1 | PASS，5 次运行（`mp-multi`/`mp-ld1`/`mp-cross`/`mp-srcpage`/`mp-audit`） | [multipage-20261107-184622](results/multipage-20261107-184622/summary.json) |
+
+测试进程的分支位图为 358 个可执行 VMA、6,000,742 字节；`REGISTER` 扫描约
+240 ms。该成本只在显式注册路径，故障路径只做位测试。测试前后 boot ID 一致，
+`kernel_issues=[]`，`kpm list` 为空。
+
+### 审计特征点现状（2.9.0 PAGE_AP）
+
+| 审计条目 | 2.9.0 `PAGE_AP` 状态 |
+| --- | --- |
+| 1. `LDXR/LDRB/STXR` 独占探针 | 顺序到达由桥完成；直接分支（含跨页、跨映射、任意距离）由注册期位图拒绝；间接分支目标仍在 GPR 时由 GPR 门控拒绝。 |
+| 1b. 无预约 `STXR` 状态探针 | 直接/NOP/间接/跨页四种形状均 0/32；预置 `Rt==[Xn]` 也需 LDXR 真的执行，否则被分支/GPR 门控拦下。 |
+| 2. BRK 代码字 / UXN 取指 canary | AP 不改代码页、不改取指权限；代码字与 smaps 仍等于基线。 |
+| 3. 业务读者/独立读者差异 | `caller_count=0` 时所有读者拿同一伪视图；带窗口的 `crc-ap` 仍只让窗口内读者拿伪值。 |
+| 4. 固定 `prctl` 指纹 | 每次加载派生 option/MAC；未认证请求仍是原生 `EINVAL`。 |
+
+### 残余（2.9.0）
+
+1. `REGISTER` 之后新建的可执行映射不在位图中；从这种映射跳入 `[LDXR+4, load]`
+   的跨映射直接分支仍可绕过。
+2. 不可读的可执行页（XOM）或 `REGISTER` 时未驻留的代码页无法 nofault 复制，
+   其中的直接分支源不被扫描。
+3. 间接分支的目标寄存器若在 load 前被覆盖，GPR 门控看不到（§16.5 残余）。
+4. 注册路径新增一次全进程代码扫描：测试进程 358 个可执行 VMA、6.0 MB 位图、
+   约 240 ms；读取路径不变。
+5. 每次读取仍一次同步异常；PTE 重装窗口、root 可见性、注册事务窗口不变；桥的
+   store 仍是内核 nofault 普通写，不是硬件独占 store；`caller_count > 0` 的窗口
+   内外读者差异仍是有意保留的 API 语义。
+
+### 复跑
+
+```powershell
+.\kpms\urov-lab\build.ps1
+.\kpms\urov-lab\apps\urov-detect\build.ps1
+python .\kpms\urov-lab\tools\run_crc_device.py --serial <SERIAL> --key <KP-KEY> `
+  --dobby-detection --repeats 24 --cycles 5
+python .\kpms\urov-lab\tools\run_elimination_device.py --serial <SERIAL> --key <KP-KEY> `
+  --skip-x-control --repeats 3 --cycles 1
+python .\kpms\urov-lab\tools\run_crc_device.py --serial <SERIAL> --key <KP-KEY> `
+  --skip-install --repeats 5 --cycles 1
+python .\kpms\urov-lab\tools\run_multipage_device.py --serial <SERIAL> --key <KP-KEY> `
+  --skip-install --repeats 3 --cycles 1
+```
+
+以下为 2.8.0 及更早的复核记录。
 
 ## 2.8.0：移除 SRC_FILE，统一 SRC_USER 整页
 

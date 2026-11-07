@@ -93,6 +93,14 @@ void ud_observe_unreserved_indirect_status(const void *address, const void *refe
                                            int backing_fd, off_t offset,
                                            struct ud_store_observation *out);
 
+/* Same contract, with a direct branch from another code page. On 4/16 KiB
+ * systems this tests the one-page branch scan in the UROV-Y 2.8.0 PAGE_AP
+ * bridge. MATCH requires all 32 target STXRs to report success without a
+ * reservation, with native failure on both controls in every trial. */
+void ud_observe_unreserved_cross_page_status(const void *address, const void *reference,
+                                             int backing_fd, off_t offset,
+                                             struct ud_store_observation *out);
+
 /* Observe instruction fetch on an app-owned canary. Both addresses must be
  * 8-byte aligned, callable immutable RX entries for the same file bytes in
  * different virtual pages. The entry must contain exactly BTI C; RET (x30).

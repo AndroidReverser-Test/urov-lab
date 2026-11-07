@@ -1174,3 +1174,71 @@ urovdetect.apk  e21607a7cd45c6061458eb3e4094c2c43e58f1a430980da4215e4572dbb8954d
 > `mp-srcfile` 改为 `mp-srcpage`。上述 LL/SC 门控与结果不变，2.8.0 的
 > Dobby 24×1 `accepted_crc=24/24`、多页 5 项、CRC 9 次、消除矩阵 11 次
 > 运行继续 PASS。
+
+## 17. 第九轮：REGISTER 期全进程分支目标位图
+
+### 17.1 触发本轮的特征
+
+2.8.0 的跨页探针把 `B` 放在故障 `LDRB` 所在页之前（`.p2align 14` 对齐），
+`uy_llsc_skipped()` 只扫描故障页，因此仍然代写；探针预置 `Rt == [Xn]` 满足
+寄存器存证，`CLREX` 只影响原生 `STXR`，不影响 handler。真机矩阵为
+`cross_page MATCH 480/480`。
+
+### 17.2 被否决的方案：硬件独占监视器
+
+先尝试在 handler 里清 `PAN` 后对 STXR 目标发真实 `STXR`，用本地监视器判断
+`LDXR` 是否真的执行。Pixel 6 上 `dbg prepare=2656 pte=0 ok=0 fail=2656`：
+异常进入已使本地监视器回到 Open Access，该方案不可用。若把扫描放在故障路径，
+首次访问每个新读取页要 50–130 ms，形成新的读取时间特征，也不采用。
+
+### 17.3 机制
+
+`REGISTER` 在 `ap_arm_pages()` 清任何 `AP[1]` 之前调用 `uy_code_build()`：
+
+1. 在 `mmap` 读锁下用 `find_vma()` 枚举会话 `mm` 的所有 VMA；
+2. 只保留同时带 `VM_READ | VM_EXEC` 的 VMA，记录 `[start, end)`；
+3. 逐块 nofault 复制代码，解码 `B/BL/B.cond/CBZ/CBNZ/TBZ/TBNZ`，把每个静态
+   目标写入目标 VMA 的位图（每 4 字节指令一位，即代码虚拟跨度的 1/32）；
+4. 保存为 `struct uy_code_map`，`DEACTIVATE`/卸载时释放。
+
+故障时 `uy_llsc_skipped(ldxr_pc, pc)` 只检查 `[ldxr_pc+4, pc]` 的 1–4 个槽位。
+命中说明存在从任何已扫描代码进入 `LDXR..load` 区间的直接分支，handler 不代写，
+让原生 `STXR` 报失败。位图不可用时退回 2.7.0 的单页扫描。
+
+### 17.4 为什么没有引入新的可观察量
+
+- 没有新增 hook、syscall 表项、PTE/VMA/代码字节改动，也没有新增内核日志、
+  `ctl0 status` 字段或 ABI 版本变化。
+- 扫描是只读的：`mmap` 读锁 + `copy_from_user_nofault`，不写用户内存，不分配
+  用户可见对象。位图只在 `REGISTER` 构建，故障路径只做 O(1) 位测试，读取延迟
+  与 2.8.0 相同。
+- 位图内存约为可执行虚拟地址跨度的 1/32；测试进程为 6.0 MB，注册后随会话释放。
+- 注册路径增加一次约 240 ms 的全进程代码扫描，这是显式的控制操作，不在 CRC
+  读取循环里。
+
+### 17.5 残余特征与限制（诚实清单）
+
+1. **注册后新建的可执行映射**不在位图中；从该映射跳入 span 的直接分支仍可
+   绕过。位图不随 VMA 变化重建。
+2. **不可读或未驻留的可执行页**：XOM 页不能 nofault 复制，被换出的代码页在
+   `REGISTER` 时不触发缺页，所以其中的直接分支源不被扫描；目标 `PC` 落在位图外
+   时 `uy_code_hit()` 返回 0。
+3. **间接分支目标寄存器被覆盖**：同 §16.5 第 1 条。
+4. **注册成本**：一次全进程扫描（测试进程 358 个可执行 VMA、6.0 MB、约
+   240 ms）。
+5. PTE 重装窗口、root 可见性、注册事务窗口、桥的非硬件独占语义、
+   `caller_count > 0` 的窗口语义不变。
+
+### 17.6 真机验证
+
+Pixel 6，Android 16，`6.1.134-android14-11`，4 KiB，KernelPatch `0xc00`。
+构建 `urov-y.kpm f7d55fd8...`、`urovdetect.apk 2ad6df70...`。
+
+| 矩阵 | 结果 | 目录 |
+| --- | --- | --- |
+| Dobby 检测 24×5 | PASS；活动阶段 `accepted_crc=24/24`、`cross_page_successes=0/768`、`bridge/nop/ind` 均 0；探针均值 3.03–3.27 ms，最大 7.68 ms | [dobby-detect-20261107-184405](results/dobby-detect-20261107-184405/summary.json) |
+| 消除矩阵 3×1 | PASS，11 次运行、1438 条断言；四项 `ELIM_BRIDGE` 均 0/32；`ELIM_TIMING mode=ap site_call_ns=283` | [eliminate-20261107-184445](results/eliminate-20261107-184445/summary.json) |
+| CRC 5×1 | PASS，9 次运行 | [crc-20261107-184601](results/crc-20261107-184601/summary.json) |
+| 多页 3×1 | PASS，5 次运行 | [multipage-20261107-184622](results/multipage-20261107-184622/summary.json) |
+
+测试前后 boot ID 一致，`kernel_issues=[]`，`kpm list` 为空。

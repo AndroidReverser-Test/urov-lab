@@ -145,8 +145,8 @@ def main():
             last = stages[2] if active else stages[-1]
             print(f"{label} PASS execute={last['execute']} file={last['file']} live={last['live']} "
                   f"bridge={last['bridge_match']}/{last['n']} spaced={last['spaced_match']}/{last['n']} "
-                  f"nop={last['match']}/{last['n']} ind={last.get('ind_match', '?')}/{last['n']} "
-                  f"unknown={last['unknown']} "
+                  f"nop={last['nop_match']}/{last['n']} ind={last['ind_match']}/{last['n']} "
+                  f"cross_page={last['match']}/{last['n']} unknown={last['unknown']} "
                   f"accepted_crc={last['accepted_crc']}", flush=True)
             return
         if mode in ("crc-ap-text", "crc-ap-libc", "crc-ap-big"):

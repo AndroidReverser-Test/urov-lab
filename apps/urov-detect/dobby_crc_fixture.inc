@@ -261,8 +261,9 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
     unsigned spaced_match = 0, spaced_unknown = 0, spaced_accepted = 0;
     unsigned spaced_failed = 0, spaced_control_failed = 0;
     unsigned bridge_match = 0, bridge_unknown = 0, bridge_trials = 0, bridge_successes = 0;
-    unsigned nop_trials = 0, nop_successes = 0;
+    unsigned nop_match = 0, nop_trials = 0, nop_successes = 0;
     unsigned ind_match = 0, ind_trials = 0, ind_successes = 0;
+    unsigned cross_page_trials = 0, cross_page_successes = 0;
     uint64_t total_ns = 0, max_ns = 0;
     uint32_t live_crc = 0, returned = 0;
 
@@ -270,7 +271,7 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
     for (int i = 0; i < repeats; ++i) {
         uint8_t bytes[DOBBY_CRC_BYTES];
         struct ud_exclusive_observation adjacent, spaced;
-        struct ud_store_observation bridge, nop, indirect;
+        struct ud_store_observation bridge, nop, indirect, cross_page;
         copy_scalar(bytes, text, sizeof(bytes));
         live_crc = (uint32_t)crc32(0, bytes, sizeof(bytes));
         returned = dobby_crc_payload();
@@ -284,6 +285,8 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
         ud_observe_unreserved_nop_status(text + sample, control, reference->fd, offset, &nop);
         ud_observe_unreserved_indirect_status(text + sample, control, reference->fd, offset,
                                               &indirect);
+        ud_observe_unreserved_cross_page_status(text + sample, control, reference->fd, offset,
+                                                &cross_page);
         REQUIRE(errno == EDOM, "Dobby %s changed errno", name);
         adjacent_match += adjacent.reservation_loss == UD_MATCH;
         adjacent_unknown += adjacent.reservation_loss == UD_UNKNOWN;
@@ -296,18 +299,21 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
         bridge_unknown += bridge.verdict == UD_UNKNOWN;
         bridge_trials += bridge.completed;
         bridge_successes += bridge.unexpected_stores;
+        nop_match += nop.verdict == UD_MATCH;
         nop_trials += nop.completed;
         nop_successes += nop.unexpected_stores;
         ind_match += indirect.verdict == UD_MATCH;
         ind_trials += indirect.completed;
         ind_successes += indirect.unexpected_stores;
-        matched += nop.verdict == UD_MATCH;
-        clean += nop.verdict == UD_NO_MATCH;
-        unknown += nop.verdict == UD_UNKNOWN;
+        cross_page_trials += cross_page.completed;
+        cross_page_successes += cross_page.unexpected_stores;
+        matched += cross_page.verdict == UD_MATCH;
+        clean += cross_page.verdict == UD_NO_MATCH;
+        unknown += cross_page.verdict == UD_UNKNOWN;
         crc_pass += live_crc == file_crc;
-        accepted_crc += live_crc == file_crc && nop.verdict == UD_NO_MATCH;
-        total_ns += nop.elapsed_ns;
-        if (nop.elapsed_ns > max_ns) max_ns = nop.elapsed_ns;
+        accepted_crc += live_crc == file_crc && cross_page.verdict == UD_NO_MATCH;
+        total_ns += cross_page.elapsed_ns;
+        if (cross_page.elapsed_ns > max_ns) max_ns = cross_page.elapsed_ns;
     }
     REQUIRE(!adjacent_match && adjacent_unknown < (unsigned)repeats,
             "Dobby %s adjacent match=%u unknown=%u", name, adjacent_match, adjacent_unknown);
@@ -326,12 +332,13 @@ static void dobby_detection_stage(const char *name, const uint8_t *text,
         "accepted_crc=%u match=%u clean=%u unknown=%u adjacent_match=%u adjacent_unknown=%u "
         "spaced_match=%u spaced_unknown=%u spaced_accepted=%u spaced_failed=%u "
         "spaced_control_failed=%u bridge_match=%u bridge_unknown=%u bridge_trials=%u "
-        "bridge_successes=%u nop_trials=%u nop_successes=%u ind_match=%u ind_trials=%u "
-        "ind_successes=%u probe_mean_ns=%llu probe_max_ns=%llu",
+        "bridge_successes=%u nop_match=%u nop_trials=%u nop_successes=%u ind_match=%u ind_trials=%u "
+        "ind_successes=%u cross_page_trials=%u cross_page_successes=%u probe_mean_ns=%llu probe_max_ns=%llu",
         name, repeats, returned, file_crc, live_crc, crc_pass, accepted_crc, matched, clean,
         unknown, adjacent_match, adjacent_unknown, spaced_match, spaced_unknown, spaced_accepted,
         spaced_failed, spaced_control_failed, bridge_match, bridge_unknown, bridge_trials,
-        bridge_successes, nop_trials, nop_successes, ind_match, ind_trials, ind_successes,
+        bridge_successes, nop_match, nop_trials, nop_successes, ind_match, ind_trials, ind_successes,
+        cross_page_trials, cross_page_successes,
         (unsigned long long)(total_ns / repeats),
         (unsigned long long)max_ns);
 }

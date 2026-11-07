@@ -1,0 +1,13 @@
+--------- beginning of main
+10-04 09:19:47.730 10597 10620 I urovdetect: CONTEXT pid=10597 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 09:19:47.730 10597 10620 I urovdetect: BEGIN mode=z-quiesce repeats=3
+10-04 09:19:47.804 10597 10620 I urovdetect: ELIM_EXEC name=hold_active n=3 expected=1 match=3 clean=0 unknown=0 accepted=288 failed=288 control_failed=0 total_ns=28994018 max_ns=10778564
+10-04 09:19:47.817 10597 10620 I urovdetect: ELIM_STORE name=hold_active n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=11713501 max_ns=4464356
+10-04 09:19:47.817 10597 10620 I urovdetect: ELIM_HOLD_READY pid=10597 uid=10284 mode=page
+10-04 09:19:59.874 10597 10620 I urovdetect: ELIM_HOLD_QUIESCED pid=10597 mode=page
+10-04 09:20:01.965 10597 10620 I urovdetect: ELIM_HOLD_RESTORED pid=10597 opcode=f9400000 direct=f2c66881f2aaacc1 private_dirty_kb=0 anonymous_kb=0 base_dirty_kb=0 base_anonymous_kb=0
+10-04 09:20:02.089 10597 10620 I urovdetect: ELIM_EXEC name=hold_restored n=3 expected=0 match=0 clean=3 unknown=0 accepted=288 failed=0 control_failed=0 total_ns=119625529 max_ns=41980550
+10-04 09:20:02.204 10597 10620 I urovdetect: ELIM_STORE name=hold_restored n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=111775188 max_ns=38566285
+10-04 09:20:02.205 10597 10620 I urovdetect: CONTEXT pid=10597 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-04 09:20:02.205 10597 10620 I urovdetect: NATIVE_RESULT PASS cases=5 assertions=41 failures=0 mode=z-quiesce
+10-04 09:20:02.211 10597 10597 I urovdetect: DETECT_RESULT PASS mode=z-quiesce worker_ms=14475 ui_ticks=1457 ui_max_gap_ms=24 native=PASS cases=5 assertions=41 failures=0

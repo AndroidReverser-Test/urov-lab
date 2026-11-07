@@ -6,6 +6,12 @@
 > 提供（每页一次最多一页）；Dobby/多页/CRC/消除矩阵已复跑。2.7.0 的整页直接
 > 分支/NOP/间接分支门控见 [ELIMINATION_DESIGN.md §16](ELIMINATION_DESIGN.md#16-第八轮nop-间隔分支与间接分支门控)，
 > 最新真机数据见 [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md)。
+>
+> 2026-11-07 补充：`urov-y` 2.9.0 在 `REGISTER` 期构建全进程直接分支目标位图，
+> 消除 2.8.0 仍命中的跨页 LL/SC 探针；Dobby 24×5 活动阶段
+> `cross_page_successes=0/768`、`accepted_crc=24/24`，读取路径耗时不变。见
+> [ELIMINATION_DESIGN.md §17](ELIMINATION_DESIGN.md#17-第九轮register-期全进程分支目标位图)
+> 与 [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.9.0 节。
 
 **独立 KPM 已在 Pixel 6 上完成活动覆盖验收。** `urov-lab.kpm` 自带解码/模拟核心、EL0 数据异常后端和控制 syscall hook，不再依赖任何外部宿主补丁或内置内核后端。普通 `load` 读取注册页时获得伪造值，同一页的取指仍执行原始机器码；更新、注销和卸载均已验证。
 
