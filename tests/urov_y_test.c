@@ -166,7 +166,7 @@ static long y_control(const struct y_ctx *ctx, unsigned op, struct urov_y_reques
     q->version = UROV_Y_ABI_VERSION;
     q->op = (uint16_t)op;
     q->mac = urov_y_request_mac(ctx->keys.mac, q);
-    return syscall(__NR_prctl, (long)ctx->keys.option, (long)ctx->keys.magic,
+    return syscall(__NR_prctl, (long)ctx->keys.option, (long)UROV_Y_PRCTL_MAGIC,
                    (long)op, q, (long)sizeof(*q));
 }
 
@@ -286,8 +286,7 @@ static int run_clean(void)
     memset(&ctx.keys, 0x5a, sizeof(ctx.keys));
     ctx.have = 1;
     errno = 0;
-    rc = syscall(__NR_prctl, (long)ctx.keys.option, (long)ctx.keys.magic,
-                 (long)UROV_Y_STATUS, &q, (long)sizeof(q));
+    rc = y_control(&ctx, UROV_Y_STATUS, &q);
     CHECK(rc == -1 && errno == EINVAL, "clean selector rc=%ld errno=%d", rc, errno);
     errno = 0;
     rc = syscall(__NR_prctl, 0x55524f56L, 0x55524f5653595343ULL, 1L, &q, 240L);
@@ -330,6 +329,16 @@ static int run_active(const char *key, unsigned mode)
     int rc;
 
     if (y_init_key(&ctx, key)) { fprintf(stderr, "bad key\n"); return 2; }
+    struct urov_y_request query = y_req(UROV_Y_QUERY);
+    query.mac = urov_y_request_mac(ctx.keys.mac, &query);
+    long selector_rc = syscall(__NR_prctl, (long)ctx.keys.option, (long)ctx.keys.magic,
+                               (long)UROV_Y_QUERY, &query, (long)sizeof(query));
+    CHECK(selector_rc == -1 && errno == EINVAL, "old magic rc=%ld errno=%d", selector_rc, errno);
+    query.mac ^= 1;
+    selector_rc = syscall(__NR_prctl, (long)ctx.keys.option, (long)UROV_Y_PRCTL_MAGIC,
+                          (long)UROV_Y_QUERY, &query, (long)sizeof(query));
+    CHECK(selector_rc == -1 && errno == EINVAL, "invalid MAC rc=%ld errno=%d", selector_rc, errno);
+
     if (page_open(&p)) { fprintf(stderr, "page open errno=%d\n", errno); return 2; }
     original = load64_scalar(p.address + WIN);
     st0 = load32_scalar((const void *)&uy_site_ldr);

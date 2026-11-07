@@ -5,9 +5,8 @@
  * Load with a secret shared out of band:
  *   kpm load urov-y.kpm "key=<32 hex digits>"
  *
- * The module derives the prctl selector words, the request MAC key and the BRK
- * immediate from the secret. It installs the BRK site trap and silently ignores
- * every control request that does not carry a valid MAC.
+ * The prctl magic is fixed. The module derives the option word, request MAC
+ * key and BRK immediate from the secret and ignores requests with invalid MACs.
  */
 #include <compiler.h>
 #include <kpmodule.h>
@@ -18,7 +17,7 @@
 #include "urov_y_backend.h"
 
 KPM_NAME("urov-y");
-KPM_VERSION("2.4.0");
+KPM_VERSION("2.4.1");
 KPM_LICENSE("GPL v2");
 KPM_AUTHOR("UROV-Y");
 KPM_DESCRIPTION("Reader-site trap ARM64 user read overlay: BRK, UXN page trap or AP[1] data trap");

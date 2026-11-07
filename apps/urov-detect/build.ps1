@@ -3,31 +3,34 @@ param(
     [string]$Sdk = 'D:\androidSDK',
     [switch]$Observer,
     [switch]$Install,
-    [string]$Serial = ''
+    [string]$Serial = '',
+    [string]$Cmake = (Join-Path $Sdk 'cmake\3.22.1\bin\cmake.exe')
 )
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
-$lab = [IO.Path]::GetFullPath((Join-Path $here '..\..'))
 $out = Join-Path $here 'out'
 $classes = Join-Path $out 'classes'
 $dex = Join-Path $out 'dex'
+$native = Join-Path $out 'native'
 $bin = Join-Path $Ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin'
+$toolchain = Join-Path $Ndk 'build\cmake\android.toolchain.cmake'
+$ninja = Join-Path (Split-Path -Parent $Cmake) 'ninja.exe'
 $tools = Join-Path $Sdk 'build-tools\36.0.0'
 $jar = Join-Path $Sdk 'platforms\android-36\android.jar'
 $key = Join-Path $env:USERPROFILE '.android\debug.keystore'
 $manifest = if ($Observer) { 'ObserverManifest.xml' } else { 'AndroidManifest.xml' }
 $apkName = if ($Observer) { 'urovobserver.apk' } else { 'urovdetect.apk' }
-foreach ($tool in @("$bin\clang.exe", "$tools\aapt2.exe", "$tools\d8.bat", $jar, $key)) {
+foreach ($tool in @("$bin\clang.exe", $Cmake, $ninja, $toolchain, "$tools\aapt2.exe", "$tools\d8.bat", $jar, $key)) {
     if (!(Test-Path -LiteralPath $tool)) { throw "Missing tool: $tool" }
 }
 New-Item -ItemType Directory -Force -Path $out, $classes, $dex | Out-Null
-& "$bin\clang.exe" --target=aarch64-linux-android30 -std=gnu11 -shared -fPIC -O2 -g0 `
-    -Wall -Wextra -Werror -Wformat=2 -Wshadow -fno-omit-frame-pointer -pthread `
-    '-Wl,--build-id=sha1' '-Wl,-z,noexecstack' '-Wl,-z,max-page-size=16384' `
-    -I (Join-Path $lab 'native') (Join-Path $here 'app.c') `
-    (Join-Path $lab 'native\urov_detect.c') (Join-Path $lab 'native\urov_observe.c') `
-    -o (Join-Path $out 'liburovdetect.so') -llog -ldl -lz
+& $Cmake -S $here -B $native -G Ninja "-DCMAKE_MAKE_PROGRAM=$ninja" `
+    "-DCMAKE_TOOLCHAIN_FILE=$toolchain" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 `
+    -DANDROID_STL=c++_static -DCMAKE_BUILD_TYPE=Release
+if ($LASTEXITCODE -ne 0) { throw 'Native configure failed' }
+& $Cmake --build $native --target urovdetect
 if ($LASTEXITCODE -ne 0) { throw 'Native build failed' }
+Copy-Item -LiteralPath (Join-Path $native 'liburovdetect.so') -Destination $out -Force
 if (!$Observer) {
     & "$bin\clang.exe" --target=aarch64-linux-android30 -std=gnu11 -shared -fPIC -O2 -g0 `
         -Wall -Wextra -Werror -Wformat=2 -Wshadow `

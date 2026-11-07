@@ -1,8 +1,8 @@
 # UROV-LAB
 
-`urov-y` 2.4.0 保持 ABI v8，面向 Android ARM64 的 5.4 起的 5.x 和 6.x 内核。
-本版加固参数校验、并发镜像发布和陷阱撤销，支持 4 KiB 及符合条件的 16 KiB 页表，
-并移除了 `PAGE_AP` 的 LL/SC 代写。实测、支持边界和复跑命令见
+`urov-y` 2.4.1 将 `prctl` 的 magic 固定为 `UROVYLAB`，保留 ABI v8 请求布局和 MAC 校验。
+2.4.0 的参数校验、并发镜像发布和陷阱撤销适配继续用于 Android ARM64 的 5.4 起的 5.x 和 6.x 内核，
+支持 4 KiB 及符合条件的 16 KiB 页表。实测、支持边界和复跑命令见
 [UROV-Y 兼容性与审计](COMPATIBILITY_Y.md)。下方日期条目保留各历史版本的行为和证据。
 
 2026-11-06 ABI v8 多页/宽 load：`urov-y` 的 `PAGE_AP` 模式从"一页一会话"
@@ -138,6 +138,11 @@ UROV-LAB 是一个适用于 Android arm64 的独立 KPM：把一个一页只读�
 `SET` / `SET_PAGE` 校验代际号，构建新镜像后原子发布。注销或卸载时恢复读取点或页权限，
 再关闭读侧并等待在途回调释放会话引用。[控制与模拟实现](urov_y_backend.c)
 
+2.4.1 的控制调用为 `syscall(__NR_prctl, option, UROV_Y_PRCTL_MAGIC, op, &req, sizeof(req))`。
+`UROV_Y_PRCTL_MAGIC` 的值为 `0x42414c59564f5255`，是 `UROVYLAB` 的 8 字节小端编码。
+`option` 和请求 MAC 密钥仍由加载参数 `key=` 派生。客户端需与 KPM 一起更新。
+[控制 ABI](urov_y_abi.h)
+
 | 模式 | 触发入口 | 修改范围 |
 | --- | --- | --- |
 | `SITE_BRK` | EL0 BRK | 在读取点的私有 COW 页替换一条 load 指令 |
@@ -188,6 +193,32 @@ BTF 选择。`QUERY` 报告基础页大小、页数配额和可用模式。2.4.0
 普通 app 测试程序在 `apps/urov-app/out/urovapp.apk`，由
 `apps/urov-app/build-app.ps1` 构建（`-Hold` 生成生命周期变体
 `urovapp-hold.apk`）。
+
+## Dobby 按钮验收
+
+在 KernelPatch 仓库根目录运行 `.\kpms\urov-lab\apps\urov-detect\build.ps1 -Install`。
+脚本使用 Android SDK 的 CMake 和 Ninja，从 `Dobby/` 静态构建并链接到 `liburovdetect.so`。
+仓库内的 Dobby 基于上游提交 `5dfc8546954ce3b3198132ab13fddb89ee92cdd7`，包含 Android 构建兼容修复。
+APK 在 `apps/urov-detect/out/urovdetect.apk`。[App 构建脚本](apps/urov-detect/build.ps1)
+
+`KP_KEY` 用于设备上的 kpatch，`MODULE_KEY` 是为本次 KPM 加载选取的 128 位密钥，以 32 个十六进制字符表示。
+从 shell 启动 App 时，把相同的 `MODULE_KEY` 传给启动参数 `key`。
+
+```sh
+adb push kpms/urov-lab/out/urov-y.kpm /data/local/tmp/urov-y.kpm
+adb shell "/data/local/tmp/kpatch $KP_KEY kpm load /data/local/tmp/urov-y.kpm 'key=$MODULE_KEY'"
+adb shell am force-stop com.example.urovdetect
+adb shell "am start -n com.example.urovdetect/.MainActivity --es key $MODULE_KEY"
+```
+
+点击 **Check code CRC32**。首次点击从 ELF 文件取得参考 CRC32，并用 `DobbyHook` 改写 App 自有的
+`.text` 测试函数。替换函数经 Dobby trampoline 调用原函数，再将返回值从 `0x1234` 改为 `0x1235`。
+每次点击用 `PAGE_AP` 和 `SRC_FILE` 注册目标页，逐字节读取该函数的 32 字节机器码并计算一次内存
+CRC32。覆盖命中且模拟失败数为零、CRC 与文件相符、函数返回 `0x1235`、会话注销成功时显示 PASS。
+[Dobby 测试实现](apps/urov-detect/dobby_crc_fixture.inc)
+
+卸载对照可以在同一进程内做。先等按钮结果出现，再运行 `adb shell "/data/local/tmp/kpatch $KP_KEY kpm unload urov-y"`，
+然后再次点击。此次 CRC 应读到 Dobby 改写的字节并与文件参考值不同，函数仍返回 `0x1235`。
 
 ## 设备运行
 

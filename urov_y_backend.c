@@ -1812,7 +1812,7 @@ static void uy_prctl_before(hook_fargs6_t *args, void *udata)
 
     (void)udata;
     if ((uint32_t)sys_arg(args, 0) != (uint32_t)g_keys.option) return;
-    if (sys_arg(args, 1) != g_keys.magic) return;
+    if (sys_arg(args, 1) != UROV_Y_PRCTL_MAGIC) return;
     user = (void *)sys_arg(args, 3);
     size = (unsigned long)sys_arg(args, 4);
     if (sys_arg(args, 2) > 0xffffU) return;

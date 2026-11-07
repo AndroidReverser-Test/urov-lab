@@ -203,31 +203,6 @@ static unsigned mp_first_diff(const uint8_t *a, const uint8_t *b, size_t n)
     return (unsigned)n;
 }
 
-static int mp_register(const struct uy_ctx *ctx, const struct uy_page_desc *desc,
-                       uint32_t count, uint64_t caller_start, uint64_t caller_end,
-                       struct urov_y_request *out)
-{
-    struct urov_y_request q = uy_req(UROV_Y_REGISTER);
-    q.mode = UROV_Y_MODE_PAGE_AP;
-    q.page_count = count;
-    q.page_stride = (uint32_t)sizeof(*desc);
-    q.pages_addr = (uintptr_t)desc;
-    q.caller_count = caller_start ? 1 : 0;
-    q.caller_start[0] = caller_start;
-    q.caller_end[0] = caller_end;
-    q.site_count = 0;
-    int rc = (int)uy_control(ctx, UROV_Y_REGISTER, &q);
-    *out = q;
-    return rc;
-}
-
-static int mp_deactivate(const struct uy_ctx *ctx)
-{
-    struct urov_y_request q = uy_req(UROV_Y_DEACTIVATE);
-    q.session = 1;
-    return (int)uy_control(ctx, UROV_Y_DEACTIVATE, &q);
-}
-
 static void mp_check_status(const struct uy_ctx *ctx, unsigned pages, const char *name)
 {
     struct urov_y_request st;
@@ -280,7 +255,7 @@ static void mp_multi_case(const struct uy_ctx *ctx, int repeats)
         desc[i].flags = UROV_Y_PAGE_SRC_USER;
     }
 
-    rc = mp_register(ctx, desc, MP_MULTI_PAGES, (uintptr_t)mp_multi_start,
+    rc = uy_register_pages(ctx, desc, MP_MULTI_PAGES, (uintptr_t)mp_multi_start,
                      (uintptr_t)mp_multi_end, &q);
     active = rc == 0;
     REQUIRE(active && q.state == UROV_Y_ACTIVE && q.page_count == MP_MULTI_PAGES,
@@ -332,7 +307,7 @@ static void mp_multi_case(const struct uy_ctx *ctx, int repeats)
             (unsigned long long)set.generation, diff);
     }
 
-    rc = mp_deactivate(ctx);
+    rc = uy_deactivate(ctx);
     REQUIRE(rc == 0, "MP multi deactivate rc=%d errno=%d", rc, errno);
     memset(mp_out, 0, total);
     mp_memcpy(mp_out, mp_multi_blob, total);
@@ -434,7 +409,7 @@ static void mp_ld_case(const struct uy_ctx *ctx, int repeats)
     desc.fake_off = 0;
     desc.fake_len = mp_page_size;
     desc.flags = UROV_Y_PAGE_SRC_USER;
-    rc = mp_register(ctx, &desc, 1, (uintptr_t)mp_ld_start, (uintptr_t)mp_ld_end, &q);
+    rc = uy_register_pages(ctx, &desc, 1, (uintptr_t)mp_ld_start, (uintptr_t)mp_ld_end, &q);
     active = rc == 0;
     REQUIRE(active && q.state == UROV_Y_ACTIVE,
             "MP ld register rc=%d errno=%d state=%u", rc, errno, q.state);
@@ -475,7 +450,7 @@ static void mp_ld_case(const struct uy_ctx *ctx, int repeats)
     LOG("MP_LD_DONE readers=ld1x4/ld1x2/ld1x1/ld1_8b/post_imm/post_reg/ld2/ld3/ld4 n=%d",
         repeats);
 
-    rc = mp_deactivate(ctx);
+    rc = uy_deactivate(ctx);
     REQUIRE(rc == 0, "MP ld deactivate rc=%d errno=%d", rc, errno);
     memset(out, 0, sizeof(out));
     mp_ld_business(out, mp_ld_blob);
@@ -520,7 +495,7 @@ static void mp_cross_case(const struct uy_ctx *ctx, int repeats)
         desc[i].fake_len = mp_page_size;
         desc[i].flags = UROV_Y_PAGE_SRC_USER;
     }
-    rc = mp_register(ctx, desc, 2, (uintptr_t)mp_cross_start,
+    rc = uy_register_pages(ctx, desc, 2, (uintptr_t)mp_cross_start,
                      (uintptr_t)mp_cross_end, &q);
     active = rc == 0;
     REQUIRE(active && q.state == UROV_Y_ACTIVE && q.page_count == 2,
@@ -556,7 +531,7 @@ static void mp_cross_case(const struct uy_ctx *ctx, int repeats)
     LOG("MP_CROSS_DONE reads=ldp_page1_page2/ld1_page1_page2/ld1_tail/uncovered_page0 n=%d",
         repeats);
 
-    rc = mp_deactivate(ctx);
+    rc = uy_deactivate(ctx);
     REQUIRE(rc == 0, "MP cross deactivate rc=%d errno=%d", rc, errno);
     mp_cross_business(out, mp_cross_blob + mp_page_size, mp_cross_blob);
     REQUIRE(!memcmp(out + 64, native + mp_page_size + mp_page_size - 32, 64),
@@ -591,7 +566,7 @@ static void mp_srcfile_case(const struct uy_ctx *ctx, int repeats)
     memset(&desc, 0, sizeof(desc));
     desc.base = (uintptr_t)mp_ld_blob;
     desc.flags = UROV_Y_PAGE_SRC_FILE;
-    rc = mp_register(ctx, &desc, 1, (uintptr_t)mp_src_start,
+    rc = uy_register_pages(ctx, &desc, 1, (uintptr_t)mp_src_start,
                      (uintptr_t)mp_src_end, &q);
     active = rc == 0;
     REQUIRE(active && q.state == UROV_Y_ACTIVE && q.page_count == 1,
@@ -608,7 +583,7 @@ static void mp_srcfile_case(const struct uy_ctx *ctx, int repeats)
         REQUIRE(!memcmp(out, native, mp_page_size), "MP SRC_FILE direct read changed");
     }
     mp_check_status(ctx, 1, "srcfile");
-    rc = mp_deactivate(ctx);
+    rc = uy_deactivate(ctx);
     REQUIRE(rc == 0, "MP SRC_FILE deactivate rc=%d errno=%d", rc, errno);
     LOG("MP_SRC_FILE_DONE page=1 reads=%d", repeats);
 }
@@ -667,15 +642,15 @@ static void mp_audit_case(const struct uy_ctx *ctx)
     bad[3].flags |= UROV_Y_PAGE_SRC_FILE;
     bad[4].fake_addr = UINT64_MAX - 7;
     for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
-        rc = mp_register(ctx, &bad[i], 1, 0, 0, &q);
+        rc = uy_register_pages(ctx, &bad[i], 1, 0, 0, &q);
         int saved_errno = errno;
         REQUIRE(rc == -1 && saved_errno == EINVAL, "MP malformed desc %u rc=%d errno=%d",
                 i, rc, saved_errno);
-        if (!rc) (void)mp_deactivate(ctx);
+        if (!rc) (void)uy_deactivate(ctx);
         if (rc == -1 && saved_errno == EINVAL) ++invalid;
     }
     REQUIRE(!uy_status(ctx, &q) && q.state == UROV_Y_INACTIVE, "MP invalid REGISTER armed a trap");
-    rc = mp_register(ctx, &desc, 1, 0, 0, &q);
+    rc = uy_register_pages(ctx, &desc, 1, 0, 0, &q);
     REQUIRE(!rc && q.state == UROV_Y_ACTIVE, "MP audit REGISTER rc=%d errno=%d", rc, errno);
     if (rc) return;
     generation = q.generation;
@@ -718,7 +693,7 @@ static void mp_audit_case(const struct uy_ctx *ctx)
     if (have_thread) pthread_join(thread, NULL);
     REQUIRE(atomic_load(&worker.reads) > 0 && !atomic_load(&worker.errors), "MP concurrent read tore");
 
-    rc = mp_register(ctx, &desc, 1, 0, 0, &q);
+    rc = uy_register_pages(ctx, &desc, 1, 0, 0, &q);
     REQUIRE(!rc, "MP fork REGISTER rc=%d errno=%d", rc, errno);
     if (!rc) {
         pid_t child = fork();
@@ -732,7 +707,7 @@ static void mp_audit_case(const struct uy_ctx *ctx)
         REQUIRE(child_ok && !uy_status(ctx, &q) && q.state == UROV_Y_INACTIVE,
                 "MP fork inherited a trap or left the session active");
     }
-    (void)mp_deactivate(ctx);
+    (void)uy_deactivate(ctx);
     LOG("MP_AUDIT invalid=%u updates=%u reads=%u errors=%u child_restored=%d",
         invalid, updates, atomic_load(&worker.reads), atomic_load(&worker.errors), child_ok);
 }

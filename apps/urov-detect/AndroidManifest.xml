@@ -2,6 +2,7 @@
     <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="35"/>
     <application android:label="UROV detection lab" android:extractNativeLibs="true" android:allowBackup="false">
         <activity android:name=".MainActivity" android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
             android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>

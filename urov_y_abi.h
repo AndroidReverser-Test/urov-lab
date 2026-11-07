@@ -22,8 +22,8 @@
  * boundary are served by the same PAGE_AP data-trap path. QUERY reports the
  * running base page shift; use it to size and align descriptors and images.
  *
- * The wire ABI is a superset of the authenticated UROV-X channel: the prctl
- * selector words and the request MAC key are derived from a per-load secret.
+ * The prctl magic is fixed. The option word and request MAC key are derived
+ * from a per-load secret as in UROV-X.
  */
 #ifndef UROV_Y_ABI_H
 #define UROV_Y_ABI_H
@@ -32,6 +32,7 @@
 
 #define UROV_Y_NAME "urov-y"
 #define UROV_Y_ABI_VERSION 8U
+#define UROV_Y_PRCTL_MAGIC UINT64_C(0x42414c59564f5255) /* "UROVYLAB" in LE */
 #define UROV_Y_PAGE 4096U /* fixed size used by older 4 KiB clients */
 #define UROV_Y_PAGE_SHIFT 12U
 #define UROV_Y_MAX_PAGE 16384U

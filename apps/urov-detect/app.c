@@ -1211,6 +1211,7 @@ finish:
 #include "uy_fixture.inc"
 #include "crc_fixture.inc"
 #include "mp_fixture.inc"
+#include "dobby_crc_fixture.inc"
 
 JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
     JNIEnv *env, jclass cls, jstring mode_value, jint repeats, jstring key_value)
@@ -1227,6 +1228,10 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
     int expected_scope = !strcmp(mode, "clean") ? UD_SCOPE_UNKNOWN :
                         (!strcmp(mode, "observer") ? UD_SCOPE_OTHER : UD_SCOPE_IDLE);
     int have_thread = 0;
+    if (!strcmp(mode, "dobby-crc")) {
+        dobby_crc_check(key, result, sizeof(result));
+        goto done;
+    }
     if (repeats < 3 || repeats > 200) repeats = 30;
     g_checks = g_fail = g_cases = 0;
     log_context();
