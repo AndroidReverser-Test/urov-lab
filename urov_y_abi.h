@@ -22,6 +22,15 @@
  * boundary are served by the same PAGE_AP data-trap path. QUERY reports the
  * running base page shift; use it to size and align descriptors and images.
  *
+ * 2.18.0 closes the two keyless residuals that 2.17.0 still had.  A
+ * process_vm_readv() no longer rebuilds its destination from user memory: the
+ * pinned source page is replaced with the page that holds the overlay view, so
+ * the kernel copies the image (or snapshot) to the destination it imported
+ * itself and the double-iovec self-reference trick writes nothing.  A writer
+ * outside the module no longer retires a page either: the live bytes are
+ * snapshotted when the writer gets write access, the AP[1] trap is re-armed,
+ * and the next read merges only the changed bytes into the image.
+ *
  * 2.17.0 keeps ABI v8 and removes the remaining non-timing fingerprints:
  * the store decoder no longer bounds the write path (a store it cannot
  * reproduce is executed by the hardware under software step and its bytes are

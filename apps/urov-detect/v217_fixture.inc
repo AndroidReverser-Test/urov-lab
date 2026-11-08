@@ -373,6 +373,19 @@ static void v217_gup(const struct uy_ctx *ctx, const struct page *reference,
     REQUIRE(!uy_status(ctx, &st) && st.state == UROV_Y_ACTIVE,
             "v217 gup session state=%u", st.state);
     LOG("V217_GUP live_matches=%d active=%u", !memcmp(view, ref, sizeof(view)), st.state);
+    /* 2.18.0 must keep the page overlaid after the external write.  Install a
+     * new image and confirm the EL0 read follows it; a retired ("dead") page
+     * would keep returning the live bytes written above. */
+    memcpy(image, ref, page_size);
+    image[0] ^= 0x5a;
+    image[1] ^= 0xa5;
+    error = v217_set_image(ctx, generation, image, (uint32_t)page_size);
+    REQUIRE(!error, "v217 gup set errno=%d", error);
+    if (!error) {
+        copy_scalar(view, reference->address, sizeof(view));
+        REQUIRE(!memcmp(view, image, sizeof(view)), "v217 gup overlay retired");
+        LOG("V217_GUP overlay_alive=%d", !memcmp(view, image, sizeof(view)));
+    }
 deactivate:
     REQUIRE(!uy_deactivate(ctx), "v217 gup deactivate errno=%d", errno);
 out:

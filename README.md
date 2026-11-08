@@ -1,5 +1,18 @@
-# UROV-LAB
+﻿# UROV-LAB
 
+`urov-y` 2.18.0 消掉 2.17.0 “残余”里两条普通 App、无密钥、稳定特征：
+`process_vm_readv()` 不再按用户内存里的 iovec 目的地址回写，而是在
+`pin_user_pages_remote()` 后置钩子里把注册页的 pin 页替换成持有 image/snapshot
+的私有内核页（`GUP_PIN_COUNTING_BIAS` 在原活页与替换页之间搬移），由内核自己
+把覆盖字节复制到它导入的目的地址，双 iovec 自引用技巧失效；
+外部写（`read()`/`O_DIRECT`/`process_vm_writev` 写注册页）不再把页标 `dead`，
+而是先快照活页、重装 AP[1]，下一次读路径用 GUP 读回活页并逐字节 diff，只把
+变化的字节发布进 image/snapshot，未被写到的偏移继续返回镜像。ABI 仍为 v8，
+`hooks=0xff`，请求布局、`ctl0` 字段和返回码不变。读回双 iovec 8×1、旧读防御
+8×1、v217 App 1×6 + root 探针、消除 3×1（`ELIM_PROT_STORE shapes=16`）、
+多页 3×1、CRC 5×1、Dobby 24×1（`accepted_crc_with_ap=24/24`、`views=0/24`）
+均 PASS。设计与残余见 [ELIMINATION_2_18_DESIGN.md](ELIMINATION_2_18_DESIGN.md)。
+构建 `urov-y.kpm 2827ea13...`、`urovdetect.apk 3bb50f80...`。
 `urov-y` 2.17.0 消掉 2.16.0 “残余”里除读取计时外的全部条目：解码器之外的
 store（SIMD 单 lane、STTR、SVE/SME 与将来形状）改由硬件在 EL0 执行，插件
 恢复本 CPU 的 AP[1]、开 Software Step，在内核完成 COW 后用 `pre`/`post`

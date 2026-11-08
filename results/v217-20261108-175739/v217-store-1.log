@@ -1,0 +1,8 @@
+--------- beginning of main
+10-05 08:32:04.429 19186 19211 I urovdetect: CONTEXT pid=19186 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 08:32:04.429 19186 19211 I urovdetect: BEGIN mode=v217-store repeats=16
+10-05 08:32:04.545 19186 19211 I urovdetect: V217_STORE mem skipped errno=13
+10-05 08:32:04.545 19186 19211 I urovdetect: V217_STORE view=5a image=5a pipe=0 mem=13 iov=0 active=1 armed=1
+10-05 08:32:04.545 19186 19211 I urovdetect: CONTEXT pid=19186 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 08:32:04.545 19186 19211 I urovdetect: NATIVE_RESULT PASS cases=1 assertions=9 failures=0 mode=v217-store
+10-05 08:32:04.786 19186 19186 I urovdetect: DETECT_RESULT PASS mode=v217-store worker_ms=351 ui_ticks=129 ui_max_gap_ms=17 native=PASS cases=1 assertions=9 failures=0

@@ -1,8 +1,23 @@
-# UROV-LAB 当前进度
+﻿# UROV-LAB 当前进度
 
 更新于 2026-11-08（Asia/Shanghai）。
 
-> 2026-11-08 补充：`urov-y` 2.17.0 消掉 2.16.0 “残余”里除读取计时外的全部
+> 2026-11-08 补充：`urov-y` 2.18.0 消掉 2.17.0 仍成立的两条普通 App、无密钥、
+> 稳定特征。`process_vm_readv()` 不再按用户内存里的 iovec 目的地址回写：入口
+> 钩子只记录 caller-window 判定，`pin_user_pages_remote()` 后置钩子把注册页的
+> pin 页替换成持有 image/snapshot 的私有内核页并搬移 `GUP_PIN_COUNTING_BIAS`，
+> 内核随后把覆盖字节复制到它自己导入的目的地址，双 iovec 自引用技巧失效
+> （`post=0/8`，四模式全部阶段）。外部写不再把注册页标 `dead`：uaccess 写缺页、
+> fast-GUP 与 `__get_user_pages` 的 `FOLL_WRITE` 先快照活页并重装 AP[1]，下一次
+> 读路径用 GUP 读回活页、逐字节 diff 后只发布变化的字节（`v217-gup
+> live_matches=1 active=1`、`overlay_alive=1`）。ABI 仍为 v8、`hooks=0xff`、`ctl0` 文本与返回码
+> 不变。读回双 iovec 8×1、旧读防御 8×1、v217 App 1×6 + root 探针、消除 3×1
+> （`ELIM_PROT_STORE shapes=16`）、多页 3×1、CRC 5×1、Dobby 24×1
+> （`accepted_crc_with_ap=24/24`、`views=0/24`）均 PASS。构建
+> `urov-y.kpm 2827ea13...`、`urovdetect.apk 3bb50f80...`。见
+> [ELIMINATION_2_18_DESIGN.md](ELIMINATION_2_18_DESIGN.md) 与
+> [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.18.0 节。
+>> 2026-11-08 补充：`urov-y` 2.17.0 消掉 2.16.0 “残余”里除读取计时外的全部
 > 条目：未解码 store（SIMD 单 lane、STTR、SVE/SME）改由硬件在 EL0 执行、
 > 插件用 `pre`/`post` 整页 diff 发布；并发 LSE 原子由可睡眠写锁串行化，不再
 > 丢更新；fork 快照改在 `copy_mm` 时创建，子进程自己的 `mremap`/`mprotect`

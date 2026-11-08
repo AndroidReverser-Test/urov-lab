@@ -1,7 +1,77 @@
-# UROV-Y 读取完整性复核结果
+﻿# UROV-Y 读取完整性复核结果
 
 本文按最新复核在前排列。
 
+## 2.18.0 读回源页替换与外部写合并
+
+本节消掉 2.17.0 “残余（2.18.0）”里两条普通 App、无密钥、稳定的特征：
+`process_vm_readv()` 双 iovec 读回（2.17 的后置钩子按用户内存里的目的地址写回，
+`post` 会被稳定写中）和外部写者让注册页 `dead`（写 1 字节后整页覆盖退役）。
+只改 `urov-y`、测试 App/夹具与文档；ABI 仍为 v8，`hooks=0xff`，请求布局、
+`ctl0` 文本、计数器与返回码不变。方案与不引入新特征的论证见
+[ELIMINATION_2_18_DESIGN.md](ELIMINATION_2_18_DESIGN.md)。
+
+### 实现和取证依据
+
+`process_vm_readv` 现在只让内核复制覆盖页：入口钩子记录 caller-window 判定，
+`pin_user_pages_remote()` 的后置钩子把落在注册页基址上的 pin 页替换成持有
+image/snapshot 的私有内核页，并把 `GUP_PIN_COUNTING_BIAS` 在原活页与替换页之间
+搬移，调用者的 `unpin_user_page()` 正好抵消。`copy_page_to_iter()` 随后把覆盖
+字节写到**内核导入的**目的地址，用户 iovec 数组不再参与覆盖，双 iovec 自引用
+只能改变内核写到哪里，不能改变写进去的字节。
+[源页替换实现](urov_y_backend.c#L4512) · [pin 钩子](urov_y_backend.c#L4488)
+
+外部写不再把页标 `dead`。uaccess 写缺页、fast-GUP `FOLL_WRITE` 与
+`__get_user_pages()` 的 `FOLL_WRITE` 在把写权限交给写者时，先用内核 GUP 把活页
+快照到 `ext_pre`；uaccess 路径在 COW 后立即重装 AP[1]，GUP 路径在页数组返回后
+在 `__get_user_pages` 后置钩子里重装。下一次任何读路径先做 `uy_ext_drain()`：
+GUP 读回活页，与 `ext_pre` 逐字节比较，只把变化的字节发布进 image/snapshot。
+写者仍写活页，写者自己的读仍看到写进去的字节；未被写到的偏移继续返回镜像。
+[快照/合并](urov_y_backend.c#L747) · [GUP 重装](urov_y_backend.c#L4638)
+
+模块 verbose 加载（Pixel 6，`6.1.134-android14-11`）：
+`pin_remote=1 gup_slow=1 page_ref=1/52`，`mm_fault=handle_mm_fault/4`，
+`hooks=0xff`、`abi=8`。
+
+### 真机矩阵
+
+| 矩阵 | 结果 | 目录 |
+| --- | --- | --- |
+| 读回双 iovec 8×1 | PASS；四模式 `post=0/8` 全部阶段，AP caller-window 下 `split=8/8`、`guarded_accept=0/8`，AP-all 下 `split=0/8`、`guarded_accept=8/8` | [read-defense-v216-20261108-180103](results/read-defense-v216-20261108-180103/summary.json) |
+| 旧读防御 8×1 | PASS；`READ_DEFENSE_PAIR ... match=0 target_ok=64` | [read-defense-20261108-180119](results/read-defense-20261108-180119/summary.json) |
+| v217 App 1×6 + root 探针 | PASS；`V217_GUP live_matches=1 active=1`、`V217_GUP overlay_alive=1`，`GUP live_matches_file=1 active=1`，`STORE replay view=5a live=5a active=1 armed=1` | [v217-20261108-180042](results/v217-20261108-180042/summary.json) |
+| 消除 3×1 | PASS；`ELIM_PROT_STORE shapes=16`，`ELIM_BRIDGE` 全 0 | [eliminate-20261108-180150](results/eliminate-20261108-180150/summary.json) |
+| 多页 3×1 | PASS；5 条路径 | [multipage-20261108-180243](results/multipage-20261108-180243/summary.json) |
+| CRC 5×1 | PASS；`CRC_PAGE overlay direct=f50bcaf6 window=0c7da8a0` | [crc-20261108-180132](results/crc-20261108-180132/summary.json) |
+| Dobby 24×1 | PASS；`accepted_crc_with_ap=24/24`，`views=0/24` | [dobby-detect-20261108-180259](results/dobby-detect-20261108-180259/summary.json) |
+
+### 残余（2.18.0）
+
+1. **计时**：每次 EL0 数据读仍一次同步异常；未解码 store 多一次 Software
+   Step 与整页 diff。按题目允许保留。
+2. **重放窗口**：未解码 store 重试期间本 CPU 可读，其他 CPU 只在本地失效后
+   仍保留陷阱项；跨 CPU TLB miss 的亚指令级竞态，见设计 §3.3。
+3. **pkey/POE**：本机无 POE，App 的 seccomp 拒绝 syscall 288/234，只验证
+   拒绝/透传路径不碰会话。
+4. **root 可见性**：`kpm list`/`ctl0 status` 仍能看到模块，需要改 KernelPatch
+   核心；不在普通 App 的 CRC 输入集合内。
+5. **独占丢失**：PAGE_AP 下读异常仍清本地独占监视器，只对相邻/`NOP` 间隔的
+   可证明 LL/SC 形状补完；属于读取异常路径的架构后果。
+6. **子进程外部写**：子进程 mm 的外部写保持 2.17 的原生可写处理；owner 的
+   外部写已合并。
+7. **外部写与未解码 store 重放交叠**：`p->replay` 置位时外部写不快照，保持
+   2.17 行为。
+
+### 复跑
+
+```powershell
+./kpms/urov-lab/build.ps1
+./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --read-defense-v216 --repeats 8 --cycles 1
+python ./kpms/urov-lab/tools/run_v217_device.py --serial $Serial --key $KpKey --repeats 16 --cycles 1
+python ./kpms/urov-lab/tools/run_elimination_device.py --serial $Serial --key $KpKey --skip-x-control --repeats 3 --cycles 1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --dobby-detection --repeats 24 --cycles 1
+```
 ## 2.17.0 任意写形状、fork 快照与并发原子
 
 本节消掉 2.16.0 “残余（2.16.0）”里除读取计时之外的全部条目：未解码

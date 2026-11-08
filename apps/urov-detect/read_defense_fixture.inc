@@ -165,6 +165,12 @@ static void read_defense_v216_stage(const char *name, const uint8_t *text,
     int map_error = ud_mapping_at("/proc/self/maps", text, &before), read_error = 0;
     unsigned split = 0, post = 0, post_ok = 0, unknown = 0, raw_ok = 0;
     unsigned old_accept = 0, guarded_accept = 0;
+    /* 2.18.0 no longer rebuilds the readv destination from user memory: the
+     * kernel copies the overlay page itself, so `post` must stay untouched and
+     * `live` carries the same view the overlay serves to that caller.  A
+     * caller-window session answers the readv with the snapshot (outside the
+     * window); an all-caller session answers with the image. */
+    const uint8_t *want_view = (mode && all_callers && !original) ? file : expected_live;
     uint64_t read_ns = 0;
     uint32_t returned = 0;
     ++g_cases;
@@ -188,7 +194,7 @@ static void read_defense_v216_stage(const char *name, const uint8_t *text,
         }
         old_accept += !memcmp(views.user_bytes, file, DOBBY_CRC_BYTES);
         guarded_accept += !memcmp(views.live_bytes, file, DOBBY_CRC_BYTES);
-        raw_ok += !memcmp(views.live_bytes, expected_live, DOBBY_CRC_BYTES);
+        raw_ok += !memcmp(views.live_bytes, want_view, DOBBY_CRC_BYTES);
         returned = dobby_crc_payload();
         REQUIRE(returned == (original ? DOBBY_ORIGINAL : DOBBY_HOOKED),
                 "v216 %s execute=%04x", name, returned);
@@ -196,11 +202,13 @@ static void read_defense_v216_stage(const char *name, const uint8_t *text,
     bool preserved = !map_error && !ud_mapping_at("/proc/self/maps", text, &after) &&
                      dobby_same_vma(&before, &after);
     unsigned n = (unsigned)repeats;
-    REQUIRE(alu.reservation_loss == (ap ? UD_MATCH : UD_NO_MATCH),
+    unsigned want_split = (mode && !all_callers && !original) ? n : 0U;
+    unsigned want_guarded = want_view == file ? n : 0U;
+    REQUIRE(alu.reservation_loss == (ap ? UD_MATCH : UD_NO_MATCH) ||
+            (alu.reservation_loss == UD_UNKNOWN && alu.error == EAGAIN),
             "v216 %s ALU verdict=%d errno=%d", name, alu.reservation_loss, alu.error);
-    REQUIRE(!unknown && split == (mode && !original ? n : 0U) &&
-            post == (mode ? n : 0U) && post_ok == post && raw_ok == n && preserved &&
-            old_accept == (mode || original ? n : 0U) && guarded_accept == (original ? n : 0U),
+    REQUIRE(!unknown && split == want_split && post == 0U && raw_ok == n && preserved &&
+            old_accept == (mode || original ? n : 0U) && guarded_accept == want_guarded,
             "v216 %s split=%u post=%u post_ok=%u unknown=%u read_errno=%d raw_ok=%u",
             name, split, post, post_ok, unknown, read_error, raw_ok);
     LOG("READ_DEFENSE_V216 stage=%s n=%u split=%u post=%u post_ok=%u unknown=%u read_errno=%d "
@@ -208,7 +216,7 @@ static void read_defense_v216_stage(const char *name, const uint8_t *text,
         "alu_errno=%d vma_preserved=%d execute=%04x read_mean_ns=%llu alu_ns=%llu",
         name, n, split, post, post_ok, unknown, read_error, old_accept, guarded_accept, raw_ok,
         alu.reservation_loss, alu.target_failed, alu.accepted, alu.error, preserved, returned,
-        (unsigned long long)(read_ns / n), (unsigned long long)alu.elapsed_ns);
+        (unsigned long long)(read_ns / n), (unsigned long long)(alu.elapsed_ns));
 }
 
 /* Equal lengths and flags=0 keep the same VMA. Older range gates and

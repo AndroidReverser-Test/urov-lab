@@ -1,0 +1,725 @@
+{
+  "serial": "25091FDF60063J",
+  "repeats": 8,
+  "cycles": 1,
+  "runs": [
+    {
+      "label": "no-module",
+      "mode": "read-defense-clean",
+      "uid": 10284,
+      "pid": "21415",
+      "log": "no-module-21415.log",
+      "result": "DETECT_RESULT PASS mode=read-defense-clean worker_ms=351 ui_ticks=129 ui_max_gap_ms=15 native=PASS cases=2 assertions=28 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "8",
+          "guarded_accept": "8",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1234",
+          "user_crc": "96964c4f",
+          "live_crc": "96964c4f",
+          "pipe_mean_ns": "26631",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "0",
+          "guarded_accept": "0",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "60906499",
+          "live_crc": "60906499",
+          "pipe_mean_ns": "6922",
+          "errno": "0"
+        }
+      ],
+      "details": [
+        "READ_DEFENSE_REMAP stage=unarmed errno=0 vma_preserved=1 ns=1425",
+        "READ_DEFENSE_BUSINESS ops=7296 errors=0"
+      ],
+      "pairs": [
+        {
+          "stage": "clean",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "patch_only",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        }
+      ],
+      "ui": {
+        "mode": "read-defense-clean",
+        "worker_ms": "351",
+        "ui_ticks": "129",
+        "ui_max_gap_ms": "15",
+        "native": "PASS",
+        "cases": "2",
+        "assertions": "28",
+        "failures": "0"
+      }
+    },
+    {
+      "label": "loaded-idle",
+      "mode": "read-defense-clean",
+      "uid": 10284,
+      "pid": "21495",
+      "log": "loaded-idle-21495.log",
+      "result": "DETECT_RESULT PASS mode=read-defense-clean worker_ms=351 ui_ticks=128 ui_max_gap_ms=19 native=PASS cases=2 assertions=28 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "8",
+          "guarded_accept": "8",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1234",
+          "user_crc": "96964c4f",
+          "live_crc": "96964c4f",
+          "pipe_mean_ns": "28661",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "0",
+          "guarded_accept": "0",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "60906499",
+          "live_crc": "60906499",
+          "pipe_mean_ns": "18900",
+          "errno": "0"
+        }
+      ],
+      "details": [
+        "READ_DEFENSE_REMAP stage=unarmed errno=0 vma_preserved=1 ns=14852",
+        "READ_DEFENSE_BUSINESS ops=9600 errors=0"
+      ],
+      "pairs": [
+        {
+          "stage": "clean",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "patch_only",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        }
+      ],
+      "ui": {
+        "mode": "read-defense-clean",
+        "worker_ms": "351",
+        "ui_ticks": "128",
+        "ui_max_gap_ms": "19",
+        "native": "PASS",
+        "cases": "2",
+        "assertions": "28",
+        "failures": "0"
+      }
+    },
+    {
+      "label": "read-defense-brk-1",
+      "mode": "read-defense-brk",
+      "uid": 10284,
+      "pid": "21570",
+      "log": "read-defense-brk-1-21570.log",
+      "result": "DETECT_RESULT PASS mode=read-defense-brk worker_ms=351 ui_ticks=128 ui_max_gap_ms=18 native=PASS cases=4 assertions=61 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "8",
+          "guarded_accept": "8",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1234",
+          "user_crc": "96964c4f",
+          "live_crc": "96964c4f",
+          "pipe_mean_ns": "27125",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "0",
+          "guarded_accept": "0",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "60906499",
+          "live_crc": "60906499",
+          "pipe_mean_ns": "17532",
+          "errno": "0"
+        },
+        {
+          "stage": "overlay",
+          "n": "8",
+          "match": "8",
+          "unknown": "0",
+          "old_accept": "8",
+          "guarded_accept": "0",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "96964c4f",
+          "live_crc": "60906499",
+          "pipe_mean_ns": "6286",
+          "errno": "0"
+        },
+        {
+          "stage": "restored",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "0",
+          "guarded_accept": "0",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "60906499",
+          "live_crc": "60906499",
+          "pipe_mean_ns": "9236",
+          "errno": "0"
+        }
+      ],
+      "details": [
+        "READ_DEFENSE_REMAP stage=unarmed errno=0 vma_preserved=1 ns=8748",
+        "READ_DEFENSE_REMAP stage=outside errno=0 vma_preserved=1 ns=10702",
+        "READ_DEFENSE_REMAP stage=overlap errno=0 vma_preserved=1 ns=7950114",
+        "READ_DEFENSE_STATUS active_before=1 inactive_after=1",
+        "READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1",
+        "READ_DEFENSE_BUSINESS ops=20608 errors=0"
+      ],
+      "pairs": [
+        {
+          "stage": "clean",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "patch_only",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "overlay",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "restored",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        }
+      ],
+      "ui": {
+        "mode": "read-defense-brk",
+        "worker_ms": "351",
+        "ui_ticks": "128",
+        "ui_max_gap_ms": "18",
+        "native": "PASS",
+        "cases": "4",
+        "assertions": "61",
+        "failures": "0"
+      }
+    },
+    {
+      "label": "read-defense-uxn-1",
+      "mode": "read-defense-uxn",
+      "uid": 10284,
+      "pid": "21645",
+      "log": "read-defense-uxn-1-21645.log",
+      "result": "DETECT_RESULT PASS mode=read-defense-uxn worker_ms=350 ui_ticks=129 ui_max_gap_ms=16 native=PASS cases=4 assertions=61 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "8",
+          "guarded_accept": "8",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1234",
+          "user_crc": "96964c4f",
+          "live_crc": "96964c4f",
+          "pipe_mean_ns": "24241",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "0",
+          "guarded_accept": "0",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "60906499",
+          "live_crc": "60906499",
+          "pipe_mean_ns": "19897",
+          "errno": "0"
+        },
+        {
+          "stage": "overlay",
+          "n": "8",
+          "match": "8",
+          "unknown": "0",
+          "old_accept": "8",
+          "guarded_accept": "0",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "96964c4f",
+          "live_crc": "60906499",
+          "pipe_mean_ns": "7390",
+          "errno": "0"
+        },
+        {
+          "stage": "restored",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "0",
+          "guarded_accept": "0",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "60906499",
+          "live_crc": "60906499",
+          "pipe_mean_ns": "6358",
+          "errno": "0"
+        }
+      ],
+      "details": [
+        "READ_DEFENSE_REMAP stage=unarmed errno=0 vma_preserved=1 ns=19898",
+        "READ_DEFENSE_REMAP stage=outside errno=0 vma_preserved=1 ns=8667",
+        "READ_DEFENSE_REMAP stage=overlap errno=0 vma_preserved=1 ns=35889",
+        "READ_DEFENSE_STATUS active_before=1 inactive_after=1",
+        "READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1",
+        "READ_DEFENSE_BUSINESS ops=20608 errors=0"
+      ],
+      "pairs": [
+        {
+          "stage": "clean",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "patch_only",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "overlay",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "restored",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        }
+      ],
+      "ui": {
+        "mode": "read-defense-uxn",
+        "worker_ms": "350",
+        "ui_ticks": "129",
+        "ui_max_gap_ms": "16",
+        "native": "PASS",
+        "cases": "4",
+        "assertions": "61",
+        "failures": "0"
+      }
+    },
+    {
+      "label": "read-defense-ap-hard-1",
+      "mode": "read-defense-ap-hard",
+      "uid": 10284,
+      "pid": "21720",
+      "log": "read-defense-ap-hard-1-21720.log",
+      "result": "DETECT_RESULT PASS mode=read-defense-ap-hard worker_ms=350 ui_ticks=128 ui_max_gap_ms=19 native=PASS cases=4 assertions=63 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "8",
+          "guarded_accept": "8",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1234",
+          "user_crc": "96964c4f",
+          "live_crc": "96964c4f",
+          "pipe_mean_ns": "18748",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "0",
+          "guarded_accept": "0",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "60906499",
+          "live_crc": "60906499",
+          "pipe_mean_ns": "20339",
+          "errno": "0"
+        },
+        {
+          "stage": "overlay",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "8",
+          "guarded_accept": "8",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "96964c4f",
+          "live_crc": "96964c4f",
+          "pipe_mean_ns": "6276",
+          "errno": "0"
+        },
+        {
+          "stage": "restored",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "8",
+          "guarded_accept": "8",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "96964c4f",
+          "live_crc": "96964c4f",
+          "pipe_mean_ns": "6820",
+          "errno": "0"
+        }
+      ],
+      "details": [
+        "READ_DEFENSE_REMAP stage=unarmed errno=0 vma_preserved=1 ns=14811",
+        "READ_DEFENSE_REMAP stage=outside errno=0 vma_preserved=1 ns=15421",
+        "READ_DEFENSE_REMAP stage=overlap errno=0 vma_preserved=1 ns=8667",
+        "READ_DEFENSE_STATUS active_before=1 active_after_remap=1",
+        "READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1",
+        "READ_DEFENSE_BUSINESS ops=34176 errors=0"
+      ],
+      "pairs": [
+        {
+          "stage": "clean",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "patch_only",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "overlay",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "restored",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        }
+      ],
+      "ui": {
+        "mode": "read-defense-ap-hard",
+        "worker_ms": "350",
+        "ui_ticks": "128",
+        "ui_max_gap_ms": "19",
+        "native": "PASS",
+        "cases": "4",
+        "assertions": "63",
+        "failures": "0"
+      }
+    },
+    {
+      "label": "read-defense-ap-all-hard-1",
+      "mode": "read-defense-ap-all-hard",
+      "uid": 10284,
+      "pid": "21790",
+      "log": "read-defense-ap-all-hard-1-21790.log",
+      "result": "DETECT_RESULT PASS mode=read-defense-ap-all-hard worker_ms=351 ui_ticks=129 ui_max_gap_ms=17 native=PASS cases=4 assertions=63 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "8",
+          "guarded_accept": "8",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1234",
+          "user_crc": "96964c4f",
+          "live_crc": "96964c4f",
+          "pipe_mean_ns": "15716",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "0",
+          "guarded_accept": "0",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "60906499",
+          "live_crc": "60906499",
+          "pipe_mean_ns": "15818",
+          "errno": "0"
+        },
+        {
+          "stage": "overlay",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "8",
+          "guarded_accept": "8",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "96964c4f",
+          "live_crc": "96964c4f",
+          "pipe_mean_ns": "6225",
+          "errno": "0"
+        },
+        {
+          "stage": "restored",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "8",
+          "guarded_accept": "8",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "96964c4f",
+          "live_crc": "96964c4f",
+          "pipe_mean_ns": "5005",
+          "errno": "0"
+        }
+      ],
+      "details": [
+        "READ_DEFENSE_REMAP stage=unarmed errno=0 vma_preserved=1 ns=8748",
+        "READ_DEFENSE_REMAP stage=outside errno=0 vma_preserved=1 ns=13062",
+        "READ_DEFENSE_REMAP stage=overlap errno=0 vma_preserved=1 ns=8097",
+        "READ_DEFENSE_STATUS active_before=1 active_after_remap=1",
+        "READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1",
+        "READ_DEFENSE_BUSINESS ops=32512 errors=0"
+      ],
+      "pairs": [
+        {
+          "stage": "clean",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "patch_only",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "overlay",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "restored",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        }
+      ],
+      "ui": {
+        "mode": "read-defense-ap-all-hard",
+        "worker_ms": "351",
+        "ui_ticks": "129",
+        "ui_max_gap_ms": "17",
+        "native": "PASS",
+        "cases": "4",
+        "assertions": "63",
+        "failures": "0"
+      }
+    },
+    {
+      "label": "post-unload",
+      "mode": "read-defense-clean",
+      "uid": 10284,
+      "pid": "21872",
+      "log": "post-unload-21872.log",
+      "result": "DETECT_RESULT PASS mode=read-defense-clean worker_ms=351 ui_ticks=128 ui_max_gap_ms=16 native=PASS cases=2 assertions=28 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "8",
+          "guarded_accept": "8",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1234",
+          "user_crc": "96964c4f",
+          "live_crc": "96964c4f",
+          "pipe_mean_ns": "29530",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "0",
+          "guarded_accept": "0",
+          "live_ok": "8",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "60906499",
+          "live_crc": "60906499",
+          "pipe_mean_ns": "20151",
+          "errno": "0"
+        }
+      ],
+      "details": [
+        "READ_DEFENSE_REMAP stage=unarmed errno=0 vma_preserved=1 ns=11109",
+        "READ_DEFENSE_BUSINESS ops=10624 errors=0"
+      ],
+      "pairs": [
+        {
+          "stage": "clean",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        },
+        {
+          "stage": "patch_only",
+          "n": "64",
+          "match": "0",
+          "target_ok": "64",
+          "control_ok": "64",
+          "same_byte": "1"
+        }
+      ],
+      "ui": {
+        "mode": "read-defense-clean",
+        "worker_ms": "351",
+        "ui_ticks": "128",
+        "ui_max_gap_ms": "16",
+        "native": "PASS",
+        "cases": "2",
+        "assertions": "28",
+        "failures": "0"
+      }
+    }
+  ],
+  "passed": true,
+  "initial_modules": "",
+  "boot_id_before": "12e21c21-1ca3-44be-86ac-81807b8179d9",
+  "kernel": "Linux localhost 6.1.134-android14-11-g66e758f7d0c0-ab13748739 #1 SMP PREEMPT Tue Jul  8 09:17:32 UTC 2025 aarch64 Toybox",
+  "kpver": "c00",
+  "selinux": "Enforcing",
+  "artifacts": {
+    "urovdetect.apk": "3bb50f80f8de03d70d2e438e043eca487c299075b5ff928826f73c2a587d6e58",
+    "urov-y.kpm": "2827ea13c5982affc569d1c23d193abad95e8f6892d184164f185f0a8645d18e"
+  },
+  "loaded_status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=d190 hooks=0xff core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x73f",
+  "final_modules": "",
+  "boot_id_after": "12e21c21-1ca3-44be-86ac-81807b8179d9",
+  "kernel_issues": []
+}

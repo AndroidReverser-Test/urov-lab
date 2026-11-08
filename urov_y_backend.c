@@ -2,6 +2,13 @@
 /*
  * UROV-Y resident backend: three ways to bind the overlay to a reader site.
  *
+ * 2.18.0 closes the last two keyless residuals: process_vm_readv() no longer
+ * rebuilds its destination from user memory (the pinned source page is
+ * replaced with the overlay page, so the kernel's own copy carries the image
+ * to whatever iovec it imported), and a writer outside the module no longer
+ * retires a page: its bytes are snapshotted and merged into the image on the
+ * next read.
+ *
  * The two detector classes that remained against UROV-X (see
  * KEYLESS_DETECTION_RESULTS.md) are:
  *
@@ -234,6 +241,15 @@ struct uy_page {
     uint32_t gone;       /* the registered mapping was unmapped/replaced */
     uint32_t seq;        /* image publication sequence for in-place stores */
     uint32_t replay;     /* a native replay owns pre/post for this page */
+    /* A writer outside this module obtained write access through the kernel
+     * (uaccess fault, fast/slow GUP, process_vm_writev).  The live bytes are
+     * snapshotted into ext_pre before the write and merged into the image on
+     * the next read instead of retiring the page. */
+    uint8_t *ext_pre;
+    uint8_t *ext_buf;
+    uint64_t ext_addr;
+    uint32_t ext;
+    uint32_t ext_busy;
     /* Registration-time VMA identity.  A fork copies the VMA with
      * vm_area_dup(), so the child keeps the same vm_file pointer, pgoff and
      * range; a foreign process that opens the same file again has a different
@@ -306,6 +322,30 @@ static uint16_t g_imm;
 static uint32_t g_trap_insn;
 static unsigned g_write_gup_flags;
 static int g_use_rwsem;
+/* process_vm_readv() pins its remote source pages through
+ * pin_user_pages_remote() and then copies them with copy_page_to_iter().  The
+ * 2.17.0 after-hook rewrote the *destination* iovecs it re-read from user
+ * memory, which lets the caller steer that write (and read the live bytes).
+ * 2.18.0 instead substitutes the pinned source page with the page that holds
+ * the overlay view, so the kernel itself copies the right bytes to whatever
+ * destination it imported: no user-memory key participates in the overlay. */
+static void *f_pin_remote;
+static int g_pin_hooked;
+static int g_pin_ok;
+/* Slow GUP is the fallback for a leaf that cannot be pinned fast.  Its after
+ * hook re-arms the AP[1] trap the write fault had to drop, once the page
+ * array has been returned to the caller. */
+static void *f_gup_slow;
+static int g_gup_slow_hooked;
+static int g_page_ref_ok;
+#define UY_GUP_PIN_BIAS 1024U
+#define UY_READV_SLOTS 64U
+struct uy_readv_rec {
+    void *task;
+    uint32_t active;
+    uint32_t allow;
+};
+static struct uy_readv_rec g_readv_slot[UY_READV_SLOTS];
 static uint32_t g_max_pages = UROV_Y_MAX_PAGES;
 static uint64_t g_max_image_bytes = UINT64_C(8) << 20;
 static uint32_t g_caps;
@@ -694,6 +734,132 @@ static void page_store_bytes(struct uy_page *p, uint64_t off,
     __atomic_store_n(&p->seq, seq + 2U, __ATOMIC_RELEASE);
 }
 
+/* ------------------------------------------- foreign-writer absorption */
+
+/* Snapshot the live bytes before a writer outside this module can change them
+ * and remember that the page needs a merge.  Called from the uaccess fault,
+ * the fast-GUP and the slow-GUP paths, all of which have just proved that the
+ * writer owns a writable translation of this page.  A user-mode uaccess read
+ * is used here on purpose: at this point the leaf is EL1-writable and (for the
+ * fault paths) already carries the COW's AP[1], so it succeeds without taking
+ * the mmap lock from inside a fault or GUP callback.  The drain, which runs
+ * with the trap armed, uses the GUP path instead. */
+static int uy_ext_capture(void *mm, struct uy_page *p, uint64_t va)
+{
+    if (!mm || !p || !g_page_size) return 0;
+    if (__atomic_load_n(&p->ext, __ATOMIC_ACQUIRE)) return 1;
+    if (f_copy_in(p->ext_pre, (const void *)(uintptr_t)va, g_page_size))
+        return 0;
+    p->ext_addr = va;
+    __atomic_store_n(&p->ext, 1, __ATOMIC_RELEASE);
+    if (g_verbose) pr_info("urov-y: ext capture page=%llx va=%llx\n",
+                           (unsigned long long)p->base, (unsigned long long)va);
+    return 1;
+}
+
+/* Merge the bytes an external writer left in the live page into the overlay
+ * image (and snapshot) instead of declaring the page dead.  The reader that
+ * needs the page calls this before taking a view, so a write is published at
+ * most one access late and the page keeps returning the image afterwards.
+ * ext_buf/ext_pre are private to this path; a concurrent drain on another CPU
+ * simply skips because the owner will publish the same bytes. */
+static void uy_ext_drain(void *mm, struct uy_page *p)
+{
+    unsigned off = 0, changed = 0;
+
+    if (!mm || !__atomic_load_n(&p->ext, __ATOMIC_ACQUIRE)) return;
+    if (!__atomic_load_n(&p->ext_buf, __ATOMIC_ACQUIRE)) return;
+    if (__atomic_exchange_n(&p->ext_busy, 1, __ATOMIC_ACQ_REL)) return;
+    if (uy_access_vm(mm, (unsigned long)p->ext_addr, p->ext_buf,
+                     (int)g_page_size, 0) != (int)g_page_size) {
+        if (g_verbose) pr_info("urov-y: ext drain read failed page=%llx\n",
+                               (unsigned long long)p->base);
+        goto out;
+    }
+    while (off < g_page_size) {
+        unsigned start;
+
+        if (p->ext_buf[off] == p->ext_pre[off]) {
+            ++off;
+            continue;
+        }
+        start = off;
+        while (off < g_page_size && p->ext_buf[off] != p->ext_pre[off]) ++off;
+        page_store_bytes(p, start, p->ext_buf + start, off - start);
+        changed += off - start;
+    }
+    memcpy(p->ext_pre, p->ext_buf, g_page_size);
+    __atomic_store_n(&p->ext, 0, __ATOMIC_RELEASE);
+    if (g_verbose) pr_info("urov-y: ext drain page=%llx changed=%u\n",
+                           (unsigned long long)p->base, changed);
+out:
+    __atomic_store_n(&p->ext_busy, 0, __ATOMIC_RELEASE);
+}
+
+/* GUP pin accounting.  pin_user_pages_remote() returns pages that the caller
+ * releases with unpin_user_page(), i.e. a GUP_PIN_COUNTING_BIAS subtraction.
+ * Moving that bias from the live page to the overlay page keeps both
+ * refcounts exactly where their owners expect them. */
+static int uy_page_bias_add(void *page)
+{
+    if (!page || !g_page_ref_ok) return 0;
+    __atomic_fetch_add((int *)((char *)page + g_layout.page_ref),
+                       (int)UY_GUP_PIN_BIAS, __ATOMIC_RELAXED);
+    return 1;
+}
+
+static void uy_page_bias_sub(void *page)
+{
+    int old;
+
+    if (!page || !g_page_ref_ok) return;
+    old = __atomic_load_n((int *)((char *)page + g_layout.page_ref), __ATOMIC_RELAXED);
+    if (old <= (int)UY_GUP_PIN_BIAS) return;
+    (void)__atomic_compare_exchange_n((int *)((char *)page + g_layout.page_ref), &old,
+                                      old - (int)UY_GUP_PIN_BIAS, 0,
+                                      __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+}
+
+/* One process_vm_readv() in flight per task.  The syscall-level before hook
+ * records the caller-window decision, the pin hook consumes it and the after
+ * hook clears it.  Overflow keeps the default (only an all-caller session
+ * overlays a non-window caller), never the other way around. */
+static struct uy_readv_rec *uy_readv_rec_find(void *task, int create)
+{
+    uint32_t i;
+
+    for (i = 0; i < UY_READV_SLOTS; ++i) {
+        struct uy_readv_rec *r = &g_readv_slot[i];
+
+        if (r->task == task && __atomic_load_n(&r->active, __ATOMIC_ACQUIRE)) return r;
+    }
+    if (!create) return 0;
+    for (i = 0; i < UY_READV_SLOTS; ++i) {
+        struct uy_readv_rec *r = &g_readv_slot[i];
+        uint32_t expect = 0;
+
+        if (!__atomic_load_n(&r->active, __ATOMIC_ACQUIRE) &&
+            __atomic_compare_exchange_n(&r->active, &expect, 1, 0,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            r->task = task;
+            r->allow = g_sess.caller_count == 0U;
+            return r;
+        }
+    }
+    return 0;
+}
+
+static void uy_readv_rec_clear(void *task)
+{
+    struct uy_readv_rec *r = uy_readv_rec_find(task, 0);
+
+    if (!r) return;
+    __atomic_store_n(&r->active, 0, __ATOMIC_RELEASE);
+    r->task = 0;
+    r->allow = 0;
+}
+
+
 static struct uy_shadow *uy_shadow_find(void *mm, uint32_t index)
 {
     uint32_t i;
@@ -915,6 +1081,7 @@ static int read_range(void *mm, uint64_t address, unsigned total, int allow_fake
         p = uy_page_for_fault(mm, cur);
         if (p) {
             covered = 1;
+            uy_ext_drain(mm, p);
             page_view_mm(mm, p, off, seg, out + done, !allow_fake);
         } else if (f_copy_in(out + done, (const void *)(uintptr_t)cur, seg)) {
             *bad = cur;
@@ -3529,7 +3696,6 @@ static void uy_mm_fault_before(hook_fargs4_t *args, void *udata)
 {
     const char *vma = (const char *)args->arg0;
 
-    (void)udata;
     /* Newer handle_mm_fault() can drop the VMA lock and invalidate the
      * pointer. Capture its mm and the mapping identity while the caller's
      * protection still holds. */
@@ -3542,6 +3708,19 @@ static void uy_mm_fault_before(hook_fargs4_t *args, void *udata)
         *(unsigned long *)(vma + g_layout.vma_pgoff) : 0;
     args->local.data5 = vma ? *(unsigned long *)(vma + g_layout.vma_start) : 0;
     args->local.data6 = vma ? *(unsigned long *)(vma + g_layout.vma_end) : 0;
+    /* A non-NULL pt_regs marks a user-mode uaccess fault; GUP passes NULL.
+     * Only the uaccess form may have its trap re-armed here: doing that for a
+     * GUP fault would make the retry loop forever. */
+    {
+        int argc = (int)(uintptr_t)udata;
+
+        if (argc >= 5)
+            args->local.data7 = (uintptr_t)((hook_fargs8_t *)args)->arg4;
+        else if (argc == 4)
+            args->local.data7 = (uintptr_t)args->arg3;
+        else
+            args->local.data7 = 0;
+    }
 }
 
 /* A fault-in just (re)created the site page PTE from the VMA protection, which
@@ -3588,21 +3767,32 @@ static void uy_mm_fault_after(hook_fargs4_t *args, void *udata)
             } else if (p && (args->local.data2 & UY_FAULT_WRITE) &&
                        __atomic_load_n(&g_internal_access, __ATOMIC_ACQUIRE) != current) {
                 /* A writer outside the module faulted the page in for write:
-                 * fast-GUP FOLL_WRITE (read()/O_DIRECT into the mapping) or a
-                 * remote writer.  Re-arming AP[1] here would make the GUP loop
-                 * retry the same fault forever, so the write is allowed to land
-                 * and the page stops being overlaid. */
+                 * read()/O_DIRECT into the mapping, process_vm_writev or a
+                 * remote writer.  The live page is the destination and must
+                 * keep receiving the bytes, so the trap cannot stay dropped
+                 * forever; snapshot the live bytes first, then re-arm AP[1].
+                 * A uaccess write retries through the PTE while EL1 still has
+                 * write permission (AP[2] clear), so it cannot loop here.  A
+                 * GUP write keeps the leaf until uy_gup_slow_after() has the
+                 * page array, which is where the trap is put back. */
                 if (g_verbose)
-                    pr_info("urov-y: foreign write fault page=%llx internal=%llx\n",
-                            (unsigned long long)page,
-                            (unsigned long long)(uintptr_t)
-                            __atomic_load_n(&g_internal_access, __ATOMIC_ACQUIRE));
+                    pr_info("urov-y: foreign write fault page=%llx regs=%d\n",
+                            (unsigned long long)page, args->local.data7 ? 1 : 0);
                 if (mm == g_sess.mm) {
-                    __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
-                    __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
-                    __atomic_store_n(&p->dead, 1, __ATOMIC_RELEASE);
+                    (void)uy_ext_capture(mm, p, page);
+                    if (args->local.data7) {
+                        uint64_t *ptep = pte_of(mm, page);
+
+                        if (ptep &&
+                            !(__atomic_load_n(ptep, __ATOMIC_ACQUIRE) & PTE_RDONLY)) {
+                            ret = page_set_ap_any(mm, page, 0);
+                            if (ret >= 0)
+                                __atomic_store_n(&p->armed, 1, __ATOMIC_RELEASE);
+                        }
+                    }
+                } else if (page_set_ap_any(mm, page, 1) > 0) {
+                    ret = 1;
                 }
-                ret = 0;
             } else if (p && __atomic_load_n(&p->want, __ATOMIC_ACQUIRE) &&
                 !__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) {
                 ret = page_set_ap_any(mm, page, 0);
@@ -3863,9 +4053,10 @@ static long do_register(struct urov_y_request *q)
     g_sess.pages = uy_alloc(n * sizeof(*g_sess.pages));
     /* Page-aligned vmalloc storage keeps every image page convertible to a
      * struct page for the GUP overlay (kvmalloc may return kmalloc memory).
-     * Five pages per descriptor: image, spare, snapshot, replay pre/post. */
-    g_sess.arena = f_vmalloc ? f_vmalloc(5UL * n * g_page_size) :
-                               uy_alloc(5UL * n * g_page_size);
+     * Seven pages per descriptor: image, spare, snapshot, replay pre/post and
+     * the foreign-writer pre/drain pair. */
+    g_sess.arena = f_vmalloc ? f_vmalloc(7UL * n * g_page_size) :
+                               uy_alloc(7UL * n * g_page_size);
     /* One private image per page per forked child, snapshotted at fork.  Four
      * generations by default, bounded by the byte cap; a session with more
      * pages still gets enough slots for a single child. */
@@ -3903,11 +4094,13 @@ static long do_register(struct urov_y_request *q)
         p->base = d->base;
         p->index = d->reserved;
         p->flags = d->flags;
-        p->image = g_sess.arena + 5UL * i * g_page_size;
+        p->image = g_sess.arena + 7UL * i * g_page_size;
         p->spare = p->image + g_page_size;
         p->snapshot = p->spare + g_page_size;
         p->pre = p->snapshot + g_page_size;
         p->post = p->pre + g_page_size;
+        p->ext_pre = p->post + g_page_size;
+        p->ext_buf = p->ext_pre + g_page_size;
         uy_mmap_write_lock(mm);
         {
             void *vma = f_find_vma(mm, p->base);
@@ -4011,6 +4204,7 @@ static long do_set(struct urov_y_request *q)
     if (q->expected_generation != g_sess.generation) return -EAGAIN;
     p = &g_sess.pages[0];
     if (len != p->fake_len || p->flags != UROV_Y_PAGE_SRC_USER) return -EINVAL;
+    uy_ext_drain(g_sess.mm, p);
     memcpy(p->spare, p->snapshot, g_page_size);
     ret = copy_request_image(q, g_sess.mm, p->spare + p->fake_off, len);
     if (ret) return ret;
@@ -4035,6 +4229,7 @@ static long do_set_page(struct urov_y_request *q)
     if (q->expected_generation != g_sess.generation) return -EAGAIN;
 
     if (!valid_window(off, len)) return -EINVAL;
+    uy_ext_drain(g_sess.mm, p);
     memcpy(p->spare, p->snapshot, g_page_size);
     ret = copy_user_image(g_sess.mm, q->fake_addr, p->spare + off, len);
     if (ret) return ret;
@@ -4227,7 +4422,8 @@ struct uy_iovec {
 /* One local/remote segment of a same-mm read.  Only the registered segments
  * are rewritten; everything else keeps the bytes the kernel copied.  A forked
  * child is a distinct mm, so its copy is only rewritten while the leaf PTE at
- * that page still carries this module's trap. */
+ * that page still carries this module's trap.  This is the compatibility path
+ * used only when the pin hook below could not be installed. */
 static void uy_vm_overlay(uint64_t local, uint64_t remote, uint64_t len, int allow_fake,
                           void *mm, int owner)
 {
@@ -4243,6 +4439,7 @@ static void uy_vm_overlay(uint64_t local, uint64_t remote, uint64_t len, int all
         if (seg > sizeof(bytes)) seg = (unsigned)sizeof(bytes);
         p = page_find(page);
         if (p && (owner || uy_trap_leaf(mm, page))) {
+            uy_ext_drain(mm, p);
             page_view_mm(mm, p, off, seg, bytes, !allow_fake);
             if (f_copy_out((void *)(uintptr_t)local, bytes, seg)) return;
         }
@@ -4259,6 +4456,102 @@ static int uy_iov_load(uint64_t vec, uint64_t index, struct uy_iovec *out)
     return f_copy_in(out, (const void *)(uintptr_t)at, sizeof(*out));
 }
 
+/* Resolve the address space process_vm_readv() acts on.  The caller's own
+ * tid/tgid map to the current mm; any other pid is resolved under RCU exactly
+ * like the kernel does. */
+static void *uy_readv_mm(uint64_t pid)
+{
+    void *task, *mm;
+
+    if (pid == uy_task_pid() || pid == uy_task_tgid()) return mm_of_task(current);
+    if (!f_find_task_by_vpid || !f_rcu_lock) return 0;
+    f_rcu_lock();
+    task = f_find_task_by_vpid((int)pid);
+    mm = task ? mm_of_task(task) : 0;
+    f_rcu_unlock();
+    return mm;
+}
+
+/* The caller window only exists for the owner's own threads; a foreign reader
+ * gets the snapshot unless the session overlays every caller. */
+static int uy_readv_allow(void *mm, struct pt_regs *regs)
+{
+    int owner = mm && mm == g_sess.mm;
+
+    return !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) &&
+           (g_sess.caller_count == 0U ||
+            (owner && regs && caller_allowed_deep(regs)));
+}
+
+/* Entry hook: record the caller-window decision for the pin hook that runs
+ * later inside the same syscall.  Nothing is read from user memory here. */
+static void uy_vm_readv_before(hook_fargs6_t *args, void *udata)
+{
+    struct pt_regs *regs;
+    struct uy_readv_rec *rec;
+    void *mm;
+
+    (void)udata;
+    if (!overlay_live() || __atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) return;
+    mm = uy_readv_mm(sys_arg(args, 0));
+    if (!mm) return;
+    if (mm != g_sess.mm && (!overlay_live() || g_sess.mode != UROV_Y_MODE_PAGE_AP)) return;
+    rec = uy_readv_rec_find(current, 1);
+    if (!rec) return;
+    regs = g_wrapper_mode ? (struct pt_regs *)args->arg0 : 0;
+    rec->allow = (uint32_t)uy_readv_allow(mm, regs);
+}
+
+/* Source-page substitution: process_vm_readv() pins the remote pages, then
+ * copy_page_to_iter() copies them into the destinations the kernel imported.
+ * Handing GUP the overlay page itself means the kernel copies the image (or
+ * snapshot) to the real destination, so the caller's iovec array - including
+ * the double-iovec self-reference trick - has no influence on what the
+ * overlay writes.  The GUP_PIN_COUNTING_BIAS is moved from the live page to
+ * the overlay page; the caller's unpin_user_page() then restores both. */
+static void uy_pin_after(hook_fargs8_t *args, void *udata)
+{
+    void *mm = (void *)args->arg0;
+    uint64_t start = args->arg1;
+    unsigned int flags = (unsigned int)args->arg3;
+    void **pages = (void **)args->arg4;
+    long got = (long)args->ret;
+    struct uy_readv_rec *rec;
+    unsigned i;
+
+    (void)udata;
+    if (got <= 0 || !pages || !g_pin_ok || !g_page_ref_ok) return;
+    if (flags & (UY_FOLL_WRITE | UY_FOLL_LONGTERM)) return;
+    if (!overlay_live() || __atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) return;
+    if (!mm) return;
+    rec = uy_readv_rec_find(current, 0);
+    if (!rec) return;    /* not inside a process_vm_readv() of this task */
+    if ((unsigned long)got > (unsigned long)args->arg2) got = (long)args->arg2;
+    for (i = 0; i < (unsigned)got; ++i) {
+        uint64_t base = (start & ~((uint64_t)g_page_size - 1U)) +
+                        (uint64_t)i * g_page_size;
+        struct uy_page *p;
+        struct uy_shadow *sh = 0;
+        uint8_t *view;
+        void *src;
+
+        p = (mm == g_sess.mm) ? page_find(base) : uy_page_for_fault(mm, base);
+        if (!p) continue;
+        /* A forked child only has the overlay while its inherited leaf still
+         * carries the trap; otherwise the native page is the honest answer. */
+        if (mm != g_sess.mm && !uy_trap_leaf(mm, base)) continue;
+        uy_ext_drain(mm, p);
+        if (mm != g_sess.mm) sh = uy_shadow_find(mm, p->index);
+        view = rec->allow ? (sh ? sh->image : p->image)
+                          : (sh ? sh->snapshot : p->snapshot);
+        src = f_vmalloc_to_page ? f_vmalloc_to_page(view) : 0;
+        if (!src || src == pages[i]) continue;
+        if (!uy_page_bias_add(src)) continue;
+        uy_page_bias_sub(pages[i]);
+        pages[i] = src;
+    }
+}
+
 static void uy_vm_readv_after(hook_fargs6_t *args, void *udata)
 {
     struct uy_iovec l, r;
@@ -4269,6 +4562,11 @@ static void uy_vm_readv_after(hook_fargs6_t *args, void *udata)
     int allow, have_l = 0, have_r = 0, owner;
 
     (void)udata;
+    uy_readv_rec_clear(current);
+    /* With the pin hook installed the bytes were already correct when the
+     * kernel copied them; rewriting the destinations here would re-open the
+     * user-memory hole this path exists to close. */
+    if (g_pin_ok) return;
     if ((long)args->ret <= 0 || !f_copy_out) return;
     /* The remote address space decides, not the caller's: another process (or
      * another thread group) reading the owner through process_vm_readv must
@@ -4302,11 +4600,7 @@ static void uy_vm_readv_after(hook_fargs6_t *args, void *udata)
     ref = owner ? session_get_mm(mm) : session_get_any();
     if (!ref) return;
     regs = g_wrapper_mode ? (struct pt_regs *)args->arg0 : 0;
-    /* The caller window only exists for the owner's own threads; a foreign
-     * reader gets the snapshot unless the session overlays every caller. */
-    allow = !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) &&
-            (g_sess.caller_count == 0U ||
-             (owner && regs && caller_allowed_deep(regs)));
+    allow = uy_readv_allow(mm, regs);
     left = (uint64_t)(long)args->ret;
     while (left && li < liovcnt && ri < riovcnt) {
         uint64_t lrem, rrem, seg;
@@ -4337,6 +4631,42 @@ out:
     uy_reader_exit(&g_readers, ref);
 }
 
+/* Slow-GUP fallback: a foreign write fault had to drop the AP[1] trap so the
+ * kernel could finish its COW.  Once __get_user_pages() returns the pages the
+ * caller will write through the page pointer, re-arm the EL0 trap; the write
+ * itself is captured into ext_pre and merged on the next read. */
+static void uy_gup_slow_after(hook_fargs8_t *args, void *udata)
+{
+    void *mm = (void *)args->arg0;
+    uint64_t start = args->arg1;
+    unsigned int flags = (unsigned int)args->arg3;
+    long got = (long)args->ret;
+    unsigned i;
+    int changed = 0;
+
+    (void)udata;
+    if (got <= 0 || !g_gup_slow_hooked) return;
+    if (!(flags & UY_FOLL_WRITE) || (flags & UY_FOLL_LONGTERM)) return;
+    if (!overlay_live() || __atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) return;
+    if (!mm || mm != g_sess.mm || g_sess.mode != UROV_Y_MODE_PAGE_AP) return;
+    if (__atomic_load_n(&g_internal_access, __ATOMIC_ACQUIRE) == current) return;
+    if ((unsigned long)got > (unsigned long)args->arg2) got = (long)args->arg2;
+    for (i = 0; i < (unsigned)got; ++i) {
+        uint64_t base = (start & ~((uint64_t)g_page_size - 1U)) +
+                        (uint64_t)i * g_page_size;
+        struct uy_page *p = page_find(base);
+        int ret;
+
+        if (!p || __atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
+        if (!__atomic_load_n(&p->armed, __ATOMIC_ACQUIRE)) continue;
+        (void)uy_ext_capture(mm, p, base);
+        ret = page_set_ap_any(mm, base, 0);
+        if (ret > 0) changed = 1;
+    }
+    if (changed) flush_tlb_all();
+}
+
+
 /* --------------------------------------------- kernel-assisted read overlay */
 
 /* /proc/<pid>/mem, ptrace(PTRACE_PEEKDATA) and every other access_remote_vm()
@@ -4358,8 +4688,10 @@ static void uy_kread_overlay(uint64_t remote, void *buf, uint64_t len, int allow
 
         if ((uint64_t)seg > len) seg = (unsigned)len;
         p = uy_page_for_fault(mm, remote);
-        if (p && (owner || uy_trap_leaf(mm, page)))
+        if (p && (owner || uy_trap_leaf(mm, page))) {
+            uy_ext_drain(mm, p);
             page_view_mm(mm, p, off, seg, out, !allow_fake);
+        }
         remote += seg;
         out += seg;
         len -= seg;
@@ -4503,15 +4835,20 @@ static void uy_gup_after(hook_fargs4_t *args, void *udata)
         if (!p) continue;
         if (!owner && !uy_trap_leaf(mm, page)) continue;
         if (writer) {
-            if (owner && mm == g_sess.mm && !__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) {
-                __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
-                __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
-                __atomic_store_n(&p->dead, 1, __ATOMIC_RELEASE);
+            /* This page is a real write destination.  Keep the AP[1] trap and
+             * let the writer reach the live page through the kernel mapping;
+             * the next reader merges the written bytes into the image instead
+             * of retiring the page.  The caller writes through the pinned
+             * page, never through the PTE, so re-arming here is safe. */
+            if (owner && mm == g_sess.mm) {
+                (void)uy_ext_capture(mm, p, page);
+                if (page_set_ap_any(mm, page, 0) > 0) flush_tlb_all();
             } else if (!owner && page_set_ap_any(mm, page, 0) > 0) {
                 flush_tlb_all();
             }
             continue;
         }
+        uy_ext_drain(mm, p);
         if (!owner) sh = uy_shadow_find(mm, p->index);
         src = f_vmalloc_to_page(sh ? sh->image :
                                 (allow_fake ? p->image : p->snapshot));
@@ -4715,19 +5052,55 @@ static void uy_range_gone(void *mm, uint64_t start, uint64_t len)
     uy_reader_exit(&g_readers, ref);
 }
 
+/* Field-wise move: a whole-structure assignment of struct uy_page is lowered
+ * to a memcpy libcall on this target, and the KPM loader cannot resolve the
+ * plain libc symbol.  Every member is a scalar, so this stays inline. */
+static void uy_page_mov(struct uy_page *dst, const struct uy_page *src)
+{
+    dst->base = src->base;
+    dst->image = src->image;
+    dst->snapshot = src->snapshot;
+    dst->spare = src->spare;
+    dst->pre = src->pre;
+    dst->post = src->post;
+    dst->ext_pre = src->ext_pre;
+    dst->ext_buf = src->ext_buf;
+    dst->ext_addr = src->ext_addr;
+    dst->ext = src->ext;
+    dst->ext_busy = src->ext_busy;
+    dst->index = src->index;
+    dst->flags = src->flags;
+    dst->fake_off = src->fake_off;
+    dst->fake_len = src->fake_len;
+    dst->armed = src->armed;
+    dst->want = src->want;
+    dst->dead = src->dead;
+    dst->gone = src->gone;
+    dst->seq = src->seq;
+    dst->replay = src->replay;
+    dst->vma_file = src->vma_file;
+    dst->vma_pgoff = src->vma_pgoff;
+    dst->vma_start = src->vma_start;
+    dst->vma_end = src->vma_end;
+}
+
 static void uy_page_sort(void)
 {
     uint32_t i;
 
     for (i = 1; i < g_sess.page_count; ++i) {
-        struct uy_page tmp = g_sess.pages[i];
-        uint32_t j = i;
+        struct uy_page tmp;
 
-        while (j > 0 && g_sess.pages[j - 1].base > tmp.base) {
-            g_sess.pages[j] = g_sess.pages[j - 1];
-            --j;
+        uy_page_mov(&tmp, &g_sess.pages[i]);
+        {
+            uint32_t j = i;
+
+            while (j > 0 && g_sess.pages[j - 1].base > tmp.base) {
+                uy_page_mov(&g_sess.pages[j], &g_sess.pages[j - 1]);
+                --j;
+            }
+            uy_page_mov(&g_sess.pages[j], &tmp);
         }
-        g_sess.pages[j] = tmp;
     }
 }
 
@@ -5225,6 +5598,21 @@ static long resolve_symbols(const struct kclf_btf *btf, int *brk_argc, int *mmf_
     if (!f_alloc_pages || !f_put_page || !f_copy_highpage || !f_vmalloc_to_page)
         f_gup_fast = 0;
 
+    /* process_vm_readv() source substitution.  pin_user_pages_remote() is the
+     * exported pin entry the syscall uses for the remote pages; its caller
+     * releases them with unpin_user_page(), so the buffer needs the struct
+     * page refcount offset to move the GUP bias.  __get_user_pages() is the
+     * slow fallback whose write fault has to give up the trap until the page
+     * array is handed back.  All are optional: without them the destination
+     * rewrite stays in place (and with it the 2.17.0 residual). */
+    g_page_ref_ok = g_layout.page_ref_ok;
+    f_pin_remote = lookup("pin_user_pages_remote");
+    if (f_pin_remote && !uy_symbol_abi(btf, "pin_user_pages_remote", "lmllippp"))
+        f_pin_remote = 0;
+    f_gup_slow = lookup("__get_user_pages");
+    if (f_gup_slow && !uy_symbol_abi(btf, "__get_user_pages", "lmllippp"))
+        f_gup_slow = 0;
+
 
     /* Deferred native replay: do_debug_exception consumes the software-step
      * exception and __switch_to re-arms MDSCR_EL1.SS after a migration.  Both
@@ -5273,9 +5661,11 @@ static long resolve_symbols(const struct kclf_btf *btf, int *brk_argc, int *mmf_
                 g_fp_ready ? fp_name : "none", foll_force, g_page_shift);
     if (g_verbose)
         pr_info("urov-y: gup_fast=%d alloc_pages=%d put_page=%d copy_highpage=%d "
-                "vmalloc_to_page=%d\n", f_gup_fast ? 1 : 0, f_alloc_pages ? 1 : 0,
+                "vmalloc_to_page=%d pin_remote=%d gup_slow=%d page_ref=%d/%d\n",
+                f_gup_fast ? 1 : 0, f_alloc_pages ? 1 : 0,
                 f_put_page ? 1 : 0, f_copy_highpage ? 1 : 0,
-                f_vmalloc_to_page ? 1 : 0);
+                f_vmalloc_to_page ? 1 : 0, f_pin_remote ? 1 : 0,
+                f_gup_slow ? 1 : 0, g_layout.page_ref_ok, g_layout.page_ref);
     return 0;
 }
 
@@ -5418,8 +5808,8 @@ long urov_y_backend_init(const char *args)
 
     ret = resolve_kernel(btf_path, &brk_argc, &mmf_argc);
     if (ret) return ret;
-    if (g_max_pages > g_max_image_bytes / (3U * g_page_size))
-        g_max_pages = (uint32_t)(g_max_image_bytes / (3U * g_page_size));
+    if (g_max_pages > g_max_image_bytes / (7U * g_page_size))
+        g_max_pages = (uint32_t)(g_max_image_bytes / (7U * g_page_size));
     g_wrapper_mode = has_syscall_wrapper ? 1 : 0;
 
     if (brk_argc) {
@@ -5439,7 +5829,7 @@ long urov_y_backend_init(const char *args)
     /* Same-mm kernel-assisted reads must observe the same view as EL0 loads.
      * This is an after hook on the existing syscall-table control plane; it
      * adds no control ABI, status bit or counter. */
-    ret = fp_hook_syscalln(__NR_process_vm_readv, 6, 0, uy_vm_readv_after, 0);
+    ret = fp_hook_syscalln(__NR_process_vm_readv, 6, uy_vm_readv_before, uy_vm_readv_after, 0);
     if (ret) {
         if (g_verbose) pr_info("urov-y: hook process_vm_readv failed: %ld\n", ret);
         goto unwind_prctl;
@@ -5462,6 +5852,24 @@ long urov_y_backend_init(const char *args)
     } else if (g_verbose) {
         pr_info("urov-y: no GUP-fast overlay; vmsplice reads live bytes\n");
     }
+    /* The destination rewrite is only a compatibility path.  When both the
+     * pin entry and the struct page refcount are available, the kernel copies
+     * the overlay page itself and no user iovec takes part in the write. */
+    if (f_pin_remote) {
+        ret = hook_wrap(f_pin_remote, 7, 0, uy_pin_after, 0);
+        g_pin_hooked = ret ? 0 : 1;
+        if (ret && g_verbose) pr_info("urov-y: hook pin_user_pages_remote failed: %ld\n", ret);
+    }
+    if (f_gup_slow) {
+        ret = hook_wrap(f_gup_slow, 7, 0, uy_gup_slow_after, 0);
+        g_gup_slow_hooked = ret ? 0 : 1;
+        if (ret && g_verbose) pr_info("urov-y: hook __get_user_pages failed: %ld\n", ret);
+    }
+    g_pin_ok = g_pin_hooked && g_page_ref_ok && f_vmalloc_to_page;
+    if (g_verbose && !g_pin_ok)
+        pr_info("urov-y: process_vm_readv keeps the destination rewrite "
+                "(pin=%d ref=%d v2p=%d)\n", g_pin_hooked, g_page_ref_ok,
+                f_vmalloc_to_page ? 1 : 0);
 
     for (i = 0; i < UY_GATE_NUM; ++i) {
         ret = fp_hook_syscalln(g_gate_nrs[i], 6, uy_gate_before, uy_gate_after,
@@ -5498,7 +5906,8 @@ long urov_y_backend_init(const char *args)
         if (ret && g_verbose) pr_info("urov-y: hook do_mem_abort failed: %ld\n", ret);
     }
     if (g_page_hooked) {
-        ret = hook_wrap(f_handle_mm_fault, mmf_argc, uy_mm_fault_before, uy_mm_fault_after, 0);
+        ret = hook_wrap(f_handle_mm_fault, mmf_argc, uy_mm_fault_before, uy_mm_fault_after,
+                        (void *)(uintptr_t)mmf_argc);
         g_mmf_hooked = ret ? 0 : 1;
         if (ret) {
             if (g_verbose) pr_info("urov-y: hook MM fault handler failed: %ld\n", ret);
@@ -5549,6 +5958,15 @@ long urov_y_backend_init(const char *args)
     return 0;
 
 unwind_prctl:
+    g_pin_ok = 0;
+    if (g_gup_slow_hooked) {
+        hook_unwrap(f_gup_slow, 0, uy_gup_slow_after);
+        g_gup_slow_hooked = 0;
+    }
+    if (g_pin_hooked) {
+        hook_unwrap(f_pin_remote, 0, uy_pin_after);
+        g_pin_hooked = 0;
+    }
     if (g_gup_hooked) {
         hook_unwrap((void *)f_gup_fast, 0, uy_gup_after);
         g_gup_hooked = 0;
@@ -5606,8 +6024,17 @@ long urov_y_backend_exit(void)
         g_prctl_hooked = 0;
     }
     if (g_vm_readv_hooked) {
-        fp_unhook_syscalln(__NR_process_vm_readv, 0, uy_vm_readv_after);
+        fp_unhook_syscalln(__NR_process_vm_readv, uy_vm_readv_before, uy_vm_readv_after);
         g_vm_readv_hooked = 0;
+    }
+    g_pin_ok = 0;
+    if (g_gup_slow_hooked) {
+        hook_unwrap(f_gup_slow, 0, uy_gup_slow_after);
+        g_gup_slow_hooked = 0;
+    }
+    if (g_pin_hooked) {
+        hook_unwrap(f_pin_remote, 0, uy_pin_after);
+        g_pin_hooked = 0;
     }
     if (g_kread_hooked) {
         hook_unwrap(f_kread, 0, uy_kread_after);

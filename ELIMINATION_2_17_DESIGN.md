@@ -191,6 +191,8 @@ POE，App 的 seccomp 拒绝 syscall 288），所以本轮不声明已验证 POE
 6. **execve/进程退出**：替换/销毁地址空间仍结束会话；旧代码已不存在，不构成
    读值不一致。
 
+普通 App 仍可利用 `process_vm_readv` 后置钩子对 iovec 的二次读取检测覆盖，见 §8。
+
 ## 7. 复跑
 
 ```powershell
@@ -202,4 +204,115 @@ python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --r
 python ./kpms/urov-lab/tools/run_elimination_device.py --serial $Serial --key $KpKey --skip-x-control --repeats 3 --cycles 1
 python ./kpms/urov-lab/tools/run_multipage_device.py --serial $Serial --key $KpKey --repeats 3 --cycles 1
 python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --dobby-detection --repeats 24 --cycles 1
+```
+
+## 8. 普通 App 的无密钥检测与校验
+
+### 8.1 双 iovec 读回
+
+Linux 在 `process_vm_readv()` 复制数据前导入两个 iovec 数组。`urov-y` 2.17.0 的
+`uy_vm_readv_after()` 在 Linux 完成复制后，再从用户态读取 iovec，并按调用窗口
+向覆盖范围对应的目的地址写回 `image` 或 `snapshot`。
+[Android 内核源码](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1-sp/mm/process_vm_access.c#275) ·
+[模块后置钩子](urov_y_backend.c#L4262)
+
+对自身 PID 发起两段复制。第一段把 `post` 指针写入用户态的 `local[1].iov_base`。
+第二段仍按 Linux 已导入的描述符把目标页字节写入 `live`。后置钩子读到更新后的
+`local[1]`，于是把覆盖字节写进 `post`。两处目的地址和 iovec 数组都在探针私有的
+可写内存中。
+[读回实现](native/urov_observe.c#L115)
+
+```c
+#define _GNU_SOURCE
+#include <errno.h>
+#include <stdint.h>
+#include <sys/uio.h>
+#include <unistd.h>
+
+static int read_redirected(const uint8_t *address, uint8_t *live,
+                           uint8_t *post, size_t size)
+{
+    void *redirect = post;
+    struct iovec local[2] = {
+        { .iov_base = &local[1].iov_base, .iov_len = sizeof(redirect) },
+        { .iov_base = live, .iov_len = size },
+    };
+    struct iovec remote[2] = {
+        { .iov_base = &redirect, .iov_len = sizeof(redirect) },
+        { .iov_base = (void *)address, .iov_len = size },
+    };
+
+    ssize_t got = process_vm_readv(getpid(), local, 2, remote, 2, 0);
+    if (got != (ssize_t)(sizeof(redirect) + size)) return got < 0 ? errno : EIO;
+    return local[1].iov_base == redirect ? 0 : EPROTO;
+}
+```
+
+### 8.2 接入与判定
+
+App 调用 `ud_observe_readv_redirect()`，传入目标 RX 地址、同一文件及偏移的只读
+非执行别名、样本长度、backing fd、文件偏移，以及业务实际使用且无副作用的读取
+函数。每个样本为 1–64 字节，限制在一页内。调用期间持有 fd 和两份映射，探针
+前后核对设备号、inode、偏移、权限、映射范围和文件元数据。仅在已确认允许
+`process_vm_readv` 的 Android 配置上启用，并在后台线程低频采样。
+[接口](native/urov_observe.h#L42)
+
+每次复核做三轮。各轮交替以 `0x5a`、`0xa5` 填充 `post`，先采样只读别名，要求
+`live` 等于 `pread()` 取得的文件字节且 `post` 保留填充值。随后采样业务读值和
+目标活页，要求两份字节各自跨轮稳定。探针分别返回两个判定。
+[判定实现](native/urov_observe.c#L133)
+
+| 判定 | 含义 |
+| --- | --- |
+| `post_copy == UD_MATCH` | `post` 被稳定写回。镜像和活页字节相同也能观察到这个信号。 |
+| `reader_diff == UD_MATCH` | 业务读值与 `live_bytes` 稳定分叉。 |
+| `UD_NO_MATCH` | 该项在本次样本中未发现异常。结论限于采样范围、读点和时刻。 |
+| `UD_UNKNOWN` | 系统调用失败或短读、对照异常、映射或样本不稳定。保留不确定状态，避免据此放行完整性校验或中断正常业务。 |
+
+对现有 ELF `.text`，在有效样本中只用 `live_bytes` 和可信发布版本的字节或摘要
+做完整性比较。这样仅 Dobby 改码时也能发现代码变化，并可用 `post_copy` 区分额外
+的读回覆盖。探针不改目标代码、权限或会话。AP 模式的 `LDXR; LDRB; ADD; STXR`
+可作为辅助证据，独占结果混合时单独记为 `UD_UNKNOWN`。
+[测试夹具](apps/urov-detect/read_defense_fixture.inc#L154)
+
+对 App 自己装载的独立位置无关代码，可以用 `MAP_PRIVATE | MAP_ANONYMOUS`
+创建 RW 映射，初始化后切为 RX。目标没有 `vm_file`，三种模式的 `REGISTER`
+均拒绝该映射。对于既有文件映射，等长 `mremap` 在夹具中只撤销了 BRK 和 UXN
+会话，AP 会话继续返回镜像。BRK 的一次撤销约耗时 108 ms。对正常业务，现有
+ELF 采用活页校验避开伪造，彻底撤销 AP 会话需授权控制面。
+[目标页校验](urov_y_backend.c#L1076) ·
+[撤销复测](results/read-defense-20261108-171543/summary.json)
+
+### 8.3 真机复测
+
+Pixel 6、Android 16、ARM64、4 KiB 页，`urov-y` 2.17.0。检测在
+`untrusted_app`、`CapEff=0`、`Seccomp=2`、SELinux Enforcing 下运行。密钥和
+`prctl` 仅由夹具用于注册、撤销和核对会话，检测入口不接收控制面参数。
+
+| 状态 | 额外写回 | 业务读值与活页分叉 |
+| --- | ---: | ---: |
+| 无活动覆盖，含模块空闲、仅 Dobby 改码及撤销后 | 0 / 9,984 | 0 / 9,984 |
+| 覆盖活动，镜像与活页相同 | 3,072 / 3,072 | 0 / 3,072 |
+| 覆盖活动，原版镜像掩盖 Dobby 改码 | 3,072 / 3,072 | 3,072 / 3,072 |
+
+BRK、UXN、AP 调用窗口和 AP 全调用者各启动 6 个测试进程，每阶段采样 128 次。
+16,128 次活页读回与夹具真值一致，主探针 `UNKNOWN=0`。按业务读值比较原版字节时，
+3,072 次被掩盖的改码均通过，改用活页校验后均被拒绝。匿名 RX 注册尝试 24/24 次
+返回 `EINVAL`，测试代码仍返回原始执行结果。
+[复测汇总](results/read-defense-v216-20261108-171301/summary.json)
+
+后台业务线程共完成 11,182,592 次迭代，错误为 0，UI 心跳最大间隔 21 ms。对
+32 字节样本，各阶段平均复核耗时为 2.91–3.69 ms。首轮干净对照曾出现一次
+独占指令混合结果，夹具现将该类 `EAGAIN` 记为不确定，保留对主探针的严格断言。
+两组完整复测前后 boot ID 一致，增量内核日志无故障记录，模块均已卸载。
+[首轮日志](results/read-defense-v216-20261108-171007/read-defense-v216-brk-3-8217.log) ·
+[夹具判定](apps/urov-detect/read_defense_fixture.inc#L199)
+
+在仓库根目录按 §7 构建模块，然后运行以下测试。`--read-defense-v216` 是双 iovec
+夹具的历史参数名，本次加载的模块版本为 2.17.0。
+
+```powershell
+./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --read-defense-v216 --repeats 128 --cycles 6
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --read-defense --repeats 24 --cycles 2 --skip-install
 ```

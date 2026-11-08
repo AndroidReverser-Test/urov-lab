@@ -32,6 +32,13 @@ struct uy_layout {
     int task_fpsimd;
     int task_sve_state;
     int task_sme_state;
+    /* offsetof(struct page, _refcount.counter) (or refcount.counter on newer
+     * sources); -1 when BTF does not describe struct page.  The overlay hands
+     * an image page back through pin_user_pages_remote(), which the caller
+     * releases with unpin_user_page() (a GUP_PIN_COUNTING_BIAS subtraction),
+     * so the substitution has to move that bias between the two pages. */
+    int page_ref;
+    int page_ref_ok;
 };
 
 struct uy_geometry {
@@ -183,6 +190,7 @@ static int uy_task_thread_ptr(const struct kclf_btf *btf, const char *name)
 static int uy_layout_from_btf(struct uy_layout *layout, const struct kclf_btf *btf)
 {
     const struct kclf_btf_type *sem = kclf_btf_find(btf, "rw_semaphore", 0);
+    const struct kclf_btf_type *page = kclf_btf_find(btf, "page", 0);
 
     layout->task_mm = kclf_btf_member_range(btf, "task_struct", "mm", 8, 8);
     layout->task_pid = kclf_btf_member_range(btf, "task_struct", "pid", 4, 4);
@@ -201,6 +209,24 @@ static int uy_layout_from_btf(struct uy_layout *layout, const struct kclf_btf *b
     layout->task_fpsimd = uy_fpsimd_offset(btf);
     layout->task_sve_state = uy_task_thread_ptr(btf, "sve_state");
     layout->task_sme_state = uy_task_thread_ptr(btf, "sme_state");
+    /* struct page's refcount has been named _refcount (<= 6.5) and refcount
+     * (>= 6.6); both wrap an atomic_t whose only member is `counter`. */
+    layout->page_ref = -1;
+    if (page) {
+        uint32_t ref_type = 0;
+        int ref_off = uy_btf_member(btf, page, "_refcount", &ref_type);
+
+        if (ref_off < 0) ref_off = uy_btf_member(btf, page, "refcount", &ref_type);
+        if (ref_off >= 0) {
+            const struct kclf_btf_type *atomic = kclf_btf_resolve(btf, ref_type);
+            int cnt_off = uy_btf_member(btf, atomic, "counter", 0);
+
+            if (cnt_off >= 0 && atomic->size >= (unsigned)cnt_off + 4U &&
+                page->size >= (unsigned)(ref_off + cnt_off) + 4U)
+                layout->page_ref = ref_off + cnt_off;
+        }
+    }
+    layout->page_ref_ok = layout->page_ref >= 0;
     layout->mmap_lock = -1;
     if (sem && sem->size >= 16 && sem->size <= 512) {
         layout->mmap_lock = kclf_btf_member_range(btf, "mm_struct", "mmap_lock", sem->size, 8);
