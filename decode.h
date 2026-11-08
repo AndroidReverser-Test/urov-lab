@@ -62,4 +62,26 @@ struct uro_load {
  */
 int uro_decode(uint32_t insn, const struct uro_regs *regs, struct uro_load *out);
 
+/* Store counterpart used by the PAGE_AP write handoff.  Every accepted
+ * instruction writes one contiguous range, split into `count` equal-sized
+ * segments, each taken from one register (rt[i]) or one V register when
+ * `vector` is set.  `zva` marks DC ZVA, which writes 64 zero bytes and reads
+ * only the address register.  Decode only: no mapping check and no access. */
+struct uro_store {
+    uint64_t address;
+    unsigned size;
+    unsigned count;
+    unsigned rt[4];
+    unsigned vector;
+    unsigned zva;
+    unsigned writeback;
+    unsigned rn;
+    uint64_t wb;
+    uint64_t total;
+};
+
+/* Return 0 on a supported store, -1 on a load or an unsupported encoding. */
+int uro_decode_store(uint32_t insn, const struct uro_regs *regs,
+                     struct uro_store *out);
+
 #endif

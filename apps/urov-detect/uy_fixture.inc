@@ -11,8 +11,8 @@
  *     see no PAGE_AP store after CLREX: a direct branch to the load or to a
  *     NOP in the LDXR gap is rejected by the bridge.
  *   - the fixed cross-page branch probe stays negative on 2.9.0; the XZR
- *     sequence detects reservation loss on active PAGE_AP, including
- *     reads outside the caller window and equal-value overlays.
+ *     sequence (including the non-zero sentinel) is completed by 2.15.0, so
+ *     neither shape remains a positive fingerprint.
  *   - ud_observe_reader() outside the business window returns original bytes.
  *   - ud_observe_execution() on the canary matches only in active PAGE_UXN.
  *   - ud_observe_unreserved_store() confirms STXR never writes without an
@@ -164,6 +164,82 @@ __attribute__((noinline)) static void prot_store8(volatile uint8_t *p, uint8_t v
     __asm__ volatile("" : : "r"(p), "r"(value) : "memory");
 }
 
+/* Store shapes exercised by the 2.15.0 write handoff.  The compiler is kept
+ * away from them so the decoder sees exactly the instruction under test. */
+__attribute__((noinline)) static void prot_store16(volatile uint16_t *p, uint16_t v)
+{
+    __asm__ volatile("strh %w0, [%1]" : : "r"(v), "r"(p) : "memory");
+}
+
+__attribute__((noinline)) static void prot_store32(volatile uint32_t *p, uint32_t v)
+{
+    __asm__ volatile("str %w0, [%1]" : : "r"(v), "r"(p) : "memory");
+}
+
+__attribute__((noinline)) static void prot_store64(volatile uint64_t *p, uint64_t v)
+{
+    __asm__ volatile("str %0, [%1]" : : "r"(v), "r"(p) : "memory");
+}
+
+__attribute__((noinline)) static void prot_store_pair(volatile uint64_t *p,
+                                                      uint64_t a, uint64_t b)
+{
+    __asm__ volatile("stp %0, %1, [%2]" : : "r"(a), "r"(b), "r"(p) : "memory");
+}
+
+__attribute__((noinline)) static void prot_store_pair_post(volatile uint64_t *p,
+                                                           uint64_t a, uint64_t b,
+                                                           volatile uint64_t **out)
+{
+    volatile uint64_t *q = p;
+
+    __asm__ volatile("stp %1, %2, [%0], #16"
+                     : "+r"(q) : "r"(a), "r"(b) : "memory");
+    *out = q;
+}
+
+__attribute__((noinline)) static void prot_store_strb_post(volatile uint8_t *p,
+                                                           uint8_t v,
+                                                           volatile uint8_t **out)
+{
+    volatile uint8_t *q = p;
+
+    __asm__ volatile("strb %w1, [%0], #1"
+                     : "+r"(q) : "r"(v) : "memory");
+    *out = q;
+}
+
+__attribute__((noinline)) static void prot_store_v16(volatile uint8_t *p, uint8_t v)
+{
+    __asm__ volatile("dup v0.16b, %w0\n\tst1 {v0.16b}, [%1]"
+                     : : "r"(v), "r"(p) : "v0", "memory");
+}
+
+__attribute__((noinline)) static void prot_store_pair_q(volatile uint8_t *p,
+                                                        uint8_t a, uint8_t b)
+{
+    __asm__ volatile("dup v0.16b, %w0\n\tdup v1.16b, %w1\n\tstp q0, q1, [%2]"
+                     : : "r"(a), "r"(b), "r"(p) : "v0", "v1", "memory");
+}
+
+__attribute__((noinline)) static void prot_zero64(volatile uint8_t *p)
+{
+    __asm__ volatile("dc zva, %0" : : "r"(p) : "memory");
+}
+
+/* Kernel-assisted writer: /proc/self/mem takes access_remote_vm(), never the
+ * EL0 data abort, so the bytes have to be reflected by the kread hook. */
+static int prot_mem_write8(void *address, uint8_t value)
+{
+    int fd = open("/proc/self/mem", O_RDWR | O_CLOEXEC);
+    ssize_t n;
+
+    if (fd < 0) return -1;
+    n = pwrite(fd, &value, 1, (off_t)(uintptr_t)address);
+    close(fd);
+    return n == 1 ? 0 : -1;
+}
+
 static int prot_expect_segv(int write_access, const void *address)
 {
     struct sigaction action = {0}, old_segv, old_bus;
@@ -186,6 +262,8 @@ static int prot_expect_segv(int write_access, const void *address)
     (void)sigaction(SIGBUS, &old_bus, NULL);
     return faulted && g_prot_fault > 0;
 }
+
+static int uy_mapping_private_kb(const void *addr, unsigned *dirty, unsigned *anon);
 
 static void elimination_protection_case(struct uy_ctx *ctx)
 {
@@ -264,22 +342,119 @@ static void elimination_protection_case(struct uy_ctx *ctx)
             "PROT mprotect(RW) state=%u armed=%llu", st.state,
             (unsigned long long)st.reserved);
 
-    /* The first real store is handed to Linux, which performs the normal COW.
-     * It changes this private copy only, and retires the stale image. */
+    /* The first real store is absorbed: the live page gets the normal COW,
+     * the image keeps serving the fake window, and the trap is not retired. */
     prot_store8((volatile uint8_t *)p.address + UROV_Y_PAGE - 1U, 0);
-    REQUIRE(uy_business_ldr(at) == disk, "PROT store did not retire the overlay: %llx/%llx",
-            (unsigned long long)uy_business_ldr(at), (unsigned long long)disk);
-    REQUIRE(!uy_status(ctx, &st) && st.state == UROV_Y_ACTIVE && st.reserved == 0,
+    REQUIRE(uy_business_ldr(at) == fake, "PROT store retired the overlay: %llx/%llx",
+            (unsigned long long)uy_business_ldr(at), (unsigned long long)fake);
+    REQUIRE(uy_business_ldrb(p.address + UROV_Y_PAGE - 1U) == 0,
+            "PROT store did not reach the live page");
+    REQUIRE(!uy_status(ctx, &st) && st.state == UROV_Y_ACTIVE && st.reserved == 1,
             "PROT store state=%u armed=%llu", st.state, (unsigned long long)st.reserved);
+
+    /* A store inside the fake window updates the window, not the trap. */
+    prot_store8((volatile uint8_t *)at, 0x5a);
+    REQUIRE(uy_business_ldr(at) == ((fake & ~(uint64_t)0xffU) | 0x5aU),
+            "PROT window store got=%llx", (unsigned long long)uy_business_ldr(at));
+    REQUIRE(!uy_status(ctx, &st) && st.state == UROV_Y_ACTIVE && st.reserved == 1,
+            "PROT window store state=%u armed=%llu", st.state,
+            (unsigned long long)st.reserved);
+
+    /* Every common store shape must be absorbed, including the writeback
+     * forms: the decoder commits the base-register update as well. */
+    {
+        uint8_t *sb = p.address + 2048U;
+        volatile uint64_t *q64 = 0;
+        volatile uint8_t *q8 = 0;
+        unsigned dirty = 0, anon = 0;
+        int have_smaps = !uy_mapping_private_kb(p.address, &dirty, &anon);
+
+        if (p.entry + 192U <= 2048U || p.entry >= 2048U + 512U) {
+            prot_store16((volatile uint16_t *)(sb + 0), 0xa5c3U);
+            REQUIRE((uy_business_ldr(sb) & 0xffffU) == 0xa5c3U,
+                    "PROT strh=%llx", (unsigned long long)uy_business_ldr(sb));
+            REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT strh retired");
+            prot_store32((volatile uint32_t *)(sb + 8), 0xdeadbeefU);
+            REQUIRE((uint32_t)uy_business_ldr(sb + 8) == 0xdeadbeefU,
+                    "PROT str=%llx", (unsigned long long)uy_business_ldr(sb + 8));
+            REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT str retired");
+            prot_store64((volatile uint64_t *)(sb + 16), UINT64_C(0x1122334455667788));
+            REQUIRE(uy_business_ldr(sb + 16) == UINT64_C(0x1122334455667788),
+                    "PROT strx=%llx", (unsigned long long)uy_business_ldr(sb + 16));
+            REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT strx retired");
+            prot_store_pair((volatile uint64_t *)(sb + 32),
+                            UINT64_C(0x0102030405060708), UINT64_C(0x1112131415161718));
+            REQUIRE(uy_business_ldr(sb + 32) == UINT64_C(0x0102030405060708) &&
+                    uy_business_ldr(sb + 40) == UINT64_C(0x1112131415161718),
+                    "PROT stp=%llx/%llx", (unsigned long long)uy_business_ldr(sb + 32),
+                    (unsigned long long)uy_business_ldr(sb + 40));
+            REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT stp retired");
+            prot_store_pair_post((volatile uint64_t *)(sb + 64),
+                                 UINT64_C(0x2122232425262728),
+                                 UINT64_C(0x3132333435363738), &q64);
+            REQUIRE(q64 == (volatile uint64_t *)(sb + 80),
+                    "PROT stp-post base=%p", (void *)q64);
+            REQUIRE(uy_business_ldr(sb + 64) == UINT64_C(0x2122232425262728) &&
+                    uy_business_ldr(sb + 72) == UINT64_C(0x3132333435363738),
+                    "PROT stp-post data");
+            REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT stp-post retired");
+            prot_store_strb_post(sb + 96, 0x7e, &q8);
+            REQUIRE(q8 == sb + 97 && uy_business_ldrb(sb + 96) == 0x7e,
+                    "PROT strb-post base=%p byte=%02x", (void *)q8,
+                    (unsigned)uy_business_ldrb(sb + 96));
+            REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT strb-post retired");
+            prot_store_v16(sb + 128, 0x3c);
+            REQUIRE(uy_business_ldr(sb + 128) == UINT64_C(0x3c3c3c3c3c3c3c3c) &&
+                    uy_business_ldr(sb + 136) == UINT64_C(0x3c3c3c3c3c3c3c3c),
+                    "PROT st1=%llx/%llx", (unsigned long long)uy_business_ldr(sb + 128),
+                    (unsigned long long)uy_business_ldr(sb + 136));
+            REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT st1 retired");
+            prot_store_pair_q(sb + 160, 0x11, 0x22);
+            REQUIRE(uy_business_ldr(sb + 160) == UINT64_C(0x1111111111111111) &&
+                    uy_business_ldr(sb + 176) == UINT64_C(0x2222222222222222),
+                    "PROT stpq=%llx/%llx", (unsigned long long)uy_business_ldr(sb + 160),
+                    (unsigned long long)uy_business_ldr(sb + 176));
+            REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT stpq retired");
+            for (unsigned i = 0; i < 8U; ++i)
+                prot_store64((volatile uint64_t *)(sb + 256 + i * 8U), ~UINT64_C(0));
+            REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT fill retired");
+            prot_zero64(sb + 256);
+            REQUIRE(uy_business_ldr(sb + 256) == 0 && uy_business_ldr(sb + 312) == 0,
+                    "PROT zva=%llx/%llx", (unsigned long long)uy_business_ldr(sb + 256),
+                    (unsigned long long)uy_business_ldr(sb + 312));
+            REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT zva retired");
+            LOG("ELIM_PROT_STORE shapes=11 smaps=%d dirty_kb=%u anon_kb=%u",
+                have_smaps, dirty, anon);
+        } else {
+            LOG("ELIM_PROT_STORE skipped entry=%u", (unsigned)p.entry);
+        }
+    }
+
+    /* A kernel-assisted write must be visible to the next EL0 read and must
+     * not retire the trap. */
+    {
+        uint8_t *kw = p.address + 3072U;
+        if ((p.entry + 192U <= 3072U || p.entry >= 3073U) &&
+            prot_mem_write8(kw, 0x6d) == 0) {
+            REQUIRE(uy_business_ldrb(kw) == 0x6d,
+                    "PROT kwrite read=%02x", (unsigned)uy_business_ldrb(kw));
+            REQUIRE(!uy_status(ctx, &st) && st.state == UROV_Y_ACTIVE && st.reserved == 1,
+                    "PROT kwrite retired state=%u armed=%llu", st.state,
+                    (unsigned long long)st.reserved);
+            LOG("ELIM_PROT_KWRITE result=PASS");
+        } else {
+            LOG("ELIM_PROT_KWRITE skipped errno=%d", errno);
+        }
+    }
 
     /* Android denies execmod after this private page became dirty, so the
      * test (like a real process) leaves the VMA writable and releases the
      * session from that state. */
-    REQUIRE(uy_business_ldr(at) == disk, "PROT final read=%llx",
-            (unsigned long long)uy_business_ldr(at));
+    REQUIRE(uy_business_ldr(at) == ((fake & ~(uint64_t)0xffU) | 0x5aU),
+            "PROT final read=%llx", (unsigned long long)uy_business_ldr(at));
     REQUIRE(uy_deactivate(ctx) == 0, "PROT DEACTIVATE errno=%d", errno);
     LOG("ELIM_PROT result=PASS generation=%llu disk=0x%llx fake=0x%llx "
-        "read_r=1 none_segv=1 exec_readable=1 rw_overlay=1 store_retired=1",
+        "read_r=1 none_segv=1 exec_readable=1 rw_overlay=1 store_absorbed=1",
         (unsigned long long)generation, (unsigned long long)disk,
         (unsigned long long)fake);
     page_close(&p);
@@ -664,7 +839,9 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     struct ud_reader_observation rd;
     struct urov_y_request st = {0}, before = {0};
     enum ud_verdict expected_exec = mode == UROV_Y_MODE_PAGE_UXN ? UD_MATCH : UD_NO_MATCH;
-    enum ud_verdict expected_nonzero = mode == UROV_Y_MODE_PAGE_AP ? UD_MATCH : UD_NO_MATCH;
+    /* 2.15.0 completes the XZR/LDXP shapes too, so the nonzero sentinel is no
+     * longer a positive fingerprint in any mode. */
+    enum ud_verdict expected_nonzero = UD_NO_MATCH;
     /* A failed native STXR must not write the sentinel. */
     enum ud_verdict expected_store = UD_NO_MATCH;
     enum ud_verdict expected_cross_page = UD_NO_MATCH;

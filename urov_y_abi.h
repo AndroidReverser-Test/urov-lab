@@ -66,9 +66,12 @@
  * EL0 data permission (AP[1]) on the *target* pages in the leaf PTE only, so
  * every EL0 data read of those pages takes a permission abort while fetch of
  * the same or any other page stays native.  The data abort is emulated with
- * the same fake/caller-window rules.  Arbitrary stores are never emulated;
- * an adjacent LDXR;load;STXR whose LDXR result is still in Rt is completed by
- * the handler so the exception return does not turn a native success into a
+ * the same fake/caller-window rules.  Since 2.15.0 a decoded store is absorbed
+ * by the handler: the same bytes are written through the kernel's COW/GUP
+ * path, the image is updated and the trap stays installed.  Unsupported store
+ * shapes fall back to the 2.14 per-page handoff.  An adjacent
+ * LDXR;load;STXR whose LDXR executed (including XZR destinations) is completed
+ * by the handler so the exception return does not turn a native success into a
  * failure.  This mode supports the v8 page array, LD1/LD2/LD3/LD4 and loads
  * that cross a page boundary. */
 #define UROV_Y_MODE_SITE_BRK 1U

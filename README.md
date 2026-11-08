@@ -1,6 +1,14 @@
 # UROV-LAB
 
-`urov-y` 2.14.0 把 2.13.0 仍成立的两类保护切换恢复路径消掉：对已登记页做
+`urov-y` 2.15.0 消除 2.14.0 的两个稳定写侧特征：对已登记页的普通 store
+不再把该页退役，而是解码出原指令、由内核 COW/GUP 写路径完成同样的字节，
+再把镜像与快照同步并重新装回 `AP[1]=0` 陷阱；`LDXR XZR; LDRB; STXR XZR`
+在非零 scratch 上也按控制流证据完成，`nonzero` 探针回到 `NO_MATCH`。
+`ELIM_PROT` 的 11 种写形状（GPR/SIMD/STP/ST1/DC ZVA、pre/post-index）全部
+吸收，`smaps` 仍是原生 COW 的 `Private_Dirty=4 KiB`。ABI 仍为 v8，
+`hooks=0xff`、请求布局、`ctl0` 字段和返回码不变。
+
+2.14.0 把 2.13.0 仍成立的两类保护切换恢复路径消掉：对已登记页做
 `mprotect(PROT_READ/PROT_NONE/PROT_EXEC/PROT_READ|PROT_WRITE)` 不再结束
 会话，私有文件页在 `mprotect(PROT_WRITE)` 后仍由 `AP[1]=0` 读陷阱服务，
 第一次真实 store 才把该页交给 Linux COW 并退役这一页的覆盖；未分配 pkey
@@ -26,6 +34,17 @@ no-op store。ABI v8 请求布局、`ctl0` 字段和计数器不变，`hooks` �
 2.4.0 的参数校验、并发镜像发布和陷阱撤销适配继续用于 Android ARM64 的 5.4 起的 5.x 和 6.x 内核，
 支持 4 KiB 及符合条件的 16 KiB 页表。实测、支持边界和复跑命令见
 [UROV-Y 兼容性与审计](COMPATIBILITY_Y.md)。下方日期条目保留各历史版本的行为和证据。
+
+2026-11-08 第十五轮消除：`urov-y` 2.15.0 让普通 store 不再退役覆盖：解码
+11 种 GPR/SIMD/STP/ST1/DC ZVA 写形状，由内核 COW/GUP 写路径完成同一批字节，
+同步镜像/快照后保持 `AP[1]=0`；`LDXR XZR` 的非零目标按直接分支位图 + GPR
+门控完成，`nonzero` 探针归零。Dobby 48×3 活动阶段 `ap=0/144`、
+`accepted_crc_with_ap=144/144`；CRC 5×2（16 次）、消除 3×1（11 次，
+`ELIM_PROT ... store_absorbed=1`、`shapes=11`）、多页 5×1 均 PASS。构建
+`urov-y.kpm 5fa88121...`、`urovdetect.apk 5104264b...`。方案与残余见
+[2.15.0 设计](ELIMINATION_2_15_DESIGN.md)、
+[结果 2.15.0](APP_READ_INTEGRITY_RESULTS.md#2150-写入吸收与-xzr-桥接) 与
+[审计 2.15.0](APP_READ_INTEGRITY_AUDIT.md#2150-写入吸收与-xzr-桥接)。
 
 2026-11-08 第十四轮消除：`urov-y` 2.14.0 让保护切换不再结束会话：`mprotect(R)`、
 `PROT_NONE`、`PROT_EXEC`、`mprotect(RW)` 后普通读取仍等于镜像；private COW 页

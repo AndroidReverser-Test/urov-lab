@@ -17,12 +17,13 @@
  * page EL0 execute-never and emulating the fetch.  PAGE_AP instead clears
  * only AP[1] on the target page: fetch (including a BTI/RET canary) stays
  * native, while every data read is emulated with the same caller-window rules.
- * PAGE_AP does not emulate arbitrary stores.  Because the exception return
- * clears the exclusive reservation, an LDXR;load;[NOP...];STXR sequence is
- * completed in the handler (see uy_llsc_prepare), but only when the LDXR
- * result is still in Rt, no direct branch in any executable mapping of the
- * process or indirect branch target left in a GPR reaches the LDXR..load span,
- * and only NOP/BTI instructions sit between the load and the store.  Every
+ * Since 2.15.0 a decoded store is absorbed: the handler performs the same
+ * bytes through the kernel's COW/GUP path, publishes them into the image and
+ * keeps the trap.  Unsupported store shapes still fall back to the 2.14
+ * per-page handoff.  Because the exception return clears the exclusive
+ * reservation, an LDXR;load;[NOP...];STXR sequence is completed in the handler
+ * (see uy_llsc_prepare), but only when control-flow evidence proves the LDXR
+ * ran and only NOP/BTI instructions sit between the load and the store.  Every
  * other store stays native.
  */
 #include <common.h>
@@ -209,6 +210,7 @@ struct uy_page {
     uint32_t armed;      /* an AP[1]=0 trap is installed in the leaf PTE */
     uint32_t want;       /* the current VMA allows EL0 reads: trap desired */
     uint32_t dead;       /* a real store reached the page: overlay is stale */
+    uint32_t seq;        /* image publication sequence for in-place stores */
     /* Registration-time VMA identity.  A fork copies the VMA with
      * vm_area_dup(), so the child keeps the same vm_file pointer, pgoff and
      * range; a foreign process that opens the same file again has a different
@@ -506,6 +508,7 @@ static struct uy_page *page_find(uint64_t page)
     while (lo < hi) {
         uint32_t mid = lo + (hi - lo) / 2;
         uint64_t base = g_sess.pages[mid].base;
+
         if (page < base) hi = mid;
         else if (page > base) lo = mid + 1;
         else return &g_sess.pages[mid];
@@ -522,17 +525,19 @@ static struct uy_page *page_by_index(uint32_t index)
     return 0;
 }
 
-/* A leaf PTE that only this module produces: present, read-only for EL0
- * (AP[2]=1) and without EL0 read permission (AP[1]=0).  The kernel never
- * creates that pair for a readable VMA - execute-only mappings have no
- * VM_READ and PROT_NONE pages carry PTE_PROT_NONE - so the signature both
- * identifies a trap a forked child inherited and keeps an unrelated
- * permission fault from being "repaired" into a readable page. */
+/* A leaf PTE that only this module produces: present, without EL0 data
+ * permission (AP[1]=0).  The kernel never creates that encoding for a
+ * readable VMA - execute-only mappings have no VM_READ and PROT_NONE pages
+ * carry PTE_PROT_NONE - so the signature both identifies a trap a forked
+ * child inherited and keeps an unrelated permission fault from being
+ * "repaired" into a readable page.  AP[2] is deliberately not part of the
+ * signature: a store absorbed by 2.15.0 keeps the COW-writable leaf and the
+ * trap, so the module now owns both the read-only and the writable form. */
 static int uy_leaf_signature(uint64_t pte)
 {
     if ((pte & (PTE_VALID | PTE_TYPE_MASK)) != (PTE_VALID | PTE_TYPE_PAGE)) return 0;
     if (pte & (PTE_CONT | PTE_SPECIAL | PTE_DEVMAP | PTE_PROT_NONE)) return 0;
-    return !(pte & PTE_USER) && (pte & PTE_RDONLY);
+    return !(pte & PTE_USER);
 }
 
 static int uy_trap_leaf(void *mm, uint64_t far)
@@ -576,13 +581,51 @@ static int uy_retired_has(uint64_t page)
 }
 
 /* The caller holds a session reader reference. Each page image stays intact
- * for that reference, even if SET publishes a replacement concurrently. */
+ * for that reference, even if SET publishes a replacement concurrently.
+ *
+ * A successful store updates image and snapshot in place (the live page and
+ * the native view both change).  The sequence counter keeps a concurrent
+ * reader from mixing the halves of one instruction: the writer publishes odd,
+ * copies, then publishes the next even value.  A writer preempted for longer
+ * than the retry budget leaves the reader with the snapshot, which is always
+ * a complete older view. */
 static void page_view(struct uy_page *p, uint64_t off, unsigned total,
                       uint8_t *out, int replay)
 {
     const uint8_t *src = replay ? p->snapshot : __atomic_load_n(&p->image, __ATOMIC_ACQUIRE);
+    unsigned attempt;
 
-    memcpy(out, src + off, total);
+    if (replay) {
+        memcpy(out, src + off, total);
+        return;
+    }
+    for (attempt = 0; attempt < 64U; ++attempt) {
+        uint32_t seq1 = __atomic_load_n(&p->seq, __ATOMIC_ACQUIRE);
+        uint32_t seq2;
+
+        if (seq1 & 1U) {
+            __asm__ volatile("yield" : : : "memory");
+            continue;
+        }
+        memcpy(out, src + off, total);
+        seq2 = __atomic_load_n(&p->seq, __ATOMIC_ACQUIRE);
+        if (seq1 == seq2 && !(seq2 & 1U)) return;
+    }
+    memcpy(out, p->snapshot + off, total);
+}
+
+/* Publish a store into the immutable image and the native-view snapshot. */
+static void page_store_bytes(struct uy_page *p, uint64_t off,
+                             const uint8_t *bytes, unsigned len)
+{
+    uint32_t seq = __atomic_load_n(&p->seq, __ATOMIC_RELAXED);
+
+    __atomic_store_n(&p->seq, seq + 1U, __ATOMIC_RELEASE);
+    __asm__ volatile("dmb ishst" : : : "memory");
+    memcpy(p->image + off, bytes, len);
+    memcpy(p->snapshot + off, bytes, len);
+    __asm__ volatile("dmb ishst" : : : "memory");
+    __atomic_store_n(&p->seq, seq + 2U, __ATOMIC_RELEASE);
 }
 
 static int range_covered(uint64_t address, unsigned total)
@@ -905,6 +948,17 @@ static int page_set_ap(void *mm, uint64_t page, int set)
                             PTE_RDONLY, PTE_DBM, 0);
 }
 
+/* The same AP[1] transition on a leaf whose write/COW state may already have
+ * changed.  A successful PAGE_AP store lets Linux perform its normal COW, so
+ * the leaf can be writable when the trap has to be reinstalled; AP[1] is
+ * independent of AP[2] and EL1 writes are unaffected.  Disarming must also
+ * work on that leaf, otherwise release_session() could no longer restore it. */
+static int page_set_ap_any(void *mm, uint64_t page, int set)
+{
+    return page_update_bits(mm, page, set ? PTE_USER : 0, set ? 0 : PTE_USER,
+                            0, 0, 0);
+}
+
 /* Registration already copied every target page. If reclaim drops a PTE
  * before arming, return EAGAIN after the common session rollback. */
 static long ap_arm_pages(struct uy_session *s, void *mm)
@@ -943,7 +997,7 @@ static int ap_disarm_pages(struct uy_session *s, void *mm)
 
         __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
         if (!__atomic_load_n(&p->armed, __ATOMIC_ACQUIRE)) continue;
-        ret = page_set_ap(mm, p->base, 1);
+        ret = page_set_ap_any(mm, p->base, 1);
         if (ret < 0 && ret != -ENOENT) {
             rc = ret;
             continue;
@@ -962,22 +1016,21 @@ static int ap_disarm_pages(struct uy_session *s, void *mm)
 /* Apply a successful mprotect()/pkey_mprotect() to the registered pages it
  * covers.
  *
- * A protection change is not a reason to end the session.  A private
- * file-backed leaf stays read-only after mprotect(PROT_WRITE) (the kernel
- * keeps the COW encoding), so it can still carry the AP[1]=0 trap: reads are
- * served from the image while a real store faults and is handed back to
- * Linux, which performs the normal COW and then overwrites the page.  That is
- * the only point at which the overlay becomes stale; it is recorded per page
- * in `dead` and the page is never re-armed for this session.
+ * A protection change is not a reason to end the session.  After
+ * mprotect(PROT_WRITE) a private file leaf may already be COW-writable, and a
+ * shared writable leaf is writable too; either form still carries the
+ * AP[1]=0 trap because AP[1] only governs EL0.  A store then faults and is
+ * absorbed by the write handoff (see uy_store_emulate), so the image stays
+ * live and `dead` is no longer produced by a writable protection.
  *
  * When the new protection removes EL0 read permission, the kernel has already
  * installed its own PTE (PROT_NONE or the execute-only AP[1]=0 encoding).  The
  * page is only suspended, never modified: reads must keep faulting exactly as
  * they do without the module.  A later readable protection re-arms it.
  *
- * A leaf whose PTE cannot be read-protected (a genuinely writable shared
- * file leaf) falls back to the live view for that page, which is the same
- * visible behaviour 2.13 had after mprotect(PROT_WRITE). */
+ * A leaf that cannot carry the trap at all (special/devmap/contiguous) falls
+ * back to the live view for that page, which is the pre-2.14 behaviour for
+ * that one page. */
 static void ap_protection_update(void *mm, uint64_t start, uint64_t len, uint64_t prot)
 {
     uint64_t end = start + len;
@@ -998,7 +1051,7 @@ static void ap_protection_update(void *mm, uint64_t start, uint64_t len, uint64_
         }
         __atomic_store_n(&p->want, 1, __ATOMIC_RELEASE);
         if (__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) continue;
-        ret = page_set_ap(mm, p->base, 0);
+        ret = page_set_ap_any(mm, p->base, 0);
         if (ret >= 0) {
             if (ret > 0) changed = 1;
             /* page_update_bits() only records `armed` when it changed the
@@ -1010,8 +1063,8 @@ static void ap_protection_update(void *mm, uint64_t start, uint64_t len, uint64_
             /* Not resident: handle_mm_fault re-arms when it faults in. */
             continue;
         }
-        /* Writable shared leaf, DBM, or a lost CAS race: the image cannot be
-         * kept in front of the live bytes for this page any more. */
+        /* A leaf shape that cannot carry the trap (special/devmap/contiguous
+         * or a lost CAS race): this page keeps the live view. */
         __atomic_store_n(&p->dead, 1, __ATOMIC_RELEASE);
         __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
     }
@@ -1911,10 +1964,15 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
     mask = lsize == 3U ? ~UINT64_C(0) : ((UINT64_C(1) << (8U << lsize)) - 1U);
     if (lrt == 31U) {
         /* LDXR XZR;...;STXR XZR discards the loaded word and stores zero.
-         * Only complete it when the destination already holds zero, so the
-         * emulated store is a no-op and a missed skip path cannot change a
-         * byte.  Detector scratch is zero-initialised. */
-        if (mem != 0) return;
+         * There is no register value that can prove the LDXR ran, so the
+         * proof is control flow: the LDXR is at a fixed PC before the load,
+         * no direct branch in any executable mapping enters the span
+         * (uy_llsc_skipped), and no GPR still holds a span address
+         * (uy_llsc_indirect).  An indirect branch cannot both target the span
+         * and survive without leaving that address in a register through the
+         * faulting instruction.  Under those conditions the emulated store is
+         * the native one even when the destination is non-zero, so the 2.14
+         * "nonzero sentinel" fingerprint is gone. */
     } else if (regs->x[lrt] != (mem & mask)) {
         /* LDXR Wt/Bt/Ht zero-extend into Xt, so the full register must match
          * the zero-extended memory value.  This also rejects a caller that
@@ -1953,6 +2011,111 @@ static void uy_llsc_commit(struct pt_regs *regs, uint64_t fault_pc,
     if (plan->status_reg != 31U) regs->regs[plan->status_reg] = 0;
     regs->pc = plan->stxr_pc + 4U;
     __atomic_fetch_add(&g_sess.llsc, 1, __ATOMIC_RELAXED);
+}
+
+/* ------------------------------------------------------- store absorption */
+
+/* One store instruction is visible to EL0 in two places: the live page (which
+ * a detector can read through instruction fetch, smaps and the page cache)
+ * and the overlay image.  The write fault therefore cannot simply be handed
+ * to Linux: that would replace the trapped leaf and retire the page's image.
+ *
+ * Instead the handler decodes the store, performs the same bytes on the live
+ * page through the kernel's own GUP write path (which keeps the normal COW,
+ * dirty accounting and page-cache semantics), publishes those bytes into the
+ * image and snapshot, and retires the instruction.  The AP[1]=0 trap stays;
+ * the next read is still served from the image.  Failure falls back to the
+ * pre-2.15 behaviour for that page: restore AP[1], mark it dead and let the
+ * native store run.
+ */
+static int uy_store_bytes(const struct uro_store *st, const struct pt_regs *regs,
+                          const struct uy_fpstate *fp, uint8_t *out)
+{
+    unsigned i, j;
+
+    if (st->zva) {
+        memset(out, 0, st->size);
+        return 0;
+    }
+    for (i = 0; i < st->count; ++i) {
+        uint8_t *dst = out + (uint64_t)i * st->size;
+        unsigned rt = st->rt[i];
+
+        if (st->vector) {
+            if (!fp || rt > 31U) return -1;
+            memcpy(dst, fp->vregs[rt], st->size);
+            continue;
+        }
+        if (rt > 30U) {
+            memset(dst, 0, st->size);
+            continue;
+        }
+        for (j = 0; j < st->size; ++j)
+            dst[j] = (uint8_t)(regs->regs[rt] >> (8U * j));
+    }
+    return 0;
+}
+
+static int uy_store_emulate(struct pt_regs *regs, uint64_t far, struct uy_page *wp)
+{
+    struct uy_fpstate fp;
+    struct uro_regs model;
+    struct uro_store st;
+    uint32_t opcode;
+    uint8_t data[64];
+    void *vma;
+    unsigned long flags;
+    unsigned i;
+    unsigned off;
+
+    if ((regs->pc & 3U) || uy_read_insn(regs->pc, &opcode))
+        return -1;
+    for (i = 0; i < 31; ++i) model.x[i] = regs->regs[i];
+    model.sp = regs->sp;
+    model.pc = regs->pc;
+    model.pstate = regs->pstate;
+    if (uro_decode_store(opcode, &model, &st))
+        return -1;
+    if (st.address != far || st.total > g_page_size)
+        return -1;
+    off = (unsigned)(far - page_base(far));
+    if (off + st.total > g_page_size)
+        return -1;
+    vma = f_find_vma(g_sess.mm, far);
+    if (!vma)
+        return -1;
+    flags = *(unsigned long *)((char *)vma + g_layout.vma_flags);
+    if (!(flags & UY_VM_WRITE))
+        return -1;
+    if (!g_write_gup_flags)
+        return -1;
+    if (st.vector && !st.zva && uy_fp_snapshot(&fp))
+        return -1;
+    if (uy_store_bytes(&st, regs, st.vector && !st.zva ? &fp : 0, data))
+        return -1;
+
+    /* Write every segment before publishing any image bytes.  A cross-page
+     * store is not absorbed (the caller falls back), because a partial image
+     * update and a partial live write cannot be rolled back. */
+    for (i = 0; i < st.count; ++i) {
+        uint64_t at = st.address + (uint64_t)i * st.size;
+
+        if (page_base(at) != page_base(far))
+            return -1;
+        if (uy_access_vm(g_sess.mm, at, data + (uint64_t)i * st.size,
+                         (int)st.size, g_write_gup_flags) != (int)st.size)
+            return -1;
+    }
+    for (i = 0; i < st.count; ++i)
+        page_store_bytes(wp, off + i * st.size, data + (uint64_t)i * st.size, st.size);
+
+    if (st.writeback) {
+        if (st.rn == 31U) regs->sp = st.wb;
+        else regs->regs[st.rn] = st.wb;
+    }
+    regs->pc += 4U;
+    uy_flush_icache_all();
+    return 0;
 }
 
 /* Emulate one load at `pc`: serve the bytes from the registered page images
@@ -2159,10 +2322,11 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
     }
 
 serve:
-    /* A store that the VMA would accept natively is not emulated: the AP[1]
-     * trap is removed and the original do_page_fault() performs the normal
-     * COW and write.  The page image can no longer describe the bytes after
-     * that store, so the page is marked dead for the rest of the session.
+    /* A store that the VMA would accept natively is absorbed: its bytes are
+     * applied to the live page through the kernel's COW path and published
+     * into the image, while the AP[1] trap stays installed.  Only a store the
+     * decoder cannot reproduce falls back to the 2.14 handoff (restore AP[1],
+     * mark this page dead, let Linux run the original store).
      *
      * A store to a VMA that is not writable is left alone: the native outcome
      * is SIGSEGV, and it must stay SIGSEGV (a detector must not be able to
@@ -2178,7 +2342,13 @@ serve:
                 *(unsigned long *)((char *)vma + g_layout.vma_flags) : 0;
 
             if ((flags & UY_VM_WRITE) &&
-                page_set_ap(g_sess.mm, wp->base, 1) >= 0) {
+                uy_store_emulate(regs, far, wp) == 0) {
+                args->ret = 0;
+                args->skip_origin = 1;
+                goto out;
+            }
+            if ((flags & UY_VM_WRITE) &&
+                page_set_ap_any(g_sess.mm, wp->base, 1) >= 0) {
                 __atomic_store_n(&wp->dead, 1, __ATOMIC_RELEASE);
                 __atomic_store_n(&wp->armed, 0, __ATOMIC_RELEASE);
                 flush_tlb_all();
@@ -2295,7 +2465,7 @@ static void uy_mm_fault_after(hook_fargs4_t *args, void *udata)
             struct uy_page *p = page_find(page);
             if (p && __atomic_load_n(&p->want, __ATOMIC_ACQUIRE) &&
                 !__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) {
-                ret = page_set_ap(mm, page, 0);
+                ret = page_set_ap_any(mm, page, 0);
                 if (ret == 0) __atomic_store_n(&p->armed, 1, __ATOMIC_RELEASE);
             }
             else if (!p && !(args->local.data2 & UY_FAULT_WRITE) &&
@@ -3015,6 +3185,27 @@ static void uy_kread_overlay(uint64_t remote, void *buf, uint64_t len, int allow
     }
 }
 
+static void uy_kwrite_overlay(uint64_t remote, const void *buf, uint64_t len,
+                              void *mm, int owner)
+{
+    const uint8_t *src = buf;
+
+    while (len) {
+        uint64_t page = page_base(remote);
+        unsigned off = (unsigned)(remote - page);
+        unsigned seg = g_page_size - off;
+        struct uy_page *p;
+
+        if ((uint64_t)seg > len) seg = (unsigned)len;
+        p = page_find(page);
+        if (p && (owner || uy_trap_leaf(mm, page)))
+            page_store_bytes(p, off, src, seg);
+        remote += seg;
+        src += seg;
+        len -= seg;
+    }
+}
+
 static void uy_kread_after(hook_fargs6_t *args, void *udata)
 {
     void *mm;
@@ -3039,13 +3230,25 @@ static void uy_kread_after(hook_fargs6_t *args, void *udata)
         buf = (void *)args->arg2;
         flags = (unsigned long)args->arg4;
     }
-    if (!mm || !buf || (flags & 0x1U) /* FOLL_WRITE */) return;
+    if (!mm || !buf) return;
     len = (uint64_t)(long)args->ret;
     if (!len || !uy_user_range(remote, len)) return;
     owner = mm == __atomic_load_n(&g_owner, __ATOMIC_ACQUIRE);
     if (!owner && (!overlay_live() || g_sess.mode != UROV_Y_MODE_PAGE_AP)) return;
     ref = owner ? session_get_mm(mm) : session_get_any();
     if (!ref) return;
+    if (flags & 0x1U /* FOLL_WRITE */) {
+        /* A kernel-assisted writer (ptrace POKE, /proc/<pid>/mem) bypasses
+         * the EL0 store fault.  The live page already holds the bytes by the
+         * time the hook runs; publish the same bytes into the image so a
+         * following read observes the write exactly as it would natively.
+         * Only the owning mm is updated: a forked child has its own COW
+         * copy, and the parent's image must not see that child's store. */
+        if (owner && !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE))
+            uy_kwrite_overlay(remote, buf, len, mm, owner);
+        uy_reader_exit(&g_readers, ref);
+        return;
+    }
     /* A forked child gets the snapshot (a foreign mm has no caller window the
      * owner could vouch for); an owner-side reader keeps the normal rule. */
     allow = !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) &&

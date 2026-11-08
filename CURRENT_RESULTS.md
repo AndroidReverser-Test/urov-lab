@@ -2,6 +2,18 @@
 
 更新于 2026-11-08（Asia/Shanghai）。
 
+> 2026-11-08 补充：`urov-y` 2.15.0 消除 2.14.0 仍成立的两条写侧特征：
+> 已登记页的普通 store 不再退役覆盖（解码 11 种 GPR/SIMD/STP/ST1/DC ZVA
+> 写形状，由内核 COW/GUP 写路径完成同一批字节，同步镜像并保持 `AP[1]=0`）；
+> `LDXR XZR` 的非零目标也按直接分支位图 + GPR 门控完成。Dobby 48×3 活动
+> 阶段 `ap=0/144`、`accepted_crc_with_ap=144/144`、`xzr=0/144`；CRC 5×2
+> （16 次）、消除 3×1（11 次，`ELIM_PROT ... store_absorbed=1`、
+> `shapes=11`）、多页 5×1 均 PASS；`site_call_ns=305`。构建
+> `urov-y.kpm 5fa88121...`、`urovdetect.apk 5104264b...`。见
+> [ELIMINATION_2_15_DESIGN.md](ELIMINATION_2_15_DESIGN.md)、
+> [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.15.0 节
+> 与 [APP_READ_INTEGRITY_AUDIT.md](APP_READ_INTEGRITY_AUDIT.md) 的 2.15.0 节。
+>
 > 2026-11-08 补充：`urov-y` 2.14.0 消除 2.13.0 仍成立的两条 **App 可及** 恢复
 > 路径：成功的 `mprotect(PROT_READ/PROT_NONE/PROT_EXEC/PROT_READ|PROT_WRITE)`
 > 不再结束会话（private COW 页仍由 `AP[1]=0` 读陷阱服务；`PROT_NONE` 仍原生

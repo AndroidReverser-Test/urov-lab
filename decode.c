@@ -362,3 +362,264 @@ int uro_decode(uint32_t insn, const struct uro_regs *regs, struct uro_load *out)
     *out = load;
     return 0;
 }
+
+/* --------------------------------------------------------------- stores */
+
+/* SIMD&FP element width for the store forms.  opc[0] is the load bit, so a
+ * store has opc 00 (size 1/2/4/8 bytes) or 10 (128-bit, size_log2 == 0).
+ * scale is the log2 of the access size used by the imm12/S fields. */
+static int simd_store_size(uint32_t insn, unsigned *size, unsigned *scale)
+{
+    unsigned size_log2 = insn >> 30;
+    unsigned opc = (insn >> 22) & 3U;
+
+    if (opc & 1U)
+        return -1;
+    if (opc & 2U) {
+        if (size_log2 != 0)
+            return -1;
+        *size = 16;
+        *scale = 4;
+    } else {
+        *size = 1U << size_log2;
+        *scale = size_log2;
+    }
+    return 0;
+}
+
+/* ST1/ST2/ST3/ST4 multiple structures.  The layout is the load table with
+ * bit 22 cleared: one contiguous datasize-sized segment per V register. */
+static int store_multi(uint32_t insn, const struct uro_regs *regs,
+                       struct uro_store *store)
+{
+    unsigned q = (insn >> 30) & 1U;
+    unsigned post = (insn >> 23) & 1U;
+    unsigned rm = (insn >> 16) & 31U;
+    unsigned opcode = (insn >> 12) & 15U;
+    unsigned size_log2 = (insn >> 10) & 3U;
+    unsigned rn = (insn >> 5) & 31U;
+    unsigned datasize, esize, rpt, selem, total;
+    unsigned r, s;
+    uint64_t base, offset, wb;
+
+    if ((insn & (1U << 22)) || (insn & (1U << 21)))
+        return -1; /* Load or architecturally unallocated. */
+    if (!post && rm != 0)
+        return -1;
+    switch (opcode) {
+    case 0x2: rpt = 4; selem = 1; break; /* ST1, four registers */
+    case 0x6: rpt = 3; selem = 1; break; /* ST1, three registers */
+    case 0xa: rpt = 2; selem = 1; break; /* ST1, two registers */
+    case 0x7: rpt = 1; selem = 1; break; /* ST1, one register */
+    case 0x8: rpt = 1; selem = 2; break; /* ST2 */
+    case 0x4: rpt = 1; selem = 3; break; /* ST3 */
+    case 0x0: rpt = 1; selem = 4; break; /* ST4 */
+    default: return -1;
+    }
+    datasize = 8U << q;
+    esize = 1U << size_log2;
+    if (size_log2 == 3U && q == 0U && selem > 1U)
+        return -1;
+    if (datasize / esize == 0)
+        return -1;
+    total = rpt * selem * datasize;
+    if (!total || total > 64U)
+        return -1;
+    if (base_value(regs, rn, &base))
+        return -1;
+    if (post) {
+        if (rm == 31U) {
+            offset = total;
+        } else {
+            if (rm == rn && rn != 31U)
+                return -1;
+            offset = regs->x[rm];
+        }
+        if (add_magnitude(base, offset, 0, &wb))
+            return -1;
+        store->address = base;
+        store->wb = wb;
+        store->writeback = 1;
+    } else {
+        store->address = base;
+        store->wb = 0;
+        store->writeback = 0;
+    }
+    store->vector = 1;
+    store->size = datasize;
+    store->count = rpt * selem;
+    store->rn = rn;
+    store->total = total;
+    for (r = 0; r < rpt; ++r)
+        for (s = 0; s < selem; ++s)
+            store->rt[r * selem + s] = ((insn & 31U) + r + s) & 31U;
+    return 0;
+}
+
+int uro_decode_store(uint32_t insn, const struct uro_regs *regs,
+                     struct uro_store *out)
+{
+    struct uro_store store = { 0 };
+    uint64_t base;
+    unsigned mode, opc, size_log2;
+
+    if (!regs || !out)
+        return -1;
+
+    if ((insn & 0x3f000000U) == 0x39000000U) {
+        /* GPR store, unsigned scaled imm12.  opc != 00 is a load/prefetch. */
+        if (((insn >> 22) & 3U) != 0)
+            return -1;
+        size_log2 = insn >> 30;
+        store.size = 1U << size_log2;
+        store.count = 1;
+        store.rt[0] = insn & 31U;
+        store.rn = (insn >> 5) & 31U;
+        if (base_value(regs, store.rn, &base) ||
+            add_magnitude(base, (uint64_t)((insn >> 10) & 4095U) << size_log2, 0,
+                          &store.address))
+            return -1;
+    } else if ((insn & 0x3f000000U) == 0x38000000U) {
+        /* GPR store, unscaled/pre/post index or register offset. */
+        if (((insn >> 22) & 3U) != 0)
+            return -1;
+        size_log2 = insn >> 30;
+        store.size = 1U << size_log2;
+        store.count = 1;
+        store.rt[0] = insn & 31U;
+        store.rn = (insn >> 5) & 31U;
+        if (base_value(regs, store.rn, &base))
+            return -1;
+        if (insn & (1U << 21)) {
+            if ((insn & 0x00000c00U) != 0x00000800U ||
+                register_offset(insn, regs, base,
+                                (insn & (1U << 12)) ? size_log2 : 0U,
+                                &store.address))
+                return -1;
+        } else {
+            mode = (insn >> 10) & 3U;
+            if (mode == 2)
+                return -1; /* STTR unprivileged family */
+            store.writeback = mode != 0;
+            if (store.writeback && store.rn != 31 && store.rn == store.rt[0])
+                return -1;
+            if (add_immediate(base, (insn >> 12) & 511U, 9, 0, &store.wb))
+                return -1;
+            store.address = mode == 1 ? base : store.wb;
+            if (!store.writeback)
+                store.wb = 0;
+        }
+    } else if ((insn & 0x3e000000U) == 0x28000000U) {
+        /* GPR pair store.  opc 01 is LDPSW and 11 is reserved. */
+        opc = insn >> 30;
+        mode = (insn >> 23) & 3U;
+        if ((insn & (1U << 22)) || opc == 1 || opc == 3)
+            return -1;
+        store.size = opc == 2 ? 8U : 4U;
+        store.count = 2;
+        store.rt[0] = insn & 31U;
+        store.rt[1] = (insn >> 10) & 31U;
+        store.rn = (insn >> 5) & 31U;
+        store.writeback = mode == 1 || mode == 3;
+        if ((store.writeback && store.rn != 31 &&
+             (store.rn == store.rt[0] || store.rn == store.rt[1])) ||
+            base_value(regs, store.rn, &base))
+            return -1;
+        if (add_immediate(base, (insn >> 15) & 127U, 7,
+                          store.size == 8 ? 3 : 2, &store.wb))
+            return -1;
+        store.address = mode == 1 ? base : store.wb;
+        if (!store.writeback)
+            store.wb = 0;
+    } else if ((insn & 0x3f000000U) == 0x3d000000U) {
+        /* SIMD&FP store, unsigned imm12. */
+        unsigned scale;
+
+        store.vector = 1;
+        store.count = 1;
+        store.rt[0] = insn & 31U;
+        store.rn = (insn >> 5) & 31U;
+        if (simd_store_size(insn, &store.size, &scale) ||
+            base_value(regs, store.rn, &base) ||
+            add_magnitude(base, (uint64_t)((insn >> 10) & 4095U) << scale, 0,
+                          &store.address))
+            return -1;
+    } else if ((insn & 0x3f000000U) == 0x3c000000U) {
+        /* SIMD&FP store, unscaled/pre/post index or register offset. */
+        unsigned scale;
+
+        store.vector = 1;
+        store.count = 1;
+        store.rt[0] = insn & 31U;
+        store.rn = (insn >> 5) & 31U;
+        if (simd_store_size(insn, &store.size, &scale) ||
+            base_value(regs, store.rn, &base))
+            return -1;
+        if (insn & (1U << 21)) {
+            if ((insn & 0x00000c00U) != 0x00000800U ||
+                register_offset(insn, regs, base,
+                                (insn & (1U << 12)) ? scale : 0U,
+                                &store.address))
+                return -1;
+        } else {
+            mode = (insn >> 10) & 3U;
+            if (mode == 2)
+                return -1;
+            store.writeback = mode != 0;
+            if (add_immediate(base, (insn >> 12) & 511U, 9, 0, &store.wb))
+                return -1;
+            store.address = mode == 1 ? base : store.wb;
+            if (!store.writeback)
+                store.wb = 0;
+        }
+    } else if ((insn & 0x3e000000U) == 0x2c000000U) {
+        /* SIMD&FP pair store. */
+        opc = insn >> 30;
+        mode = (insn >> 23) & 3U;
+        if ((insn & (1U << 22)) || opc == 3)
+            return -1;
+        store.vector = 1;
+        store.count = 2;
+        store.size = opc == 2 ? 16U : (opc == 1 ? 8U : 4U);
+        store.rt[0] = insn & 31U;
+        store.rt[1] = (insn >> 10) & 31U;
+        store.rn = (insn >> 5) & 31U;
+        store.writeback = mode == 1 || mode == 3;
+        if (base_value(regs, store.rn, &base))
+            return -1;
+        if (add_immediate(base, (insn >> 15) & 127U, 7,
+                          store.size == 16 ? 4U : (store.size == 8 ? 3U : 2U),
+                          &store.wb))
+            return -1;
+        store.address = mode == 1 ? base : store.wb;
+        if (!store.writeback)
+            store.wb = 0;
+    } else if ((insn & 0xbf000000U) == 0x0c000000U) {
+        if (store_multi(insn, regs, &store))
+            return -1;
+    } else if ((insn & 0xffffffe0U) == 0xd50b7420U) {
+        /* DC ZVA, Xt: zero one 64-byte block. */
+        unsigned rt = insn & 31U;
+
+        if (rt == 31U)
+            return -1;
+        store.zva = 1;
+        store.size = 64;
+        store.count = 1;
+        store.rt[0] = rt;
+        store.address = regs->x[rt];
+        store.total = 64;
+        if (store.address & 63U)
+            return -1;
+    } else {
+        return -1;
+    }
+
+    if (!store.total)
+        store.total = (uint64_t)store.size * store.count;
+    if (!store.total || store.total > 64U ||
+        store.total - 1U > URO_U64_MAX - store.address)
+        return -1;
+    *out = store;
+    return 0;
+}

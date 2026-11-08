@@ -2,6 +2,78 @@
 
 本文按最新复核在前排列。
 
+## 2.15.0 写入吸收与 XZR 桥接
+
+2026-11-08，Pixel 6 / Android 16 / `6.1.134-android14-11` / 4 KiB / KernelPatch
+`0xc00`。App 在 `untrusted_app` 域，`CapEff=0`、`Seccomp=2`、SELinux Enforcing。
+本轮改 `urov-y` 与测试 App，ABI 仍为 v8，请求布局、`ctl0` 字段、`hooks=0xff`
+和返回码不变。
+
+```text
+urov-y.kpm      5fa88121848de7818eede63ce2e71e021b2af47a4a0592609e76e124f88cc6be
+urovdetect.apk 5104264ba4db14c1bfd460a52e49235188eba74dbd0a2fbbb34a3d7676767f2c
+```
+
+### 本轮消除的特征点
+
+| # | 2.14.0 仍成立的特征 | 2.15.0 做法 | 真机证据 |
+| --- | --- | --- | --- |
+| E5 | 第一次真实 store 让该页 `dead`：恢复 `AP[1]`，Linux 完成 COW，后续读真实字节 | 解码 store，按原地址/宽度/值调用内核 `FOLL_WRITE|FOLL_FORCE` 写路径完成同一批字节，把字节发布到 `image`/`snapshot`，保持 `AP[1]=0`；原 store 不重放 | `ELIM_PROT ... store_absorbed=1`；`ELIM_PROT_STORE shapes=11 smaps=1 dirty_kb=4 anon_kb=4`；写窗口后仍读镜像 |
+| E6 | `LDXR XZR; LDRB; STXR XZR` 在非零 scratch 上 `STXR` 失败，`nonzero_match>0` | `XZR` 不再要求目标为零；用 `LDXR` 固定 PC + 全进程直接分支位图 + 故障时 GPR 目标门控证明执行，提交 `STXR` 自己的零值和 status | Dobby 活动阶段 `xzr=0/144`；消除矩阵 `nonzero_match=0`、`nonzero_clean=3` |
+
+实现与不引入新特征的论证见
+[ELIMINATION_2_15_DESIGN.md](ELIMINATION_2_15_DESIGN.md)。
+
+### 真机结果
+
+| 矩阵 | 结果 | 目录 |
+| --- | --- | --- |
+| Dobby 48×3 | PASS；3 个活动进程各 `ap=0/48`、`bytes_differ=0`、`accepted_crc_with_ap=48/48`；合计 `ap=0/144`、`accepted_crc_with_ap=144/144`、`views=0/144`、`xzr=0/144`、`cross_page=0/144` | [dobby-detect-20261108-122951](results/dobby-detect-20261108-122951/summary.json) |
+| CRC 5×2 | PASS，16 次运行；`crc-ap-*` 的 `mprotect(R)`→`mprotect(RW)`→`mprotect(RX)` 三阶段普通 CRC 都等于镜像，`STATUS` 仍 ACTIVE | [crc-20261108-123036](results/crc-20261108-123036/summary.json) |
+| 消除矩阵 3×1 | PASS，11 次运行；`ELIM_PROT` 的 11 种写形状全部吸收，`smaps` 仍为原生 COW 的 `Private_Dirty=4 KiB`；`ELIM_PROT_KWRITE skipped errno=13`（App 被 SELinux 拒绝写 `/proc/self/mem`）；`site_call_ns=305` | [eliminate-20261108-123118](results/eliminate-20261108-123118/summary.json) |
+| 多页 5×1 | PASS，6 次运行；`mp-prod` 24 页/96 KiB、`paths=5`、`child_overlay=1` | [multipage-20261108-123233](results/multipage-20261108-123233/summary.json) |
+
+全部矩阵前后 boot ID 一致，增量内核日志未匹配 `BUG:`/`WARNING:`/`Oops`/
+panic/RCU stall/hung task，测试后 `kpm list` 为空。
+
+### 机制要点
+
+- **写入吸收**：写异常在 `do_mem_abort()` 原生路径之前解码；支持的形状
+  由内核 COW/GUP 写路径完成同一批字节，`image`/`snapshot` 用每页 `seq`
+  发布，读者不会看到半条 store；base 写回和 `IC IALLUIS` 与原指令一致。
+- **可写叶陷阱**：`page_set_ap_any()` 允许在 COW 后的 writable 叶上装/撤
+  `AP[1]=0`；`uy_leaf_signature()` 接受 AP[2]=0/1，释放路径仍能恢复。
+- **内核辅助写**：`__access_remote_vm` 的 `FOLL_WRITE` 路径把 owner 的
+  内核缓冲区字节同步进镜像；fork 子进程的私有拷贝不更新父镜像。
+- **XZR 桥**：`LDXR XZR` 的控制流证据替代寄存器存证；零/非零目标都得到
+  原生 `status=0` 和 scratch=0。
+- **输出面**：没有新增 syscall hook、ABI 字段、文件、线程、定时器或返回码；
+  `hooks=0xff`、`ctl0` 文本格式不变。
+
+### 残余（2.15.0）
+
+1. `munmap`/`mremap`/`MAP_FIXED` 覆盖、owner `execve`、进程退出仍结束会话；
+   `fork` 子进程把自己的拷贝改成可写后，该子进程走真实字节。
+2. 原子 RMW（`LDADD`/`SWP`/`CAS`/`CASP`）、`STXR/STLXR` 写注册页、SVE/SME
+   store、跨页 store 仍退回 2.14 的按页退役。
+3. `LDXP/STXP`、非 `NOP/BTI` 间隔仍不桥接；每次读一次同步异常、每次写一次
+   EL0 权限异常和计时/PMU 仍是架构边界。
+4. `pkey_mprotect` 的已分配 pkey/POE 权限、shared VMA 的合法
+   `remap_file_pages` 仍保守处理；本机 App 的 seccomp 对 syscall 288 直接
+   `SIGSYS`。
+5. root 仍可用 `kpm list`/`ctl0 status` 看到模块和会话。
+
+### 复跑
+
+```powershell
+./kpms/urov-lab/build.ps1
+./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --dobby-detection --repeats 48 --cycles 3
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --repeats 5 --cycles 2
+python ./kpms/urov-lab/tools/run_elimination_device.py --serial $Serial --key $KpKey --skip-x-control --repeats 3 --cycles 1
+python ./kpms/urov-lab/tools/run_multipage_device.py --serial $Serial --key $KpKey --repeats 5 --cycles 1
+```
+
 ## 2.14.0 保护切换存活与写入移交
 
 2026-11-08，Pixel 6 / Android 16 / `6.1.134-android14-11` / 4 KiB / KernelPatch

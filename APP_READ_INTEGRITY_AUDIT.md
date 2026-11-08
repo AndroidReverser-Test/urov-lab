@@ -2,7 +2,7 @@
 
 2026-11-07，Pixel 6，Android 16，内核 `6.1.134-android14-11`，4 KiB 页，KernelPatch `0xc00`。检测在 `untrusted_app` 域运行，`CapEff=0`，`Seccomp=2`。ADB 端使用 root 装卸模块和收集内核真值。活动测试夹具用单独的模块密钥注册自己的页，检测函数只接收地址、同文件参考映射和偏移。
 
-**当前 `urov-y` 2.14.0 的普通 App 方案**见[保护切换存活与写入移交](APP_READ_INTEGRITY_RESULTS.md#2140-保护切换存活与写入移交)。2.14.0 让成功的 `mprotect` 保护切换不再结束会话（`PROT_NONE` 仍原生 `SIGSEGV`），第一次真实 store 才由 Linux COW 并退役该页；Linux 会拒绝的 pkey/remap_file_pages/fixed-mmap 调用不再先拆会话。以下保留各版本的实验记录。
+**当前 `urov-y` 2.15.0 的普通 App 方案**见[写入吸收与 XZR 桥接](APP_READ_INTEGRITY_RESULTS.md#2150-写入吸收与-xzr-桥接)。2.15.0 在 2.14.0 的读侧之上让普通 store 不再退役覆盖：解码 11 种写形状，由内核 COW/GUP 写路径完成同一批字节，保持 `AP[1]=0`；`LDXR XZR` 的非零目标也按控制流证据完成。2.14.0 让成功的 `mprotect` 保护切换不再结束会话（`PROT_NONE` 仍原生 `SIGSEGV`），第一次真实 store 才由 Linux COW 并退役该页；Linux 会拒绝的 pkey/remap_file_pages/fixed-mmap 调用不再先拆会话。以下保留各版本的实验记录。
 
 ## 当前源码怎样伪造读取
 
@@ -404,6 +404,57 @@ VMA，把每个 `B/BL/B.cond/CBZ/CBNZ/TBZ/TBNZ` 的静态目标写入按 VMA 划
 `madvise` 撤销、`mlock` 拒绝、PTE 重装窗口、单次同步异常和非硬件独占 store
 仍在；兄弟 tid 路径依赖可选的 `find_task_by_vpid`。完整数据和复跑命令见
 [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.11.0 节。
+
+## 2.15.0 写入吸收与 XZR 桥接（2026-11-08）
+
+同一 Pixel 6、`6.1.134-android14-11`、4 KiB、KernelPatch `0xc00`。构建
+`urov-y.kpm 5fa88121...`、`urovdetect.apk 5104264b...`。检测仍在
+`untrusted_app`（`CapEff=0`、`Seccomp=2`、SELinux Enforcing）中执行。
+
+2.14.0 仍有两个不需要密钥的写侧特征：
+
+1. **写入退役。** 对已登记页的第一次真实 store 让模块恢复 `AP[1]`、把页
+   交给 Linux COW 并置 `dead`；检测器写一个字节（包括写回原值）后即可读
+   真实改码字节。
+2. **非零 XZR 哨兵。** `LDXR XZR; LDRB; STXR XZR` 只在 scratch 为零时被
+   桥接；把 scratch 预置为非零即可让目标 `STXR` 失败而对照成功。
+
+2.15.0 的读取路径与写入路径：
+
+- **写入吸收。** 写异常先解码 `STRB/H/W/X`、`STP`、SIMD `STR/STP`、
+  `ST1/ST2/ST3/ST4`、`DC ZVA` 等 11 种形状（含 pre/post-index 与 base
+  写回）；按原地址/宽度/值走内核 `FOLL_WRITE|FOLL_FORCE` 的 COW/GUP 路径，
+  再把同一批字节发布到整页镜像和快照。每页 `seq` 让并发读者看到完整的
+  旧值或新值。原 store 不重放，`AP[1]=0` 保持。
+- **可写叶陷阱。** `page_set_ap_any()` 允许在 COW 后的 writable 叶上装/撤
+  `AP[1]=0`；`uy_leaf_signature()` 接受 AP[2]=0/1，释放路径仍能恢复。
+- **内核辅助写。** `__access_remote_vm` 的 `FOLL_WRITE` 路径把 owner 的
+  内核缓冲区字节同步进镜像；fork 子进程的私有拷贝不更新父镜像。
+- **XZR 桥。** `XZR` 不再要求目标为零；证明改为 `LDXR` 固定 PC、全进程
+  直接分支位图、故障时 GPR 中的间接分支目标、寄存器重叠和宽度/基址一致。
+- **输出面。** ABI 仍 v8；`hooks=0xff`、`ctl0` 文本、计数器、返回码不变；
+  没有新增 syscall hook、文件、线程或定时器。
+
+真机结果：
+
+| 矩阵 | 结果 |
+| --- | --- |
+| Dobby 48×3 | PASS；3 个活动进程各 `ap=0/48`、`bytes_differ=0`、`accepted_crc_with_ap=48/48`（合计 144）、`views=0/144`、`xzr=0/144` |
+| CRC 5×2 | PASS，16 次运行；`crc-ap-*` 的保护切换三阶段 CRC 均等于镜像 |
+| 消除矩阵 3×1 | PASS，11 次运行；`ELIM_PROT ... store_absorbed=1`、`ELIM_PROT_STORE shapes=11 smaps=1 dirty_kb=4 anon_kb=4`、`nonzero_match=0`；`site_call_ns=305` |
+| 多页 5×1 | PASS，6 次运行；`mp-prod` 24 页/96 KiB、`paths=5`、`child_overlay=1` |
+
+残余（2.15.0）：
+
+1. `munmap`/`mremap`/`MAP_FIXED`/owner `execve` 仍结束会话；fork 子进程把
+   自己的拷贝改成可写后走真实字节。
+2. 原子 RMW、`STXR/STLXR` 写注册页、SVE/SME store、跨页 store 仍按页退役。
+3. `LDXP/STXP` 与非 `NOP/BTI` 间隔仍不桥接；每次读/写各一次异常和计时/PMU
+   仍是架构边界。
+4. `pkey_mprotect`/shared `remap_file_pages` 仍保守；root 可见性不变。
+
+完整数据与复跑命令见
+[APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.15.0 节。
 
 ## 2.14.0 保护切换存活与写入移交（2026-11-08）
 
