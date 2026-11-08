@@ -1,0 +1,10 @@
+--------- beginning of main
+10-05 13:29:44.423 18239 18263 I urovdetect: CONTEXT pid=18239 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 13:29:44.424 18239 18263 I urovdetect: BEGIN mode=mp-srcpage repeats=3
+10-05 13:29:44.424 18239 18263 I urovdetect: MP_QUERY caps=0x73f max_pages=292 page_shift=12 abi=8
+10-05 13:29:44.595 18239 18263 I urovdetect: MP_SRC_PAGE register=1 page=1 generation=1
+10-05 13:29:44.595 18239 18263 I urovdetect: MP_STATUS name=srcpage pages=1 armed=1 hits=387 replays=387 failures=0
+10-05 13:29:44.596 18239 18263 I urovdetect: MP_SRC_PAGE_DONE page=1 reads=3
+10-05 13:29:44.596 18239 18263 I urovdetect: CONTEXT pid=18239 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 13:29:44.596 18239 18263 I urovdetect: NATIVE_RESULT PASS cases=1 assertions=12 failures=0 mode=mp-srcpage
+10-05 13:29:44.780 18239 18239 I urovdetect: DETECT_RESULT PASS mode=mp-srcpage worker_ms=350 ui_ticks=129 ui_max_gap_ms=14 native=PASS cases=1 assertions=12 failures=0

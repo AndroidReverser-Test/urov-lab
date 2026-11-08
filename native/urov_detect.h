@@ -30,6 +30,7 @@ struct ud_views {
     unsigned completed;
     size_t first_file_diff;
 };
+typedef void (*ud_bytes_reader)(uint8_t *out, const uint8_t *address, size_t size);
 
 /* These functions preserve the caller's errno, install no signal handlers,
  * change no mapping and never register/update/deactivate a module session.
@@ -45,4 +46,11 @@ void ud_probe_control(struct ud_control *out);
 int ud_mapping_at(const char *proc_file, const void *address, struct ud_mapping *out);
 void ud_check_views(const void *address, size_t length, int backing_fd,
                     off_t backing_offset, struct ud_views *out);
+
+/* Also compare a side-effect-free business reader with the independent EL0
+ * reads above. The return value describes the split between those readers.
+ * The file comparison is reported in out. Neither uses process_vm_readv. */
+enum ud_verdict ud_check_reader_views(const uint8_t *address, size_t length, int backing_fd,
+                                      off_t backing_offset, ud_bytes_reader reader,
+                                      struct ud_views *out);
 #endif

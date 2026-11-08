@@ -40,6 +40,17 @@
  * identity, a fast-GUP FOLL_WRITE writer reaches the live page instead of being
  * intercepted, and a rejected `remap_file_pages` no longer ends the session.
  *
+ * 2.21.0 keeps ABI v8 and removes the two stable AP read-side probes 2.20.0
+ * still exposed.  The pre-load window may now hold a short integer chain that
+ * only updates the LDXR destination and actually consumes the loaded value
+ * (LDXR; EOR; LDRB; EOR; STXR).  The post-load window grows to 64 instructions
+ * and models the FPSIMD transfers FMOV D/S/H between a GPR and a V register,
+ * the .D[1] lane forms, MRS/MSR NZCV/FPCR/FPSR and the read-only TPIDR_EL0,
+ * TPIDRRO_EL0, CNTFRQ_EL0, CTR_EL0 and DCZID_EL0.  An FPSIMD snapshot is taken
+ * only when a window reaches an FP instruction and is committed with the same
+ * STXR; the half-precision forms require FEAT_FP16.  No hook, PTE/VMA, code
+ * word or request layout changes.
+ *
  * The prctl magic is fixed. The option word and request MAC key are derived
  * from a per-load secret as in UROV-X.
  */

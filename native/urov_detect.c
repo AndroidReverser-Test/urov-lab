@@ -184,14 +184,17 @@ static int same_file(const struct stat *a, const struct stat *b)
         a->st_ctim.tv_sec == b->st_ctim.tv_sec && a->st_ctim.tv_nsec == b->st_ctim.tv_nsec;
 }
 
-void ud_check_views(const void *address, size_t length, int backing_fd,
-                    off_t backing_offset, struct ud_views *out)
+enum ud_verdict ud_check_reader_views(const uint8_t *address, size_t length, int backing_fd,
+                                      off_t backing_offset, ud_bytes_reader reader,
+                                      struct ud_views *out)
 {
     struct ud_mapping map, after;
     struct stat st, st_after;
     uint8_t direct[UD_MAX_BYTES], direct_after[UD_MAX_BYTES];
     uint8_t disk[UD_MAX_BYTES], disk_after[UD_MAX_BYTES];
     uint8_t first_direct[UD_MAX_BYTES], first_disk[UD_MAX_BYTES];
+    uint8_t business[UD_MAX_BYTES], first_business[UD_MAX_BYTES];
+    enum ud_verdict split = UD_UNKNOWN;
     int saved = errno, error;
     long page_size = sysconf(_SC_PAGESIZE);
     memset(out, 0, sizeof(*out));
@@ -223,6 +226,14 @@ void ud_check_views(const void *address, size_t length, int backing_fd,
         error = file_copy(backing_fd, backing_offset, disk, length);
         if (error) { out->error_file = error; goto done; }
         scalar_copy(direct, address, length);
+        if (reader) {
+            reader(business, address, length);
+            if (!i) memcpy(first_business, business, length);
+            else if (memcmp(first_business, business, length)) {
+                out->error_file = EAGAIN;
+                goto done;
+            }
+        }
         error = file_copy(backing_fd, backing_offset, disk_after, length);
         if (error) { out->error_file = error; goto done; }
         scalar_copy(direct_after, address, length);
@@ -246,10 +257,19 @@ void ud_check_views(const void *address, size_t length, int backing_fd,
     if (fstat(backing_fd, &st_after)) { out->error_file = errno; goto done; }
     if (!same_file(&st, &st_after)) { out->error_file = EAGAIN; goto done; }
     out->file_diff = memcmp(first_direct, first_disk, length) ? UD_MATCH : UD_NO_MATCH;
+    if (reader)
+        split = memcmp(first_direct, first_business, length) ? UD_MATCH : UD_NO_MATCH;
     for (size_t i = 0; i < length; ++i) {
         if (out->file_diff != UD_UNKNOWN && first_direct[i] != first_disk[i] &&
             out->first_file_diff == SIZE_MAX) out->first_file_diff = i;
     }
 done:
     errno = saved;
+    return split;
+}
+
+void ud_check_views(const void *address, size_t length, int backing_fd,
+                    off_t backing_offset, struct ud_views *out)
+{
+    (void)ud_check_reader_views(address, length, backing_fd, backing_offset, NULL, out);
 }

@@ -18,6 +18,13 @@
  *   B. the registered reader PC observes different bytes than a direct load
  *      of the same immutable RX address.
  *
+ * 2.21.0 completes the exclusive sequence across a short integer chain before
+ * the sampled load and across FPSIMD FMOV transfers after it.  The pre-window
+ * is replayed from the value the LDXR read and must reproduce the fault-time
+ * destination; the post-window snapshots the task's FPSIMD state only when an
+ * FP instruction is actually reached, and commits it only together with the
+ * STXR.  Everything else stays fail-closed.
+ *
  * SITE_BRK removes the data abort entirely by replacing the 4-byte site
  * instruction with BRK on a private COW page (A impossible, B handled by the
  * caller window).  PAGE_UXN removes the code-page feature by making the site
@@ -54,6 +61,7 @@
 #include "urov_y_backend.h"
 #include "urov_y_compat.h"
 #include "urov_y_readers.h"
+#include "urov_y_window.h"
 
 #ifndef __NR_mmap
 #define __NR_mmap 222
@@ -136,15 +144,8 @@ static inline void uy_flush_icache_all(void)
 _Static_assert(UROV_Y_FAKE_MAX == URO_FAKE_MAX, "UAPI and core fake widths");
 _Static_assert(UROV_Y_FAKE_PAGE == UROV_Y_PAGE, "overlay is at most one page");
 
-/* struct user_fpsimd_state as consumed by the kernel's FPSIMD helpers:
- * 32 16-byte vector registers followed by fpsr/fpcr (uapi/asm/sigcontext.h).
+/* struct uy_fpstate is the shared FPSIMD image defined by urov_y_window.h.
  * Its BTF layout is validated at load time before any vector load is served. */
-struct uy_fpstate {
-    uint8_t vregs[32][16];
-    uint32_t fpsr;
-    uint32_t fpcr;
-    uint32_t reserved[2];
-};
 _Static_assert(sizeof(struct uy_fpstate) == UY_FPSIMD_BYTES, "FPSIMD image size");
 
 /* AArch64 load/store-exclusive encodings (ARM ARM C6.2).  The access size is
@@ -172,7 +173,8 @@ _Static_assert(sizeof(struct uy_fpstate) == UY_FPSIMD_BYTES, "FPSIMD image size"
  * makes the plan decline, and the native instructions then run unchanged: the
  * hardware reports its own result, which for those shapes is the same failure it
  * reports without the module. */
-#define UY_LLSC_WIN_MAX 24U      /* instructions executed after the sampled load */
+#define UY_LLSC_WIN_MAX 64U      /* instructions executed after the sampled load */
+#define UY_LLSC_PRE_MAX 12U      /* instructions between LDXR and the sampled load */
 #define UY_LLSC_MEM_MAX 4U       /* gap stores recorded and replayed at commit */
 #define UY_LLSC_BYTES_MAX 64U    /* widest single access the decoder produces */
 
@@ -199,8 +201,10 @@ struct uy_llsc {
     unsigned valid;
     unsigned win;        /* the window was modeled to its STXR */
     unsigned npend;      /* stores recorded by the window walk */
+    unsigned fp_valid;   /* `fp` holds the FPSIMD state at the modeled STXR */
     struct uy_llsc_pstore pend[UY_LLSC_MEM_MAX];
     struct uro_regs model;   /* architectural state at the modeled STXR */
+    struct uy_fpstate fp;    /* snapshot taken only for an FP-carrying window */
 };
 
 typedef void (*fpsimd_preserve_t)(void);
@@ -448,6 +452,10 @@ static void *g_internal_access;
  * described task_struct.thread.uw.fpsimd_state.  Otherwise a vector load from
  * the target page keeps the historical fail-closed SIGSEGV. */
 static int g_fp_ready;
+/* FEAT_FP16 makes the half-precision FMOV forms legal.  A device without it
+ * would take an undefined-instruction exception natively, so the window model
+ * must not silently complete those forms there. */
+static int g_fp16;
 
 #define UY_GATE_NUM 9
 static int g_gate_hooked[UY_GATE_NUM];
@@ -1902,8 +1910,6 @@ static int uy_is_stxp(uint32_t insn, unsigned *size, unsigned *rs, unsigned *rt,
     return 1;
 }
 
-#include "urov_y_window.h"
-
 /* A direct branch can enter the load without executing the LDXR.  Retiring
  * the STXR on such a path would report a success the hardware never produced.
  * 2.7.0 scanned only the faulting page; the 2.8.0 cross-page probe puts the
@@ -2593,6 +2599,25 @@ static void uy_llsc_walk(struct pt_regs *regs, uint64_t fault_pc, struct uy_llsc
             at = model.pc;
             continue;
         }
+        if (uy_win_fp_insn(insn, g_fp16)) {
+            if (!plan->fp_valid) {
+                if (uy_fp_snapshot(&plan->fp)) return;
+                plan->fp_valid = 1;
+            }
+            if (!uy_win_fp_move(&model, &plan->fp, insn, g_fp16)) return;
+            at += 4U;
+            continue;
+        }
+        if (((insn & 0xffff0000U) == 0xd53b0000U ||
+             (insn & 0xffff0000U) == 0xd51b0000U)) {
+            if (uy_win_sysreg_fp(insn) && !plan->fp_valid) {
+                if (uy_fp_snapshot(&plan->fp)) return;
+                plan->fp_valid = 1;
+            }
+            if (!uy_win_sysreg(&model, &plan->fp, insn)) return;
+            at += 4U;
+            continue;
+        }
         if (uy_win_alu(&model, insn)) {
             at += 4U;
             continue;
@@ -2691,31 +2716,90 @@ static void uy_llsc_prepare_pair(const struct uro_regs *regs, uint64_t pc,
     out->valid = 1;
 }
 
+/* Verify the short pre-load window between LDXR and the sampled load.  The
+ * native instructions have already run, so only the values they left in the
+ * GPR file are available.  The accepted shape is deliberately narrow: every
+ * pre-load instruction must be a pure integer ALU operation that writes only
+ * the LDXR destination (or discards), the chain must actually depend on the
+ * value the LDXR read, and the base register may not be rewritten.  This
+ * proves the LDXR executed and its result reached the faulting load, while
+ * still allowing the in-place EOR/ADD/... forms compilers emit.  Any write to
+ * another register, SP, memory, control flow or a flag-reading select is
+ * declined and the native sequence runs instead. */
+static int uy_llsc_pre_chain(const struct uro_regs *regs,
+                             const uint32_t *insn, const uint64_t *pcs,
+                             unsigned count, unsigned lrt, uint64_t loaded,
+                             uint64_t *out)
+{
+    uint64_t chain = loaded;
+    unsigned i;
+
+    if (lrt == 31U) {
+        for (i = 0; i < count; ++i) {
+            unsigned dst = uy_win_dst(insn[i]);
+
+            if (dst == 33U || dst == 34U || (dst != 31U && dst != 32U)) return 0;
+            if (uy_win_reads_flags(insn[i])) return 0;
+        }
+        *out = 0;
+        return 1;
+    }
+    /* pcs[] is newest-first; walk it from the LDXR side (oldest) to the load. */
+    for (i = count; i-- > 0U; ) {
+        struct uro_regs model, other;
+        unsigned dst = uy_win_dst(insn[i]);
+        unsigned j;
+
+        if (dst == 33U || dst == 34U) return 0;
+        if (uy_win_reads_flags(insn[i])) return 0;
+        if (dst != 31U && dst != 32U && dst != lrt) return 0;
+        if (dst != lrt) continue;
+        for (j = 0; j < 31U; ++j) {
+            model.x[j] = regs->x[j];
+            other.x[j] = regs->x[j];
+        }
+        model.sp = other.sp = regs->sp;
+        model.pc = other.pc = pcs[i];
+        model.pstate = other.pstate = regs->pstate;
+        model.x[lrt] = chain;
+        other.x[lrt] = chain ^ UINT64_C(1);
+        if (!uy_win_alu(&model, insn[i]) || !uy_win_alu(&other, insn[i])) return 0;
+        /* A write that produces the same result for two different inputs did
+         * not consume the LDXR value (MOVZ/AND #0/...), so it is no evidence. */
+        if (model.x[lrt] == other.x[lrt]) return 0;
+        chain = model.x[lrt];
+    }
+    *out = chain;
+    return 1;
+}
+
 /* Decide whether the faulting load sits in an LDXR/LDAXR; load; <window>; STXR
  * sequence the handler can complete.  Only the pre-load evidence is collected
  * here; the window itself is modeled after the load commits (uy_llsc_walk).
  *
  * The ERET that resumes EL0 clears the local exclusive monitor, so the original
  * STXR would always fail.  Completing it restores the native outcome, but only
- * when the LDXR result is still in Rt (execution evidence) and control reached
- * the load sequentially.  A caller that pre-reads [Xn] can forge the register
- * value, but a direct branch into the LDXR..load span is found in every
- * executable mapping of the process, and an indirect branch that leaves that
- * span in a GPR is rejected. */
+ * when the LDXR result reached the load through a reproducible pre-window
+ * (execution evidence) and control reached the load sequentially.  A caller
+ * that pre-reads [Xn] can forge the register value, but a direct branch into
+ * the LDXR..load span is found in every executable mapping of the process, and
+ * an indirect branch that leaves that span in a GPR is rejected. */
 static void uy_llsc_prepare_single(const struct uro_regs *regs, uint64_t pc,
                                    const struct uro_load *load, struct uy_llsc *out)
 {
     uint32_t ldxr_insn = 0;
-    unsigned lsize = 0, lrt = 0, lrn = 0;
-    uint64_t mem = 0, mask, ldxr_pc = 0;
+    uint32_t pre_insn[UY_LLSC_PRE_MAX];
+    uint64_t pre_pc[UY_LLSC_PRE_MAX];
+    unsigned lsize = 0, lrt = 0, lrn = 0, npre = 0;
+    uint64_t mem = 0, mask, ldxr_pc = 0, chain;
     unsigned gap;
 
     if (!f_copy_out || !load || load->vector || load->multi || load->count != 1U)
         return;
     if (pc < 4U || !uy_user_range(pc - 4U, 4U))
         return;
-    /* The LDXR may be separated from the load by a few NOPs. */
-    for (gap = 0; gap < 4U; ++gap) {
+    /* The LDXR may be separated from the load by a short ALU chain. */
+    for (gap = 0; gap <= UY_LLSC_PRE_MAX; ++gap) {
         uint64_t at = pc - 4U - 4U * gap;
         uint32_t insn;
 
@@ -2725,7 +2809,10 @@ static void uy_llsc_prepare_single(const struct uro_regs *regs, uint64_t pc,
             ldxr_insn = insn;
             break;
         }
-        if (insn != UY_NOP) break;
+        if (npre == UY_LLSC_PRE_MAX) break;
+        pre_insn[npre] = insn;
+        pre_pc[npre] = at;
+        ++npre;
     }
     if (!ldxr_pc) return;
     if (uy_llsc_skipped(ldxr_pc, pc)) return;
@@ -2744,11 +2831,13 @@ static void uy_llsc_prepare_single(const struct uro_regs *regs, uint64_t pc,
     if (f_copy_in(&mem, (const void *)(uintptr_t)regs->x[lrn], 1U << lsize))
         return;
     mask = lsize == 3U ? ~UINT64_C(0) : ((UINT64_C(1) << (8U << lsize)) - 1U);
-    /* LDXR Wt/Bt/Ht zero-extend into Xt, so the full register must match the
-     * zero-extended memory value.  This rejects a caller that pre-fills the high
-     * half of Xt to imitate an executed LDXR.  LDXR XZR has no such evidence and
-     * falls back to the control-flow proof above. */
-    if (lrt != 31U && regs->x[lrt] != (mem & mask)) return;
+    /* LDXR Wt/Bt/Ht zero-extend into Xt.  Replay the pre-window from the
+     * zero-extended memory value and require that it reproduces the register
+     * file at the fault.  LDXR XZR has no such evidence and falls back to the
+     * control-flow proof above. */
+    if (!uy_llsc_pre_chain(regs, pre_insn, pre_pc, npre, lrt, mem & mask, &chain))
+        return;
+    if (lrt != 31U && regs->x[lrt] != chain) return;
 
     out->base = regs->x[lrn];
     out->size = 1U << lsize;
@@ -2834,6 +2923,7 @@ static void uy_llsc_commit(struct pt_regs *regs, uint64_t fault_pc,
         regs->sp = plan->model.sp;
         regs->pstate = plan->model.pstate;
     }
+    if (plan->fp_valid) f_fp_update(&plan->fp);
     if (plan->status_reg != 31U) regs->regs[plan->status_reg] = 0;
     regs->pc = plan->stxr_pc + 4U;
     __atomic_fetch_add(&g_sess.llsc, 1, __ATOMIC_RELAXED);
@@ -5852,6 +5942,12 @@ static long resolve_symbols(const struct kclf_btf *btf, int *brk_argc, int *mmf_
     g_fp_ready = f_fp_preserve && f_fp_update && g_layout.task_fpsimd >= 0 &&
                  uy_symbol_abi(btf, fp_name, "v") &&
                  uy_symbol_abi(btf, "fpsimd_update_current_state", "vf");
+    {
+        uint64_t pfr = 0;
+
+        __asm__ volatile("mrs %0, id_aa64pfr0_el1" : "=r"(pfr));
+        g_fp16 = ((pfr >> 16) & 0xfU) == 1U;
+    }
 
     if (!f_get_task_mm || !f_mmput || !f_find_vma ||
         !f_mmap_write_lock || !f_mmap_write_unlock || !f_force_sig_fault ||

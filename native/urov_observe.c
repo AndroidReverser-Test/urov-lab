@@ -268,6 +268,44 @@ static unsigned post_load_alu_once(const void *address, uint64_t *scratch, unsig
 }
 
 __attribute__((noinline))
+static unsigned pre_load_alu_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                  uint64_t *aux)
+{
+    (void)aux;
+    uint64_t old;
+    unsigned sample, failed;
+    /* The 2.20 lookback accepts only NOPs between LDXR and the fault. */
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     "eor %0, %0, #1\n"
+                     "ldrb %w1, [%4]\n"
+                     "eor %0, %0, #1\n"
+                     "stxr %w2, %0, [%3]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned post_load_fp_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                   uint64_t *aux)
+{
+    (void)aux;
+    uint64_t old;
+    unsigned sample, failed;
+    /* FMOV transfers bits unchanged and is outside the 2.20 window model. */
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     "ldrb %w1, [%4]\n"
+                     "fmov d0, %0\n"
+                     "fmov %0, d0\n"
+                     "stxr %w2, %0, [%3]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "v0", "memory");
+    *byte = sample;
+    return failed;
+}
+
+__attribute__((noinline))
 static unsigned post_load_csel_once(const void *address, uint64_t *scratch, unsigned *byte,
                                     uint64_t *aux)
 {
@@ -648,9 +686,9 @@ static unsigned execution_once(const void *address, uint64_t *scratch, unsigned 
 }
 
 enum reservation_probe {
-    READ_ADJACENT, READ_SPACED, READ_POST_LOAD_NOP, READ_POST_LOAD_ALU, READ_POST_LOAD_CSEL,
-    READ_POST_LOAD_LOAD, READ_POST_LOAD_STORE, READ_POST_LOAD_BRANCH, READ_POST_LOAD_XLOAD,
-    READ_ZERO, READ_NONZERO, EXECUTE_CANARY
+    READ_ADJACENT, READ_SPACED, READ_POST_LOAD_NOP, READ_POST_LOAD_ALU, READ_PRE_LOAD_ALU,
+    READ_POST_LOAD_FP, READ_POST_LOAD_CSEL, READ_POST_LOAD_LOAD, READ_POST_LOAD_STORE,
+    READ_POST_LOAD_BRANCH, READ_POST_LOAD_XLOAD, READ_ZERO, READ_NONZERO, EXECUTE_CANARY
 };
 
 typedef unsigned (*probe_fn)(const void *, uint64_t *, unsigned *, uint64_t *);
@@ -662,6 +700,7 @@ static void observe_reservation(const void *address, const void *reference,
     struct sample_identity target, control, after;
     int execute = probe == EXECUTE_CANARY;
     bool ap_probe = probe == READ_POST_LOAD_NOP || probe == READ_POST_LOAD_ALU ||
+                    probe == READ_PRE_LOAD_ALU || probe == READ_POST_LOAD_FP ||
                     probe == READ_POST_LOAD_CSEL || probe == READ_POST_LOAD_LOAD ||
                     probe == READ_POST_LOAD_STORE || probe == READ_POST_LOAD_BRANCH ||
                     probe == READ_POST_LOAD_XLOAD;
@@ -677,6 +716,8 @@ static void observe_reservation(const void *address, const void *reference,
     if (probe == READ_SPACED) sample = spaced_exclusive_once;
     if (probe == READ_POST_LOAD_NOP) sample = post_load_nop_once;
     if (probe == READ_POST_LOAD_ALU) sample = post_load_alu_once;
+    if (probe == READ_PRE_LOAD_ALU) sample = pre_load_alu_once;
+    if (probe == READ_POST_LOAD_FP) sample = post_load_fp_once;
     if (probe == READ_POST_LOAD_CSEL) sample = post_load_csel_once;
     if (probe == READ_POST_LOAD_LOAD) sample = post_load_load_once;
     if (probe == READ_POST_LOAD_STORE) sample = post_load_store_once;
@@ -801,6 +842,18 @@ void ud_observe_ap_alu(const void *address, const void *reference, int backing_f
                        off_t offset, struct ud_exclusive_observation *out)
 {
     observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_ALU, out);
+}
+
+void ud_observe_ap_pre_alu(const void *address, const void *reference, int backing_fd,
+                           off_t offset, struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_PRE_LOAD_ALU, out);
+}
+
+void ud_observe_ap_fp(const void *address, const void *reference, int backing_fd,
+                      off_t offset, struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_FP, out);
 }
 
 void ud_observe_ap_csel(const void *address, const void *reference, int backing_fd,

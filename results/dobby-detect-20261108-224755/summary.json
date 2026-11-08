@@ -1,0 +1,428 @@
+{
+  "serial": "25091FDF60063J",
+  "repeats": 8,
+  "cycles": 1,
+  "runs": [
+    {
+      "label": "no-module",
+      "mode": "dobby-detect-clean",
+      "uid": 10284,
+      "pid": "10749",
+      "log": "no-module-10749.log",
+      "result": "DETECT_RESULT PASS mode=dobby-detect-clean worker_ms=457 ui_ticks=139 ui_max_gap_ms=15 native=PASS cases=2 assertions=114 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "execute": "1234",
+          "file": "96964c4f",
+          "live": "96964c4f",
+          "crc_pass": "8",
+          "accepted_crc": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "0",
+          "spaced_accepted": "768",
+          "spaced_failed": "0",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "3211125",
+          "probe_max_ns": "4571696"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "execute": "1235",
+          "file": "96964c4f",
+          "live": "4c28dfab",
+          "crc_pass": "0",
+          "accepted_crc": "0",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "0",
+          "spaced_accepted": "768",
+          "spaced_failed": "0",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "2909438",
+          "probe_max_ns": "2944011"
+        }
+      ],
+      "details": [
+        "DOBBY_DETECT_ACCESS self_mem_open_errno=13 other_mm_read_errno=1",
+        "DOBBY_DETECT_KMEM stage=clean errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=clean n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=clean tid=10834 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=clean got=32 match=1 errno=0",
+        "DOBBY_DETECT_KMEM stage=patch_only errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=patch_only n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=patch_only tid=10834 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=patch_only got=32 match=1 errno=0",
+        "DOBBY_DETECT_BUSINESS ops=88576 errors=0"
+      ],
+      "live_views": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "8",
+          "kernel_crc": "96964c4f",
+          "single_crc": "96964c4f",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "610794",
+          "max_ns": "2642334"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "0",
+          "kernel_crc": "4c28dfab",
+          "single_crc": "4c28dfab",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "287851",
+          "max_ns": "293660"
+        }
+      ],
+      "many_views": [
+        {
+          "stage": "clean",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "sibling_views": [
+        {
+          "stage": "clean",
+          "tid": "10834",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "tid": "10834",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "split_views": [
+        {
+          "stage": "clean",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "ap_views": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "accepted": "768",
+          "failed": "0",
+          "control_failed": "0",
+          "bytes_differ": "0",
+          "accepted_crc": "8",
+          "mean_ns": "3693837",
+          "max_ns": "7921672"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "accepted": "768",
+          "failed": "0",
+          "control_failed": "0",
+          "bytes_differ": "1",
+          "accepted_crc": "0",
+          "mean_ns": "2904734",
+          "max_ns": "2920125"
+        }
+      ],
+      "keyless_recovery": [
+        {
+          "stage": "unarmed",
+          "errno": "22",
+          "bytes_expected": "1",
+          "vma_preserved": "1",
+          "execute": "1235"
+        }
+      ]
+    },
+    {
+      "label": "loaded-idle",
+      "mode": "dobby-detect-clean",
+      "uid": 10284,
+      "pid": "10861",
+      "log": "loaded-idle-10861.log",
+      "result": "DETECT_RESULT PASS mode=dobby-detect-clean worker_ms=480 ui_ticks=141 ui_max_gap_ms=24 native=PASS cases=2 assertions=114 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "execute": "1234",
+          "file": "96964c4f",
+          "live": "96964c4f",
+          "crc_pass": "8",
+          "accepted_crc": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "0",
+          "spaced_accepted": "768",
+          "spaced_failed": "0",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "3355992",
+          "probe_max_ns": "5446899"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "execute": "1235",
+          "file": "96964c4f",
+          "live": "4c28dfab",
+          "crc_pass": "0",
+          "accepted_crc": "0",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "0",
+          "spaced_accepted": "768",
+          "spaced_failed": "0",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "2971242",
+          "probe_max_ns": "2989583"
+        }
+      ],
+      "details": [
+        "DOBBY_DETECT_ACCESS self_mem_open_errno=13 other_mm_read_errno=1",
+        "DOBBY_DETECT_KMEM stage=clean errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=clean n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=clean tid=10915 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=clean got=32 match=1 errno=0",
+        "DOBBY_DETECT_KMEM stage=patch_only errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=patch_only n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=patch_only tid=10915 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=patch_only got=32 match=1 errno=0",
+        "DOBBY_DETECT_BUSINESS ops=87168 errors=0"
+      ],
+      "live_views": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "8",
+          "kernel_crc": "96964c4f",
+          "single_crc": "96964c4f",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "487137",
+          "max_ns": "1568400"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "0",
+          "kernel_crc": "4c28dfab",
+          "single_crc": "4c28dfab",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "294036",
+          "max_ns": "302531"
+        }
+      ],
+      "many_views": [
+        {
+          "stage": "clean",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "sibling_views": [
+        {
+          "stage": "clean",
+          "tid": "10915",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "tid": "10915",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "split_views": [
+        {
+          "stage": "clean",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "ap_views": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "accepted": "768",
+          "failed": "0",
+          "control_failed": "0",
+          "bytes_differ": "0",
+          "accepted_crc": "8",
+          "mean_ns": "3481140",
+          "max_ns": "5850424"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "accepted": "768",
+          "failed": "0",
+          "control_failed": "0",
+          "bytes_differ": "1",
+          "accepted_crc": "0",
+          "mean_ns": "2973404",
+          "max_ns": "2977865"
+        }
+      ],
+      "keyless_recovery": [
+        {
+          "stage": "unarmed",
+          "errno": "22",
+          "bytes_expected": "1",
+          "vma_preserved": "1",
+          "execute": "1235"
+        }
+      ]
+    }
+  ],
+  "passed": false,
+  "initial_modules": "",
+  "boot_id_before": "74469d29-d2bf-49ba-aaad-560320d27806",
+  "kernel": "Linux localhost 6.1.134-android14-11-g66e758f7d0c0-ab13748739 #1 SMP PREEMPT Tue Jul  8 09:17:32 UTC 2025 aarch64 Toybox",
+  "kpver": "c00",
+  "selinux": "Enforcing",
+  "artifacts": {
+    "urovdetect.apk": "f6640b001d5602b2e89913703bd7ea2cbbc227bf7f1a2965884fd573417e12c5",
+    "urov-y.kpm": "a0e6068cd606aee0fd4610ae29f404e28c77485b1986ca07f0d5aa78b967b1fb"
+  },
+  "loaded_status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=d87 hooks=0xff core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x73f",
+  "error": "dobby-detect-active-1: app failed, see dobby-detect-active-1-10937.log",
+  "final_modules": "",
+  "boot_id_after": "74469d29-d2bf-49ba-aaad-560320d27806",
+  "kernel_issues": []
+}

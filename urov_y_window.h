@@ -12,6 +12,16 @@
 #define UINT64_C(value) value##ULL
 #endif
 
+/* struct user_fpsimd_state as consumed by the kernel's FPSIMD helpers: 32
+ * 16-byte vector registers followed by fpsr/fpcr (uapi/asm/sigcontext.h).
+ * Shared by the backend's live FPSIMD snapshot and the pure window model. */
+struct uy_fpstate {
+    uint8_t vregs[32][16];
+    uint32_t fpsr;
+    uint32_t fpcr;
+    uint32_t reserved[2];
+};
+
 #ifndef UY_NOP
 #define UY_NOP 0xd503201fU
 #endif
@@ -35,14 +45,18 @@
  * in-window branches.  2.20.0 therefore models the whole window on a private
  * register copy, reads gap loads through the same image/snapshot view as the
  * sampled load, records gap stores for the commit, and stops at the STXR whose
- * base is still the monitored address.
+ * base is still the monitored address.  2.21.0 adds the FPSIMD FMOV transfers
+ * (D/S/H and the .D[1] lane), MRS/MSR of NZCV/FPCR/FPSR, the read-only
+ * TPIDR_EL0/TPIDRRO_EL0/CNTFRQ_EL0/CTR_EL0/DCZID_EL0 values, and the pre-load
+ * destination-chain verifier.
  *
  * Everything the model cannot reproduce makes the walk decline, and the native
  * instructions then run: CLREX, a second exclusive, a monitor-clobbering store,
- * an exception, a call, a system register access, SIMD&FP, or a transfer out of
- * the bounded window.  For CLREX, a second exclusive and an exception the
- * native outcome is the failure the unmodified hardware would also report, so
- * declining there reproduces the architecture rather than hiding it.
+ * an exception, a call, an unmodeled system register, SIMD/FP data processing
+ * outside FMOV, SVE/SME, or a transfer out of the bounded window.  For CLREX, a
+ * second exclusive and an exception the native outcome is the failure the
+ * unmodified hardware would also report, so declining there reproduces the
+ * architecture rather than hiding it.
  */
 
 static unsigned uy_win_nzcv(uint64_t pstate, unsigned bit)
@@ -628,6 +642,239 @@ static int uy_win_branch(struct uro_regs *model, uint32_t insn, uint64_t at)
         return 1;
     }
     return 0;
+}
+
+/* Destination of one uy_win_alu() instruction:
+ *   0..30  GPR number
+ *   31     discard (XZR/WZR)
+ *   32     no GPR destination (NOP, barrier, CCMP/CCMN, flags-only ADDS)
+ *   33     SP (add/sub immediate with Rd==31 and S==0)
+ *   34     not an instruction uy_win_alu() accepts.
+ * Used by the pre-load verifier, which may only prove an in-place update of
+ * the LDXR destination and must reject SP or any other register write. */
+static inline unsigned uy_win_dst(uint32_t insn)
+{
+    unsigned rd = insn & 31U;
+
+    if (insn == UY_NOP || insn == UY_BTI_C || insn == UY_BTI_J || insn == UY_BTI_JC)
+        return 32U;
+    if ((insn & 0xfffff01fU) == 0xd503201fU) return 32U;  /* HINT #imm */
+    if ((insn & 0xfffff0ffU) == 0xd503309fU) return 32U;  /* DMB */
+    if ((insn & 0xfffff0ffU) == 0xd50330bfU) return 32U;  /* DSB */
+    if ((insn & 0xfffff0ffU) == 0xd50330dfU) return 32U;  /* ISB */
+    if ((insn & 0x3fe00010U) == 0x3a400000U) return 32U;  /* CCMP/CCMN */
+
+    if ((insn & 0x1f000000U) == 0x11000000U) {           /* add/sub immediate */
+        unsigned setf = (insn >> 29) & 1U;
+
+        if (rd == 31U) return setf ? 32U : 33U;
+        return rd;
+    }
+    if ((insn & 0x1f200000U) == 0x0b000000U) return rd;   /* add/sub shifted */
+    if ((insn & 0x1f000000U) == 0x0a000000U) return rd;   /* logical shifted */
+    if ((insn & 0x1f800000U) == 0x12000000U) return rd;   /* logical immediate */
+    if ((insn & 0x1f800000U) == 0x12800000U) return rd;   /* move wide */
+    if ((insn & 0x1f800000U) == 0x13000000U) return rd;   /* bitfield */
+    if ((insn & 0x1f800000U) == 0x13800000U) return rd;   /* extract */
+    if ((insn & 0x1fe00000U) == 0x1a800000U) return rd;   /* conditional select */
+    if ((insn & 0x5fe00000U) == 0x5ac00000U) return rd;   /* 1 source */
+    if ((insn & 0x5fe00000U) == 0x1ac00000U) return rd;   /* 2 source */
+    if ((insn & 0x1f000000U) == 0x1b000000U) return rd;   /* 3 source */
+    if ((insn & 0x1f000000U) == 0x10000000U) return rd;   /* ADR/ADRP */
+    return 34U;
+}
+
+/* Instructions whose result depends on the incoming NZCV.  The pre-load
+ * verifier cannot reconstruct the flags from before the LDXR, so it rejects
+ * them; post-load CSEL/CCMP are modeled against the current SPSR. */
+static inline int uy_win_reads_flags(uint32_t insn)
+{
+    if ((insn & 0x1fe00000U) == 0x1a800000U) return 1;   /* CSEL/CSINC/... */
+    if ((insn & 0x3fe00010U) == 0x3a400000U) return 1;   /* CCMP/CCMN */
+    return 0;
+}
+
+static inline uint64_t uy_win_fp_get(const struct uy_fpstate *fp, unsigned reg,
+                              unsigned off, unsigned bytes)
+{
+    uint64_t value = 0;
+    unsigned i;
+
+    for (i = 0; i < bytes; ++i)
+        value |= (uint64_t)fp->vregs[reg][off + i] << (8U * i);
+    return value;
+}
+
+static inline void uy_win_fp_put(struct uy_fpstate *fp, unsigned reg, unsigned off,
+                          unsigned bytes, uint64_t value)
+{
+    unsigned i;
+
+    for (i = 0; i < bytes; ++i)
+        fp->vregs[reg][off + i] = (uint8_t)(value >> (8U * i));
+}
+
+/* FMOV between one GPR and one scalar/128-bit-lane FPSIMD register.  These
+ * move bits unchanged: they do not convert, set flags or touch memory.  The
+ * scalar forms zero the unused bytes of the destination V register; the
+ * .D[1]/S[1] lane forms preserve the other lane. */
+static inline int uy_win_fp_move(struct uro_regs *model, struct uy_fpstate *fp,
+                                 uint32_t insn, int have_fp16)
+{
+    if ((insn & 0xfffffc00U) == 0x9e670000U) {           /* FMOV Dd, Xn */
+        unsigned rd = insn & 31U, rn = (insn >> 5) & 31U;
+        uint64_t v = uy_win_gpr(model, rn);
+
+        uy_win_fp_put(fp, rd, 0, 8, v);
+        uy_win_fp_put(fp, rd, 8, 8, 0);
+        return 1;
+    }
+    if ((insn & 0xfffffc00U) == 0x9e660000U) {           /* FMOV Xd, Dn */
+        unsigned rd = insn & 31U, rn = (insn >> 5) & 31U;
+
+        if (rd != 31U) model->x[rd] = uy_win_fp_get(fp, rn, 0, 8);
+        return 1;
+    }
+    if ((insn & 0xfffffc00U) == 0x1e270000U) {           /* FMOV Sd, Wn */
+        unsigned rd = insn & 31U, rn = (insn >> 5) & 31U;
+        uint64_t v = uy_win_gpr(model, rn) & 0xffffffffU;
+
+        uy_win_fp_put(fp, rd, 0, 4, v);
+        uy_win_fp_put(fp, rd, 4, 12, 0);
+        return 1;
+    }
+    if ((insn & 0xfffffc00U) == 0x1e260000U) {           /* FMOV Wd, Sn */
+        unsigned rd = insn & 31U, rn = (insn >> 5) & 31U;
+
+        if (rd != 31U) model->x[rd] = uy_win_fp_get(fp, rn, 0, 4);
+        return 1;
+    }
+    if ((insn & 0xfffffc00U) == 0x1ee70000U) {           /* FMOV Hd, Wn */
+        unsigned rd = insn & 31U, rn = (insn >> 5) & 31U;
+        uint64_t v = uy_win_gpr(model, rn) & 0xffffU;
+
+        if (!have_fp16) return 0;
+        uy_win_fp_put(fp, rd, 0, 2, v);
+        uy_win_fp_put(fp, rd, 2, 14, 0);
+        return 1;
+    }
+    if ((insn & 0xfffffc00U) == 0x1ee60000U) {           /* FMOV Wd, Hn */
+        unsigned rd = insn & 31U, rn = (insn >> 5) & 31U;
+
+        if (!have_fp16) return 0;
+        if (rd != 31U) model->x[rd] = uy_win_fp_get(fp, rn, 0, 2);
+        return 1;
+    }
+    if ((insn & 0xfffffc00U) == 0x9eaf0000U) {           /* FMOV Vd.D[1], Xn */
+        unsigned rd = insn & 31U, rn = (insn >> 5) & 31U;
+
+        uy_win_fp_put(fp, rd, 8, 8, uy_win_gpr(model, rn));
+        return 1;
+    }
+    if ((insn & 0xfffffc00U) == 0x9eae0000U) {           /* FMOV Xd, Vn.D[1] */
+        unsigned rd = insn & 31U, rn = (insn >> 5) & 31U;
+
+        if (rd != 31U) model->x[rd] = uy_win_fp_get(fp, rn, 8, 8);
+        return 1;
+    }
+    return 0;
+}
+
+/* True when the instruction is one of the FP moves above; the backend uses
+ * this to take the FPSIMD snapshot only for a window that actually needs it. */
+static inline int uy_win_fp_insn(uint32_t insn, int have_fp16)
+{
+    switch (insn & 0xfffffc00U) {
+    case 0x9e670000U:
+    case 0x9e660000U:
+    case 0x1e270000U:
+    case 0x1e260000U:
+    case 0x9eaf0000U:
+    case 0x9eae0000U:
+        return 1;
+    case 0x1ee70000U:
+    case 0x1ee60000U:
+        return have_fp16;
+    default:
+        return 0;
+    }
+}
+
+/* MRS/MSR of the user-visible state the window can carry exactly.  NZCV is
+ * the SPSR copy; FPCR/FPSR live in the FPSIMD image; the MRS forms of
+ * TPIDR_EL0/TPIDRRO_EL0/CNTFRQ_EL0/CTR_EL0/DCZID_EL0 return what the running
+ * task sees.  Writes to TPIDR_EL0, counter reads (CNTVCT_EL0) and random
+ * numbers are deliberately not modeled: the first needs a deferred write, and
+ * the others are timing observations rather than reproducible state. */
+static inline int uy_win_sysreg(struct uro_regs *model, struct uy_fpstate *fp, uint32_t insn)
+{
+    unsigned rt = insn & 31U;
+    uint64_t value;
+
+    if ((insn & 0xffff0000U) != 0xd53b0000U && (insn & 0xffff0000U) != 0xd51b0000U)
+        return 0;
+    switch (insn & 0x0000ffffU) {
+    case 0x4200U:                                        /* NZCV */
+        if ((insn >> 21) & 1U) {
+            if (rt != 31U) model->x[rt] = model->pstate & (UINT64_C(0xf) << 28);
+        } else {
+            value = uy_win_gpr(model, rt);
+            model->pstate = (model->pstate & ~(UINT64_C(0xf) << 28)) |
+                            (value & (UINT64_C(0xf) << 28));
+        }
+        return 1;
+    case 0x4400U:                                        /* FPCR */
+        if ((insn >> 21) & 1U) {
+            if (rt != 31U) model->x[rt] = fp->fpcr;
+        } else {
+            fp->fpcr = (uint32_t)uy_win_gpr(model, rt);
+        }
+        return 1;
+    case 0x4420U:                                        /* FPSR */
+        if ((insn >> 21) & 1U) {
+            if (rt != 31U) model->x[rt] = fp->fpsr;
+        } else {
+            fp->fpsr = (uint32_t)uy_win_gpr(model, rt);
+        }
+        return 1;
+    case 0xd040U:                                        /* TPIDR_EL0 */
+        if (!((insn >> 21) & 1U)) return 0;
+        __asm__ volatile("mrs %0, tpidr_el0" : "=r"(value));
+        if (rt != 31U) model->x[rt] = value;
+        return 1;
+    case 0xd060U:                                        /* TPIDRRO_EL0 */
+        if (!((insn >> 21) & 1U)) return 0;
+        __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(value));
+        if (rt != 31U) model->x[rt] = value;
+        return 1;
+    case 0xe000U:                                        /* CNTFRQ_EL0 */
+        if (!((insn >> 21) & 1U)) return 0;
+        __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(value));
+        if (rt != 31U) model->x[rt] = value;
+        return 1;
+    case 0x0020U:                                        /* CTR_EL0 */
+        if (!((insn >> 21) & 1U)) return 0;
+        __asm__ volatile("mrs %0, ctr_el0" : "=r"(value));
+        if (rt != 31U) model->x[rt] = value;
+        return 1;
+    case 0x00e0U:                                        /* DCZID_EL0 */
+        if (!((insn >> 21) & 1U)) return 0;
+        __asm__ volatile("mrs %0, dczid_el0" : "=r"(value));
+        if (rt != 31U) model->x[rt] = value;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* Whether uy_win_sysreg() needs the FPSIMD image (FPCR/FPSR). */
+static inline int uy_win_sysreg_fp(uint32_t insn)
+{
+    uint32_t key = insn & 0x0000ffffU;
+
+    return ((insn & 0xffff0000U) == 0xd53b0000U ||
+            (insn & 0xffff0000U) == 0xd51b0000U) &&
+           (key == 0x4400U || key == 0x4420U);
 }
 
 #endif

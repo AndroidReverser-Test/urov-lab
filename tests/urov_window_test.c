@@ -98,6 +98,90 @@ static uint64_t bitrev(uint64_t v, unsigned bits)
     return out;
 }
 
+static struct uy_fpstate fp;
+
+static void fp_reset(void)
+{
+    memset(&fp, 0, sizeof(fp));
+}
+
+static void check_fp(const char *name, uint32_t insn, unsigned reg, unsigned off,
+                     unsigned bytes, uint64_t want)
+{
+    uint64_t got = 0;
+    unsigned i;
+
+    ++cases;
+    if (!uy_win_fp_move(&model, &fp, insn, 1)) {
+        printf("FAIL %-30s not modeled\n", name);
+        ++failures;
+        return;
+    }
+    for (i = 0; i < bytes; ++i)
+        got |= (uint64_t)fp.vregs[reg][off + i] << (8U * i);
+    if (got != want) {
+        printf("FAIL %-30s got=%016llx want=%016llx\n", name,
+               (unsigned long long)got, (unsigned long long)want);
+        ++failures;
+        return;
+    }
+    printf("ok   %-30s %016llx\n", name, (unsigned long long)got);
+}
+
+static void check_fp_to_gpr(const char *name, uint32_t insn, uint64_t want)
+{
+    ++cases;
+    if (!uy_win_fp_move(&model, &fp, insn, 1) || model.x[0] != want) {
+        printf("FAIL %-30s got=%016llx want=%016llx\n", name,
+               (unsigned long long)model.x[0], (unsigned long long)want);
+        ++failures;
+        return;
+    }
+    printf("ok   %-30s %016llx\n", name, (unsigned long long)model.x[0]);
+}
+
+static void check_dst(const char *name, uint32_t insn, unsigned want)
+{
+    unsigned got = uy_win_dst(insn);
+
+    ++cases;
+    if (got != want) {
+        printf("FAIL %-30s dst=%u want=%u\n", name, got, want);
+        ++failures;
+        return;
+    }
+    printf("ok   %-30s %u\n", name, got);
+}
+
+static void check_sysreg(const char *name, uint32_t insn, uint64_t want, int read_nzcv)
+{
+    ++cases;
+    if (!uy_win_sysreg(&model, &fp, insn)) {
+        printf("FAIL %-30s not modeled\n", name);
+        ++failures;
+        return;
+    }
+    if (read_nzcv ? model.x[0] != want : (model.pstate & (UINT64_C(0xf) << 28)) != want) {
+        printf("FAIL %-30s got=%016llx want=%016llx\n", name,
+               (unsigned long long)(read_nzcv ? model.x[0] : model.pstate),
+               (unsigned long long)want);
+        ++failures;
+        return;
+    }
+    printf("ok   %-30s\n", name);
+}
+
+static void check_sysreg_fpsr(const char *name, uint32_t insn, uint32_t want)
+{
+    ++cases;
+    if (!uy_win_sysreg(&model, &fp, insn) || fp.fpsr != want) {
+        printf("FAIL %-30s fpsr=%08x want=%08x\n", name, fp.fpsr, want);
+        ++failures;
+        return;
+    }
+    printf("ok   %-30s\n", name);
+}
+
 int main(void)
 {
     const uint64_t A = UINT64_C(0x1122334455667788);
@@ -270,6 +354,62 @@ int main(void)
     check_declined("clrex", 0xd5033f5fU);
     reset(A, 0, 0);
     check_declined("svc #0", 0xd4000001U);
+
+    /* FP/SIMD moves: bit-exact transfers, scalar writes zero the rest of Vd,
+     * lane writes preserve the other lane. */
+    reset(A, 0, 0);
+    fp_reset();
+    check_fp("fmov d0,x1", 0x9e670020U, 0, 0, 8, A);
+    reset(0, 0, 0);
+    fp_reset();
+    fp.vregs[1][0] = 0x88; fp.vregs[1][6] = 0x77;
+    check_fp_to_gpr("fmov x0,d1", 0x9e660020U, UINT64_C(0x0077000000000088));
+    reset(A, 0, 0);
+    fp_reset();
+    fp.vregs[0][0] = 0x5a;
+    check_fp("fmov v0.d[1],x1", 0x9eaf0020U, 0, 8, 8, A);
+    reset(0, 0, 0);
+    fp_reset();
+    fp.vregs[1][8] = 0x44;
+    check_fp_to_gpr("fmov x0,v1.d[1]", 0x9eae0020U, UINT64_C(0x44));
+    reset(A, 0, 0);
+    fp_reset();
+    check_fp("fmov s0,w1", 0x1e270020U, 0, 0, 4, A & 0xffffffffU);
+    reset(0, 0, 0);
+    fp_reset();
+    fp.vregs[1][0] = 0x21;
+    check_fp_to_gpr("fmov w0,s1", 0x1e260020U, 0x21);
+    reset(A, 0, 0);
+    fp_reset();
+    check_fp("fmov h0,w1", 0x1ee70020U, 0, 0, 2, A & 0xffffU);
+    reset(0, 0, 0);
+    fp_reset();
+    fp.vregs[1][0] = 0x66;
+    check_fp_to_gpr("fmov w0,h1", 0x1ee60020U, 0x66);
+
+    /* MRS/MSR of NZCV and FPCR/FPSR. */
+    reset(0, 0, 0);
+    fp_reset();
+    model.pstate = PSR_N | PSR_C;
+    check_sysreg("mrs x0,nzcv", 0xd53b4200U, PSR_N | PSR_C, 1);
+    reset(0, 0, 0);
+    fp_reset();
+    model.x[0] = PSR_Z | PSR_V;
+    check_sysreg("msr nzcv,x0", 0xd51b4200U, PSR_Z | PSR_V, 0);
+    reset(0, 0, 0);
+    fp_reset();
+    fp.fpcr = 0x12345678U;
+    check_sysreg("mrs x0,fpcr", 0xd53b4400U, 0x12345678U, 1);
+    reset(0, 0, 0);
+    fp_reset();
+    model.x[0] = 0x9abcdef0U;
+    check_sysreg_fpsr("msr fpsr,x0", 0xd51b4420U, 0x9abcdef0U);
+    reset(0, 0, 0);
+    check_dst("add x0,x1,#1", 0x91000420U, 0);
+    check_dst("add sp,sp,#16", 0x910043ffU, 33);
+    check_dst("adds xzr,x1,#1", 0xb100043fU, 32);
+    check_dst("nop", UY_NOP, 32);
+    check_dst("mrs x0,nzcv", 0xd53b4200U, 34);
 
     printf("cases=%u failures=%u\n", cases, failures);
     return failures ? 1 : 0;

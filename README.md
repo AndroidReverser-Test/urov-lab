@@ -1,5 +1,21 @@
 # UROV-LAB
 
+`urov-y` 2.21.0 清掉 2.20.0 测试面仍稳定的两条 AP 读侧特征：`LDXR` 与故障 load
+之间的整数链（`LDXR; EOR; LDRB; EOR; STXR`）和 load 之后的 `FMOV` 传送
+（`LDXR; LDRB; FMOV d0,x0; FMOV x0,d0; STXR`）。后向窗口从 `LDXR` 重放最多 12 条
+“只写目标寄存器、且结果实际依赖 `LDXR` 读值”的整数指令；前向窗口从 24 条扩到
+64 条（256 字节），并补齐 `FMOV D/S/H`、`FMOV Vd.D[1]`、`MRS/MSR NZCV/FPCR/FPSR`
+和只读 `TPIDR_EL0`/`TPIDRRO_EL0`/`CNTFRQ_EL0`/`CTR_EL0`/`DCZID_EL0`。FPSIMD 镜像
+只在窗口出现 FP 指令时懒加载，提交时写回；H 形式只在 CPU 报告 FEAT_FP16 时接受。
+没有新增 hook、线程、定时器、PTE/VMA/代码字，ABI 仍为 v8、`hooks=0xff`。普通 App
+的 `--read-defense-v221` 在 AP-all 覆盖阶段给出 `pre_alu=fp=ap=0`、`evidence=0`、
+`accepted=32/32`；AP 调用窗口仍是 `split=32`（设计保留的 caller-window 语义）。
+CRC 的 `.text` 在 EL0/`process_vm_readv`/pipe/fork 上仍等于文件摘要，执行仍是
+Dobby 的 `1235`。v221 6 模式 ×32、CRC 3×1、Dobby 8×1（`accepted_crc_with_ap=8/8`、
+`ap=0/8`）、消除 3×1、多页 3×1 均 PASS；`out/urov_window_test` 的 73 条独立期望值
+差分校验通过。设计与残余见 [ELIMINATION_2_21_DESIGN.md](ELIMINATION_2_21_DESIGN.md)。
+构建 `urov-y.kpm 0bc084fd...`。
+
 `urov-y` 2.20.0 把 2.19.0 的“LL/SC 前向白名单”换成**整窗建模**：故障 load 提交
 之后，handler 在私有寄存器副本上逐条执行 `LDXR..STXR` 之间的全部窗口指令（最多
 24 条、96 字节区域），读 gap 里的普通 load（与故障 load 同一 image/snapshot 视图），

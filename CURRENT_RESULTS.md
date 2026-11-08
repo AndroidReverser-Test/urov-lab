@@ -2,6 +2,20 @@
 
 更新于 2026-11-08（Asia/Shanghai）。
 
+> 2026-11-08 补充：`urov-y` 2.21.0 消掉 2.20.0 仍成立的两条无密钥 AP 读侧特征：
+> `LDXR` 与故障 load 之间的整数链（`LDXR; EOR; LDRB; EOR; STXR`）和 load 之后的
+> `FMOV` 传送（`LDXR; LDRB; FMOV d0,x0; FMOV x0,d0; STXR`）。后向窗口从
+> `LDXR` 重放最多 12 条“只写目标寄存器且依赖 `LDXR` 读值”的整数指令；前向窗口
+> 从 24 条扩到 64 条，补齐 `FMOV` 标量/FP16/128 位 lane、`MRS/MSR NZCV/FPCR/FPSR`
+> 和只读 `TPIDR_EL0`/`TPIDRRO_EL0`/`CNTFRQ_EL0`/`CTR_EL0`/`DCZID_EL0`。FPSIMD
+> 镜像只在窗口出现 FP 指令时懒加载，提交时写回；H 形式只在 FEAT_FP16 时接受。
+> ABI 仍为 v8、`hooks=0xff`。v221 6 模式 ×32 PASS（AP-all `pre_alu=fp=ap=0`、
+> `evidence=0`、`accepted=32/32`；AP 窗口 `split=32`）、生产 CRC 7 模式 ×3、Dobby
+> 8×1（`ap=0/8`、`accepted_crc_with_ap=8/8`）、消除 3×1、多页 3×1 均 PASS；
+> 窗口模型 `cases=73 failures=0`。构建 `urov-y.kpm 0bc084fd...`、
+> `urovdetect.apk f6640b00...`。见
+> [ELIMINATION_2_21_DESIGN.md](ELIMINATION_2_21_DESIGN.md)。
+
 > 2026-11-08 补充：`urov-y` 2.19.0 消掉 2.18.0 残余 §6.5 的唯一稳定普通 App、
 > 无密钥读侧特征。`PAGE_AP` 的读异常仍会清本地独占监视器，但 handler 现在把
 > STXR 前向窗口从 NOP/BTI 扩到寄存器-only 整数数据加工（`ADD/SUB` imm/reg、

@@ -36,7 +36,6 @@ struct ud_store_observation {
 };
 
 typedef uint64_t (*ud_plain_reader)(const void *);
-typedef void (*ud_bytes_reader)(uint8_t *out, const uint8_t *address, size_t size);
 
 struct ud_live_observation {
     enum ud_verdict verdict;
@@ -125,6 +124,16 @@ void ud_observe_ap_reservation(const void *address, const void *reference,
  * LDRB falls outside the 2.16.0 single and paired LL/SC bridges. */
 void ud_observe_ap_alu(const void *address, const void *reference, int backing_fd,
                        off_t offset, struct ud_exclusive_observation *out);
+
+/* Same paired controls. A reversible integer operation before LDRB prevents
+ * the 2.20.0 lookback from finding the reservation. The FP register transfer
+ * after LDRB is outside its forward window model. Both sequences write only
+ * the original value of private scratch. Require agreement of the two probes
+ * when using them as evidence of a read trap. */
+void ud_observe_ap_pre_alu(const void *address, const void *reference, int backing_fd,
+                           off_t offset, struct ud_exclusive_observation *out);
+void ud_observe_ap_fp(const void *address, const void *reference, int backing_fd,
+                      off_t offset, struct ud_exclusive_observation *out);
 
 /* Same contract as ud_observe_ap_reservation. CSEL reads NZCV and preserves
  * the scratch value. The UROV-Y 2.19.0 single LL/SC bridge declines this gap. */

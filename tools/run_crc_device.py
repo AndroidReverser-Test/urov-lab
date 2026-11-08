@@ -42,14 +42,19 @@ def main():
     matrix.add_argument("--read-defense-v219", action="store_true",
                         help="test keyless detection and reference protection against urov-y 2.19.0")
     matrix.add_argument("--read-defense-v220", action="store_true",
-                        help="test the modeled LL/SC window shapes against urov-y 2.20.0")
+                        help="test modeled and unmodeled LL/SC windows and keyless defense against 2.20.0")
+    matrix.add_argument("--read-defense-v221", action="store_true",
+                        help="test pre-load ALU and FPSIMD window modeling against 2.21.0")
     parser.add_argument("--repeats", type=int, default=15)
     parser.add_argument("--cycles", type=int, default=3)
     args = parser.parse_args()
     if not 3 <= args.repeats <= 200 or not 1 <= args.cycles <= 10:
         parser.error("repeats 3..200, cycles 1..10")
 
-    if args.read_defense_v220:
+    if args.read_defense_v221:
+        prefix = "read-defense-v221"
+        modes = tuple(f"{prefix}-{shape}" for shape in ("brk", "brk-all", "uxn", "uxn-all", "ap", "ap-all"))
+    elif args.read_defense_v220:
         prefix = "read-defense-v220"
         modes = tuple(f"{prefix}-{shape}" for shape in ("brk", "brk-all", "uxn", "uxn-all", "ap", "ap-all"))
     elif args.read_defense_v219:
@@ -105,8 +110,10 @@ def main():
         v218 = mode.startswith("read-defense-v218-")
         v219 = mode.startswith("read-defense-v219-")
         v220 = mode.startswith("read-defense-v220-")
-        modern_defense = v218 or v219 or v220 or mode.startswith("read-defense-v216-")
-        defense_tag = "V220" if v220 else "V219" if v219 else "V218" if v218 else "V216"
+        v221 = mode.startswith("read-defense-v221-")
+        window_mode = v220 or v221
+        modern_defense = v218 or v219 or window_mode or mode.startswith("read-defense-v216-")
+        defense_tag = "V221" if v221 else "V220" if v220 else "V219" if v219 else "V218" if v218 else "V216"
         active = mode != f"{prefix}-clean"
         shell("am", "force-stop", PACKAGE)
         argv = ["am", "start", "-W", "-n", ACTIVITY, "--es", "mode", mode,
@@ -176,17 +183,17 @@ def main():
             if active and (f"READ_DEFENSE_{defense_tag}_STATUS parent_active=1 callers={callers}" not in logs or
                            "READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1" not in logs):
                 raise IncompleteLog(f"{label}: missing parent-session or registration guard result")
-            if (v218 or v219) and active and (f"READ_DEFENSE_{defense_tag}_GUARD shape=1 errno=22 "
-                                              "inactive=1 reference=1 execute=1234" not in logs):
+            if (v218 or v219 or window_mode) and active and (f"READ_DEFENSE_{defense_tag}_GUARD shape=1 errno=22 "
+                                                             "inactive=1 reference=1 execute=1234" not in logs):
                 raise IncompleteLog(f"{label}: missing execute-only registration guard result")
-            if v219 or v220:
+            if v219 or window_mode:
                 keyless = [dict(KV.findall(line)) for line in
                            re.findall(r"READ_DEFENSE_KEYLESS [^\n]+", logs)]
                 if [s["stage"] for s in keyless] != expected:
                     raise IncompleteLog(f"{label}: missing keyless probe records")
                 if active and "READ_DEFENSE_KEYLESS_GUARD shape=1 errno=22 inactive=1 intact=1" not in logs:
                     raise IncompleteLog(f"{label}: missing read-only reference guard result")
-            if v220:
+            if window_mode:
                 window = [dict(KV.findall(line)) for line in
                           re.findall(r"READ_DEFENSE_KEYLESS2 [^\n]+", logs)]
                 if [s["stage"] for s in window] != expected:
@@ -197,6 +204,13 @@ def main():
                        s["clrex_done"] != s["n"] or s["svc_bad"] != "0" or
                        s["svc_done"] != s["n"] for s in window):
                     raise RuntimeError(f"{label}: window probes reported a residual feature")
+                policy = [dict(KV.findall(line)) for line in
+                          re.findall(rf"READ_DEFENSE_{defense_tag}_POLICY [^\n]+", logs)]
+                if [s["stage"] for s in policy] != expected:
+                    raise IncompleteLog(f"{label}: missing policy records in {log_path.name}")
+                if active and (f"READ_DEFENSE_{defense_tag}_FALLBACK shape=1 reference=1 "
+                               "execute=1234" not in logs):
+                    raise IncompleteLog(f"{label}: missing independent read and execution result")
         elif defense:
             remaps = [dict(KV.findall(line)) for line in re.findall(r"READ_DEFENSE_REMAP [^\n]+", logs)]
             if [step["stage"] for step in remaps] != (["unarmed", "outside", "overlap"] if active else ["unarmed"]):
@@ -266,13 +280,14 @@ def main():
                                                      r"|ELIM_EXEC|DOBBY_DETECT_(?:STATUS|RESTORE|LOCK|GUARD|BUSINESS|ACCESS|KMEM|FORK_KMEM|MANY|SIBLING|SPLIT)) [^\n]+", logs)})
         if modern_defense:
             report["runs"][-1]["details"] = re.findall(
-                rf"READ_DEFENSE_(?:{defense_tag}_(?:STATUS|GUARD)|KEYLESS_GUARD|GUARD|BUSINESS) [^\n]+", logs)
+                rf"READ_DEFENSE_(?:{defense_tag}_(?:STATUS|GUARD|FALLBACK)|KEYLESS_GUARD|GUARD|BUSINESS) [^\n]+", logs)
             report["runs"][-1]["ui"] = dict(KV.findall(result[0]))
-            if v219 or v220:
+            if v219 or window_mode:
                 report["runs"][-1]["keyless"] = keyless
-            if v220:
+            if window_mode:
                 report["runs"][-1]["window"] = window
-            if v218 or v219 or v220:
+                report["runs"][-1]["policy"] = policy
+            if v218 or v219 or window_mode:
                 matches = ", ".join(f"{s['stage']}=split:{s['split']}/trap:{s['trap']}/accept:{s['accept']}"
                                     f" of {s['n']}" for s in stages)
             else:
@@ -282,15 +297,17 @@ def main():
                 matches += (f"; {selected['stage']} keyless csel={selected['csel']}/{selected['n']} "
                             f"site={selected['site_code']}/{selected['site_fetch']} "
                             f"guarded={selected['guarded']}/{selected['n']}")
-            if v220:
+            if window_mode:
                 selected = window[3 if active else 0]
+                decision = policy[3 if active else 0]
                 matches += (f"; {selected['stage']} window load={selected['load']} "
                             f"store={selected['store']} branch={selected['branch']} "
                             f"xload={selected['xload']} value={selected['value_ok']}/"
                             f"{selected['value']} clrex_bad={selected['clrex_bad']} "
                             f"svc_bad={selected['svc_bad']} "
-                            f"guarded={keyless[3 if active else 0]['guarded']}/"
-                            f"{selected['n']}")
+                            f"ap={decision['ap']}/{decision['n']} "
+                            f"evidence={decision['evidence']}/{decision['n']} "
+                            f"guarded={decision['accepted']}/{decision['n']}")
             print(f"{label}: {matches}", flush=True)
             return
         if defense:

@@ -131,7 +131,7 @@ static void copy_scalar(uint8_t *out, const uint8_t *p, size_t n)
     }
 }
 
-static int page_open_at(struct page *p, int flags, const void *entry)
+static int page_open_at_prot(struct page *p, int flags, const void *entry, int prot)
 {
     struct ud_mapping map;
     Dl_info info;
@@ -144,12 +144,17 @@ static int page_open_at(struct page *p, int flags, const void *entry)
     if (p->entry + 192U > 4096U) return -1;
     p->fd = open(info.dli_fname, O_RDONLY | O_CLOEXEC);
     if (p->fd < 0) return -1;
-    p->address = mmap(NULL, 4096, PROT_READ | PROT_EXEC, flags, p->fd, p->file_offset);
+    p->address = mmap(NULL, 4096, prot, flags, p->fd, p->file_offset);
     if (p->address == MAP_FAILED) { close(p->fd); p->fd = -1; p->address = NULL; return -1; }
     if (memcmp(p->address + p->entry, entry, 28)) {
         munmap(p->address, 4096); close(p->fd); p->fd = -1; p->address = NULL; return -1;
     }
     return 0;
+}
+
+static int page_open_at(struct page *p, int flags, const void *entry)
+{
+    return page_open_at_prot(p, flags, entry, PROT_READ | PROT_EXEC);
 }
 
 static int page_open(struct page *p, int flags)
