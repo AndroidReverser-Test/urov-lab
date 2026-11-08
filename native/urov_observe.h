@@ -39,6 +39,32 @@ struct ud_live_observation {
     uint64_t elapsed_ns;
 };
 
+struct ud_readv_observation {
+    enum ud_verdict reader_diff, post_copy;
+    int error;
+    uint8_t user_bytes[UD_LIVE_MAX_BYTES], live_bytes[UD_LIVE_MAX_BYTES];
+    uint8_t post_bytes[UD_LIVE_MAX_BYTES];
+    uint64_t elapsed_ns;
+};
+
+/* Test UROV-Y 2.16.0's process_vm_readv after-hook using two iovecs. Linux
+ * imports the destinations before copying; the first destination changes the
+ * second iovec in userspace, so the hook rereads a different destination.
+ * Both destinations are writable private scratch. No target page is changed.
+ *
+ * Retain the immutable RX mapping, a separate read-only non-executable alias
+ * of the same file bytes, the backing fd and the side-effect-free business
+ * reader. Run on a worker and only where process_vm_readv is known to be
+ * allowed. The sample fits within one page and UD_LIVE_MAX_BYTES.
+ *
+ * A stable unexpected write is post_copy=MATCH. A stable difference between
+ * the business and live bytes is reader_diff=MATCH. Use live_bytes only when
+ * reader_diff is known, and post_bytes only when post_copy=MATCH.
+ */
+void ud_observe_readv_redirect(const uint8_t *address, const uint8_t *reference, size_t size,
+                               int backing_fd, off_t offset, ud_bytes_reader reader,
+                               struct ud_readv_observation *out);
+
 /* Compare the actual reader with a kernel copy of this process's mapped page.
  * The kernel copy uses 65 local iovecs: a count above the legacy 64-entry
  * module cap, and still one valid transfer because the remaining entries are
@@ -88,6 +114,11 @@ void ud_observe_spaced_exclusive(const void *address, const void *reference,
 void ud_observe_ap_reservation(const void *address, const void *reference,
                                int backing_fd, off_t offset,
                                struct ud_exclusive_observation *out);
+
+/* Same contract as ud_observe_ap_reservation. A register-only ADD after
+ * LDRB falls outside the 2.16.0 single and paired LL/SC bridges. */
+void ud_observe_ap_alu(const void *address, const void *reference, int backing_fd,
+                       off_t offset, struct ud_exclusive_observation *out);
 
 /* Same paired controls as ud_observe_exclusive. The scratch word is zero
  * and both exclusives use XZR, a shape the UROV-Y 2.9.0 bridge rejects.

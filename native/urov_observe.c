@@ -112,6 +112,85 @@ done:
     errno = saved;
 }
 
+static int read_redirected(const uint8_t *address, uint8_t *live, uint8_t *post, size_t size)
+{
+    void *redirect = post;
+    struct iovec local[2] = {
+        { .iov_base = &local[1].iov_base, .iov_len = sizeof(redirect) },
+        { .iov_base = live, .iov_len = size },
+    };
+    struct iovec remote[2] = {
+        { .iov_base = &redirect, .iov_len = sizeof(redirect) },
+        { .iov_base = (void *)address, .iov_len = size },
+    };
+    /* The kernel uses the imported local[1] and fills live. The 2.16.0
+     * after-hook rereads local[1] from userspace and fills post instead. */
+    ssize_t got = process_vm_readv(getpid(), local, 2, remote, 2, 0);
+    if (got != (ssize_t)(sizeof(redirect) + size)) return got < 0 ? errno : EIO;
+    return local[1].iov_base == redirect ? 0 : EPROTO;
+}
+
+void ud_observe_readv_redirect(const uint8_t *address, const uint8_t *reference, size_t size,
+                               int backing_fd, off_t offset, ud_bytes_reader reader,
+                               struct ud_readv_observation *out)
+{
+    struct sample_identity target, control, after;
+    uint8_t expected[UD_LIVE_MAX_BYTES], marker[UD_LIVE_MAX_BYTES];
+    uint8_t live[UD_LIVE_MAX_BYTES], post[UD_LIVE_MAX_BYTES];
+    uint8_t user[UD_LIVE_MAX_BYTES];
+    int saved = errno;
+    bool untouched = true, stable_post = true;
+    uint64_t begin = now_ns();
+
+    memset(out, 0, sizeof(*out));
+    out->reader_diff = out->post_copy = UD_UNKNOWN;
+    if (!reader || size > UD_LIVE_MAX_BYTES) { out->error = EINVAL; goto done; }
+    out->error = identity(address, size, backing_fd, offset, &target);
+    if (out->error) goto done;
+    out->error = identity_with_exec(reference, size, backing_fd, offset, false, &control);
+    if (out->error) goto done;
+    ssize_t got = pread(backing_fd, expected, size, offset);
+    if (got != (ssize_t)size) { out->error = got < 0 ? errno : EIO; goto done; }
+
+    for (unsigned i = 0; i < UD_REPEATS; ++i) {
+        memset(marker, (i & 1U) ? 0xa5 : 0x5a, size);
+        memcpy(post, marker, size);
+        out->error = read_redirected(reference, live, post, size);
+        if (out->error) goto done;
+        if (memcmp(expected, live, size) || memcmp(post, marker, size)) {
+            out->error = ESTALE;
+            goto done;
+        }
+        reader(user, address, size);
+        out->error = read_redirected(address, live, post, size);
+        if (out->error) goto done;
+        if (i && (memcmp(user, out->user_bytes, size) || memcmp(live, out->live_bytes, size))) {
+            out->error = EAGAIN;
+            goto done;
+        }
+        untouched &= !memcmp(post, marker, size);
+        if (i) {
+            stable_post &= !memcmp(post, out->post_bytes, size);
+        } else {
+            memcpy(out->user_bytes, user, size);
+            memcpy(out->live_bytes, live, size);
+            memcpy(out->post_bytes, post, size);
+        }
+    }
+    if (!untouched && !stable_post) { out->error = EAGAIN; goto done; }
+    out->error = identity(address, size, backing_fd, offset, &after);
+    if (out->error) goto done;
+    if (!unchanged(&target, &after)) { out->error = EAGAIN; goto done; }
+    out->error = identity_with_exec(reference, size, backing_fd, offset, false, &after);
+    if (out->error) goto done;
+    if (!unchanged(&control, &after)) { out->error = EAGAIN; goto done; }
+    out->post_copy = untouched ? UD_NO_MATCH : UD_MATCH;
+    out->reader_diff = memcmp(out->user_bytes, out->live_bytes, size) ? UD_MATCH : UD_NO_MATCH;
+done:
+    out->elapsed_ns = now_ns() - begin;
+    errno = saved;
+}
+
 /* No calls, barriers, syscalls, retry loops or unrelated memory accesses can
  * appear inside this 12-byte window. ERET clears the local exclusive monitor.
  * Intervening loads may also clear it on some implementations: calibrate using
@@ -162,6 +241,21 @@ static unsigned post_load_nop_once(const void *address, uint64_t *scratch, unsig
                      : "=&r"(old), "=&r"(value), "=&r"(failed)
                      : "r"(scratch), "r"(address) : "memory");
     *byte = value;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned post_load_alu_once(const void *address, uint64_t *scratch, unsigned *byte)
+{
+    uint64_t value;
+    unsigned sample, failed;
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     "ldrb %w1, [%4]\n"
+                     "add %0, %0, #1\n"
+                     "stxr %w2, %0, [%3]"
+                     : "=&r"(value), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "memory");
+    *byte = sample;
     return failed;
 }
 
@@ -388,7 +482,8 @@ static unsigned execution_once(const void *address, uint64_t *scratch, unsigned 
 }
 
 enum reservation_probe {
-    READ_ADJACENT, READ_SPACED, READ_POST_LOAD_NOP, READ_ZERO, READ_NONZERO, EXECUTE_CANARY
+    READ_ADJACENT, READ_SPACED, READ_POST_LOAD_NOP, READ_POST_LOAD_ALU,
+    READ_ZERO, READ_NONZERO, EXECUTE_CANARY
 };
 
 static void observe_reservation(const void *address, const void *reference,
@@ -397,12 +492,13 @@ static void observe_reservation(const void *address, const void *reference,
 {
     struct sample_identity target, control, after;
     int execute = probe == EXECUTE_CANARY;
-    bool ap_probe = probe == READ_POST_LOAD_NOP;
+    bool ap_probe = probe == READ_POST_LOAD_NOP || probe == READ_POST_LOAD_ALU;
     size_t size = execute ? sizeof(uint64_t) : 1U;
     unsigned (*sample)(const void *, uint64_t *, unsigned *) = exclusive_once;
     if (execute) sample = execution_once;
     if (probe == READ_SPACED) sample = spaced_exclusive_once;
-    if (ap_probe) sample = post_load_nop_once;
+    if (probe == READ_POST_LOAD_NOP) sample = post_load_nop_once;
+    if (probe == READ_POST_LOAD_ALU) sample = post_load_alu_once;
     if (probe == READ_ZERO) sample = zero_exclusive_once;
     if (probe == READ_NONZERO) sample = nonzero_exclusive_once;
     /* Keep the scratch away from normal stack writes and compiler spills.
@@ -504,6 +600,12 @@ void ud_observe_ap_reservation(const void *address, const void *reference,
                                struct ud_exclusive_observation *out)
 {
     observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_NOP, out);
+}
+
+void ud_observe_ap_alu(const void *address, const void *reference, int backing_fd,
+                       off_t offset, struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_ALU, out);
 }
 
 void ud_observe_zero_exclusive(const void *address, const void *reference,

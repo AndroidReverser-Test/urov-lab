@@ -1,0 +1,14 @@
+--------- beginning of main
+10-05 04:45:51.795 13258 13282 I urovdetect: CONTEXT pid=13258 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 04:45:51.795 13258 13282 I urovdetect: BEGIN mode=read-defense-v216-brk repeats=16
+10-05 04:45:51.925 13258 13282 I urovdetect: READ_DEFENSE_V216 stage=clean n=16 split=0 post=0 post_ok=0 unknown=0 read_errno=0 old_accept=16 guarded_accept=16 raw_ok=16 alu=0 alu_failed=0 alu_accepted=96 alu_errno=0 vma_preserved=1 execute=1234 read_mean_ns=6343213 alu_ns=27744914
+10-05 04:45:51.926 13258 13282 I urovdetect: DOBBY_HOOK address=0x70e035a000 original=1234 hooked=1235
+10-05 04:45:51.980 13258 13282 I urovdetect: READ_DEFENSE_V216 stage=patch_only n=16 split=0 post=0 post_ok=0 unknown=0 read_errno=0 old_accept=0 guarded_accept=0 raw_ok=16 alu=0 alu_failed=0 alu_accepted=96 alu_errno=0 vma_preserved=1 execute=1235 read_mean_ns=3154505 alu_ns=3619669
+10-05 04:45:52.033 13258 13282 I urovdetect: READ_DEFENSE_V216 stage=overlay n=16 split=16 post=16 post_ok=16 unknown=0 read_errno=0 old_accept=16 guarded_accept=0 raw_ok=16 alu=0 alu_failed=0 alu_accepted=96 alu_errno=0 vma_preserved=1 execute=1235 read_mean_ns=3111018 alu_ns=3129435
+10-05 04:45:52.033 13258 13282 I urovdetect: READ_DEFENSE_V216_STATUS parent_active=1 callers=1
+10-05 04:45:52.201 13258 13282 I urovdetect: READ_DEFENSE_V216 stage=deactivated n=16 split=0 post=0 post_ok=0 unknown=0 read_errno=0 old_accept=0 guarded_accept=0 raw_ok=16 alu=0 alu_failed=0 alu_accepted=96 alu_errno=0 vma_preserved=1 execute=1235 read_mean_ns=3110572 alu_ns=5061116
+10-05 04:45:52.202 13258 13282 I urovdetect: READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1
+10-05 04:45:52.203 13258 13282 I urovdetect: READ_DEFENSE_BUSINESS ops=82048 errors=0
+10-05 04:45:52.203 13258 13282 I urovdetect: CONTEXT pid=13258 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 04:45:52.203 13258 13282 I urovdetect: NATIVE_RESULT PASS cases=4 assertions=84 failures=0 mode=read-defense-v216-brk
+10-05 04:45:52.207 13258 13258 I urovdetect: DETECT_RESULT PASS mode=read-defense-v216-brk worker_ms=408 ui_ticks=135 ui_max_gap_ms=14 native=PASS cases=4 assertions=84 failures=0

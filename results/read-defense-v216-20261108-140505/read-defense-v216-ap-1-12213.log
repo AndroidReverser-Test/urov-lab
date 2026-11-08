@@ -1,0 +1,6 @@
+--------- beginning of main
+10-05 04:39:49.913 12213 12237 I urovdetect: CONTEXT pid=12213 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 04:39:49.913 12213 12237 I urovdetect: BEGIN mode=read-defense-v216-ap repeats=16
+10-05 04:39:50.032 12213 12237 I urovdetect: READ_DEFENSE_V216 stage=clean n=16 same=16 split=0 faults=0 unknown=0 spoof=0 old_accept=16 guarded_accept=16 raw_ok=16 alu=0 alu_failed=0 alu_accepted=96 alu_errno=0 inherited_ok=0 child_errno=0 vma_preserved=1 execute=1234 pipe_mean_ns=5687866 alu_ns=22174073 child_ns=0
+10-05 04:39:50.032 12213 12237 I urovdetect: DOBBY_HOOK address=0x70de512000 original=1234 hooked=1235
+10-05 04:39:50.087 12213 12237 I urovdetect: READ_DEFENSE_V216 stage=patch_only n=16 same=16 split=0 faults=0 unknown=0 spoof=0 old_accept=0 guarded_accept=0 raw_ok=16 alu=0 alu_failed=0 alu_accepted=96 alu_errno=0 inherited_ok=0 child_errno=0 vma_preserved=1 execute=1235 pipe_mean_ns=3177062 alu_ns=3605631 child_ns=0

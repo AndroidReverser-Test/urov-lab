@@ -1214,6 +1214,7 @@ finish:
 #include "mp_fixture.inc"
 #include "dobby_crc_fixture.inc"
 #include "read_defense_fixture.inc"
+#include "v217_fixture.inc"
 
 JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
     JNIEnv *env, jclass cls, jstring mode_value, jint repeats, jstring key_value)
@@ -1238,6 +1239,12 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
     g_checks = g_fail = g_cases = 0;
     log_context();
     LOG("BEGIN mode=%s repeats=%d", mode, (int)repeats);
+    if (!strncmp(mode, "v217-", sizeof("v217-") - 1)) {
+        v217_fixture(mode, key, (int)repeats);
+        snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
+                 g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
+        goto done;
+    }
     if (!strncmp(mode, "read-defense-", sizeof("read-defense-") - 1)) {
         read_defense_fixture(mode, key, (int)repeats);
         snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",

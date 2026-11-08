@@ -218,6 +218,12 @@ struct uy_page {
     uint8_t *image;
     uint8_t *snapshot;
     uint8_t *spare;
+    /* Deferred native replay (an undecodable store, e.g. an SVE/SME or
+     * single-lane SIMD store): the live bytes before the store and the bytes
+     * observed after it.  Both are private kernel pages, never mapped into the
+     * process. */
+    uint8_t *pre;
+    uint8_t *post;
     uint32_t index;      /* descriptor index before sorting */
     uint32_t flags;      /* UROV_Y_PAGE_SRC_* */
     uint32_t fake_off;
@@ -227,6 +233,7 @@ struct uy_page {
     uint32_t dead;       /* a real store reached the page: overlay is stale */
     uint32_t gone;       /* the registered mapping was unmapped/replaced */
     uint32_t seq;        /* image publication sequence for in-place stores */
+    uint32_t replay;     /* a native replay owns pre/post for this page */
     /* Registration-time VMA identity.  A fork copies the VMA with
      * vm_area_dup(), so the child keeps the same vm_file pointer, pgoff and
      * range; a foreign process that opens the same file again has a different
@@ -258,22 +265,31 @@ struct uy_session {
 };
 
 /* A forked child gets its own COW copy of every registered page.  Reads are
- * still served from the owner's image until the child writes; the first
- * child write allocates one private image page so the child's bytes never
- * leak into the parent's image (and vice versa).  A fixed pool keeps the
- * fault path allocation-free. */
-#define UY_SHADOW_MAX 32U
+ * served from the owner's image until the child writes; the first child write
+ * allocates one private image page so the child's bytes never leak into the
+ * parent's image (and vice versa).
+ *
+ * 2.17.0 snapshots the image at fork time (copy_mm) instead of at the child's
+ * first write, so an owner SET after the fork can no longer change what the
+ * child observes.  The pool is sized from the registered page count when the
+ * session is created; a child that finds no free slot keeps the owner image
+ * (fail closed, no new bytes). */
 struct uy_shadow {
     void *mm;
-    uint64_t base;
     uint8_t *image;
+    uint8_t *snapshot;   /* the child's native view (outside the fake window) */
+    uint32_t index;      /* owner page descriptor index */
     uint32_t used;
     uint32_t seq;
 };
 
+#define UY_SHADOW_CAP 4096U
+#define UY_SHADOW_BYTES_MAX (UINT64_C(16) << 20)
+
 static struct uy_session g_sess;
-static struct uy_shadow g_shadow[UY_SHADOW_MAX];
+static struct uy_shadow *g_shadow;
 static uint8_t *g_shadow_arena;
+static uint32_t g_shadow_max;
 static uint32_t g_shadow_used;
 static struct uy_layout g_layout;
 static uint8_t g_selftest_ws[UROV_Y_PAGE];
@@ -336,6 +352,8 @@ static int g_prctl_hooked;
 static int g_vm_readv_hooked;
 static int g_clone_hooked;
 static int g_clone3_hooked;
+static int g_copymm_hooked;
+static void *f_copy_mm;
 static int g_wrapper_mode;
 static int g_page_hooked;
 static int g_mmf_hooked;
@@ -498,6 +516,8 @@ static void uy_free(void *p)
 
 static int overlay_live(void);
 static void uy_rearm_written(void *mm, uint64_t address, unsigned len);
+static void uy_write_enter(void);
+static void uy_write_leave(void);
 
 static uint64_t session_get_mm(void *mm)
 {
@@ -674,37 +694,39 @@ static void page_store_bytes(struct uy_page *p, uint64_t off,
     __atomic_store_n(&p->seq, seq + 2U, __ATOMIC_RELEASE);
 }
 
-static struct uy_shadow *uy_shadow_find(void *mm, uint64_t base)
+static struct uy_shadow *uy_shadow_find(void *mm, uint32_t index)
 {
     uint32_t i;
 
-    for (i = 0; i < UY_SHADOW_MAX; ++i)
-        if (g_shadow[i].used && g_shadow[i].mm == mm && g_shadow[i].base == base)
+    for (i = 0; i < g_shadow_max; ++i)
+        if (g_shadow[i].used && g_shadow[i].mm == mm && g_shadow[i].index == index)
             return &g_shadow[i];
     return 0;
 }
 
-static struct uy_shadow *uy_shadow_get(void *mm, uint64_t base, int create)
+static struct uy_shadow *uy_shadow_get(void *mm, uint32_t index)
 {
-    struct uy_shadow *sh = uy_shadow_find(mm, base);
+    struct uy_shadow *sh = uy_shadow_find(mm, index);
     struct uy_page *p;
-    uint32_t idx;
+    uint32_t i;
 
-    if (sh || !create || !mm || mm == g_sess.mm || !g_shadow_arena)
+    if (sh || !mm || mm == g_sess.mm || !g_shadow_arena || !g_shadow_max)
         return sh;
-    for (idx = 0; idx < UY_SHADOW_MAX; ++idx)
-        if (!g_shadow[idx].used) break;
-    if (idx == UY_SHADOW_MAX) return 0;
-    p = page_find(base);
+    p = page_by_index(index);
     if (!p) return 0;
-    sh = &g_shadow[idx];
-    sh->image = g_shadow_arena + (uint64_t)idx * g_page_size;
+    for (i = 0; i < g_shadow_max; ++i)
+        if (!g_shadow[i].used) break;
+    if (i == g_shadow_max) return 0;
+    sh = &g_shadow[i];
+    sh->image = g_shadow_arena + 2ULL * (uint64_t)i * g_page_size;
+    sh->snapshot = sh->image + g_page_size;
     page_view(p, 0, g_page_size, sh->image, 0);
+    page_view(p, 0, g_page_size, sh->snapshot, 1);
     sh->mm = mm;
-    sh->base = base;
+    sh->index = index;
     sh->seq = 0;
     __atomic_store_n(&sh->used, 1, __ATOMIC_RELEASE);
-    ++g_shadow_used;
+    __atomic_add_fetch(&g_shadow_used, 1, __ATOMIC_RELAXED);
     return sh;
 }
 
@@ -716,13 +738,15 @@ static void uy_shadow_store(struct uy_shadow *sh, unsigned off,
     __atomic_store_n(&sh->seq, seq + 1U, __ATOMIC_RELEASE);
     __asm__ volatile("dmb ishst" : : : "memory");
     memcpy(sh->image + off, bytes, len);
+    memcpy(sh->snapshot + off, bytes, len);
     __asm__ volatile("dmb ishst" : : : "memory");
     __atomic_store_n(&sh->seq, seq + 2U, __ATOMIC_RELEASE);
 }
 
 static void uy_shadow_view(struct uy_shadow *sh, unsigned off, unsigned total,
-                           uint8_t *out)
+                           uint8_t *out, int replay)
 {
+    const uint8_t *src = replay ? sh->snapshot : sh->image;
     unsigned attempt;
 
     for (attempt = 0; attempt < 64U; ++attempt) {
@@ -733,26 +757,82 @@ static void uy_shadow_view(struct uy_shadow *sh, unsigned off, unsigned total,
             __asm__ volatile("yield" : : : "memory");
             continue;
         }
-        memcpy(out, sh->image + off, total);
+        memcpy(out, src + off, total);
         seq2 = __atomic_load_n(&sh->seq, __ATOMIC_ACQUIRE);
         if (seq1 == seq2 && !(seq2 & 1U)) return;
     }
-    memcpy(out, sh->image + off, total);
+    memcpy(out, src + off, total);
 }
 
 static void uy_shadow_free_all(void)
 {
-    memset(g_shadow, 0, sizeof(g_shadow));
+    if (g_shadow && g_shadow_max)
+        memset(g_shadow, 0, (size_t)g_shadow_max * sizeof(*g_shadow));
     g_shadow_used = 0;
 }
 
 static void page_view_mm(void *mm, struct uy_page *p, uint64_t off, unsigned total,
                          uint8_t *out, int replay)
 {
-    struct uy_shadow *sh = mm && mm != g_sess.mm ? uy_shadow_find(mm, p->base) : 0;
+    struct uy_shadow *sh = mm && mm != g_sess.mm ? uy_shadow_find(mm, p->index) : 0;
 
-    if (sh) uy_shadow_view(sh, (unsigned)off, total, out);
+    if (sh) uy_shadow_view(sh, (unsigned)off, total, out, replay);
     else page_view(p, off, total, out, replay);
+}
+
+/* File identity of a registered page: the (struct file, file offset) pair its
+ * mapping carried when it was registered.  A forked child keeps both through
+ * its own mprotect/mremap/munmap, so a trap leaf that no longer sits at
+ * p->base can still be resolved to the owner page. */
+static int uy_page_file_offset(const struct uy_page *p, uint64_t *file, uint64_t *offset)
+{
+    if (!p->vma_file || !g_layout.vma_pgoff_ok) return -1;
+    *file = (uint64_t)(uintptr_t)p->vma_file;
+    *offset = p->vma_pgoff + ((p->base - p->vma_start) >> g_page_shift);
+    return 0;
+}
+
+/* A forked child may move or split its copy of the registered mapping.  Match
+ * the faulting address back to the owner page through the file identity the
+ * VMA still carries instead of the owner's virtual address. */
+static struct uy_page *uy_page_by_identity(void *mm, uint64_t addr)
+{
+    void *vma;
+    uint64_t start, end, file, pgoff, page;
+    uint32_t i;
+
+    if (!mm || !f_find_vma || !g_layout.vma_pgoff_ok) return 0;
+    vma = f_find_vma(mm, addr);
+    if (!vma) return 0;
+    start = *(uint64_t *)((char *)vma + g_layout.vma_start);
+    end = *(uint64_t *)((char *)vma + g_layout.vma_end);
+    file = (uint64_t)(uintptr_t)*(void **)((char *)vma + g_layout.vma_file);
+    if (!file || addr < start || addr >= end) return 0;
+    pgoff = (uint64_t)*(unsigned long *)((char *)vma + g_layout.vma_pgoff);
+    page = page_base(addr);
+    if (page < start) return 0;
+    pgoff += (page - start) >> g_page_shift;
+    for (i = 0; i < g_sess.page_count; ++i) {
+        struct uy_page *p = &g_sess.pages[i];
+        uint64_t want_file, want_off;
+
+        if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
+        if (uy_page_file_offset(p, &want_file, &want_off)) continue;
+        if (want_file == file && want_off == pgoff) return p;
+    }
+    return 0;
+}
+
+/* Resolve the registered page behind an access at `addr` in `mm`.  The owner's
+ * own addresses hit the sorted array directly; a forked child's moved copy is
+ * matched by file identity. */
+static struct uy_page *uy_page_for_fault(void *mm, uint64_t addr)
+{
+    struct uy_page *p = page_find(page_base(addr));
+
+    if (p) return p;
+    if (!mm || mm == g_sess.mm) return 0;
+    return uy_page_by_identity(mm, addr);
 }
 
 /* Mirror a successful write of [address, address+len) into every registered
@@ -791,14 +871,14 @@ static void uy_shadow_store_range(void *mm, uint64_t address,
         struct uy_shadow *sh;
 
         if (seg > len - done) seg = len - (unsigned)done;
-        p = page_find(page);
-        sh = p ? uy_shadow_get(mm, p->base, 1) : 0;
+        p = uy_page_for_fault(mm, cur);
+        sh = p ? uy_shadow_get(mm, p->index) : 0;
         if (sh) uy_shadow_store(sh, off, bytes + done, seg);
         done += seg;
     }
 }
 
-static int range_covered(uint64_t address, unsigned total)
+static int range_covered(void *mm, uint64_t address, unsigned total)
 {
     uint64_t done = 0;
 
@@ -808,7 +888,7 @@ static int range_covered(uint64_t address, unsigned total)
         unsigned seg = (unsigned)(g_page_size - off);
 
         if (seg > total - done) seg = (unsigned)(total - done);
-        if (page_find(page_base(cur))) return 1;
+        if (uy_page_for_fault(mm, cur)) return 1;
         done += seg;
     }
     return 0;
@@ -832,7 +912,7 @@ static int read_range(void *mm, uint64_t address, unsigned total, int allow_fake
         struct uy_page *p;
 
         if (seg > total - done) seg = (unsigned)(total - done);
-        p = page_find(page_base(cur));
+        p = uy_page_for_fault(mm, cur);
         if (p) {
             covered = 1;
             page_view_mm(mm, p, off, seg, out + done, !allow_fake);
@@ -1244,11 +1324,12 @@ static void ap_protection_update(void *mm, uint64_t start, uint64_t len, uint64_
 static int ap_shadow_rearm(void *mm, uint64_t page, uint64_t file, uint64_t pgoff,
                            uint64_t start, uint64_t end)
 {
-    struct uy_page *p = page_find(page);
+    struct uy_page *p = uy_page_for_fault(mm, page);
     int ret;
 
     if (!p || !mm || mm == g_sess.mm) return 0;
     if (__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&p->replay, __ATOMIC_ACQUIRE) ||
         !__atomic_load_n(&p->want, __ATOMIC_ACQUIRE)) return 0;
     if (page < start || page + g_page_size > end ||
         file != (uint64_t)(uintptr_t)p->vma_file)
@@ -1569,8 +1650,9 @@ static int uy_read_insn(uint64_t pc, uint32_t *out)
 
     if (!uy_user_range(pc, sizeof(*out)) || (pc & 3U)) return -1;
     page = page_find(page_base(pc));
+    if (!page) page = uy_page_by_identity(mm_of_task(current), pc);
     if (page) {
-        memcpy(out, page->snapshot + (pc - page->base), sizeof(*out));
+        memcpy(out, page->snapshot + (pc & (g_page_size - 1U)), sizeof(*out));
         return 0;
     }
     return f_copy_in(out, (const void *)(uintptr_t)pc, sizeof(*out)) ? -1 : 0;
@@ -2358,8 +2440,11 @@ static void uy_llsc_commit(struct pt_regs *regs, uint64_t fault_pc,
         return;
     values[0] = plan->value;
     values[1] = plan->value2;
-    if (f_copy_out((void *)(uintptr_t)plan->base, values, total))
+    uy_write_enter();
+    if (f_copy_out((void *)(uintptr_t)plan->base, values, total)) {
+        uy_write_leave();
         return;
+    }
     /* The STXR/STXP may legitimately write a registered page.  The write
      * already reached the live bytes through GUP; publish the same bytes so
      * the next read of the page still sees one coherent view. */
@@ -2370,9 +2455,10 @@ static void uy_llsc_commit(struct pt_regs *regs, uint64_t fault_pc,
             uy_image_store(plan->base, (const uint8_t *)values, total);
         else if (mm)
             uy_shadow_store_range(mm, plan->base, (const uint8_t *)values, total);
-        if (page_find(page_base(plan->base)) && mm)
+        if (mm && uy_page_for_fault(mm, plan->base))
             uy_rearm_written(mm, plan->base, total);
     }
+    uy_write_leave();
     if (plan->acquire) __asm__ volatile("dmb ishld" : : : "memory");
     if (plan->release) __asm__ volatile("dmb ishst" : : : "memory");
     if (plan->status_reg != 31U) regs->regs[plan->status_reg] = 0;
@@ -2440,7 +2526,7 @@ static int uy_read_logical(void *mm, uint64_t address, uint8_t *out, unsigned le
         struct uy_page *p;
 
         if (seg > len - done) seg = len - (unsigned)done;
-        p = page_find(page);
+        p = uy_page_for_fault(mm, cur);
         if (p) page_view_mm(mm, p, off, seg, out + done, 0);
         else if (f_copy_in(out + done, (const void *)(uintptr_t)cur, seg))
             return -1;
@@ -2467,13 +2553,13 @@ static int uy_write_live(void *mm, uint64_t address, const uint8_t *data, unsign
                          g_write_gup_flags) != (int)seg)
             return -1;
         {
-            struct uy_page *p = page_find(page);
+            struct uy_page *p = uy_page_for_fault(mm, cur);
 
             if (p) {
                 if (mm == g_sess.mm) {
                     page_store_bytes(p, off, data + done, seg);
                 } else {
-                    struct uy_shadow *sh = uy_shadow_get(mm, p->base, 1);
+                    struct uy_shadow *sh = uy_shadow_get(mm, p->index);
 
                     if (sh) uy_shadow_store(sh, off, data + done, seg);
                 }
@@ -2499,7 +2585,7 @@ static void uy_rearm_written(void *mm, uint64_t address, unsigned len)
         struct uy_page *p;
 
         if (seg > len - done) seg = len - (unsigned)done;
-        p = page_find(page);
+        p = uy_page_for_fault(mm, cur);
         if (p && !__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) {
             int ret = page_set_ap_any(mm, page, 0);
 
@@ -2583,10 +2669,12 @@ static int uy_atomic_emulate(struct pt_regs *regs, uint64_t far, void *mm)
         flags = *(unsigned long *)((char *)vma + g_layout.vma_flags);
         if (!(flags & UY_VM_WRITE)) return -1;
     }
-    if (uy_read_logical(mm, a.address, old, (unsigned)a.total)) return -1;
     mask = uy_atomic_mask(a.size);
-    o0 = 0; o1 = 0;
-    for (i = 0; i < a.size; ++i) {
+    /* One trapped store at a time: the read below and the write at the end must
+     * not interleave with another emulated RMW, or one update is lost. */
+    uy_write_enter();
+    if (uy_read_logical(mm, a.address, old, (unsigned)a.total)) goto out;
+    o0 = 0; o1 = 0;    for (i = 0; i < a.size; ++i) {
         o0 |= (uint64_t)old[i] << (8U * i);
         if (a.count == 2U)
             o1 |= (uint64_t)old[a.size + i] << (8U * i);
@@ -2601,6 +2689,7 @@ static int uy_atomic_emulate(struct pt_regs *regs, uint64_t far, void *mm)
             if (a.count == 2U) uy_atomic_reg(regs, a.rs2, o1, a.size);
             if (a.acquire) __asm__ volatile("dmb ishld" : : : "memory");
             regs->pc += 4U;
+            uy_write_leave();
             return 0;
         }
         n0 = a.rt == 31U ? 0 : (regs->regs[a.rt] & mask);
@@ -2616,7 +2705,7 @@ static int uy_atomic_emulate(struct pt_regs *regs, uint64_t far, void *mm)
         if (a.count == 2U)
             newb[a.size + i] = (uint8_t)(n1 >> (8U * i));
     }
-    if (uy_write_live(mm, a.address, newb, (unsigned)a.total)) return -1;
+    if (uy_write_live(mm, a.address, newb, (unsigned)a.total)) goto out;
     uy_rearm_written(mm, a.address, (unsigned)a.total);
     if (a.return_old) {
         if (a.op == URO_ATOMIC_CAS) {
@@ -2630,7 +2719,11 @@ static int uy_atomic_emulate(struct pt_regs *regs, uint64_t far, void *mm)
     if (a.release) __asm__ volatile("dmb ishst" : : : "memory");
     regs->pc += 4U;
     uy_flush_icache_all();
+    uy_write_leave();
     return 0;
+out:
+    uy_write_leave();
+    return -1;
 }
 
 /* A store-exclusive to a trapped page cannot succeed after the exception
@@ -2716,9 +2809,13 @@ static int uy_store_emulate(struct pt_regs *regs, uint64_t far, struct uy_page *
         return -1;
     if (uy_store_bytes(&st, regs, st.vector && !st.zva ? &fp : 0, data))
         return -1;
-    if (uy_write_live(mm, st.address, data, (unsigned)st.total))
+    uy_write_enter();
+    if (uy_write_live(mm, st.address, data, (unsigned)st.total)) {
+        uy_write_leave();
         return -1;
+    }
     uy_rearm_written(mm, st.address, (unsigned)st.total);
+    uy_write_leave();
 
     if (st.writeback) {
         if (st.rn == 31U) regs->sp = st.wb;
@@ -2727,6 +2824,367 @@ static int uy_store_emulate(struct pt_regs *regs, uint64_t far, struct uy_page *
     regs->pc += 4U;
     uy_flush_icache_all();
     return 0;
+}
+
+/* ------------------------------------------------ deferred native replay */
+
+/* Every EL0 write to a registered page takes the AP[1] trap and is completed
+ * here, so one lock around the read-modify-write and its publication makes two
+ * concurrent LSE atomics behave like the single hardware instruction they
+ * replace.  Without it both could read the same image value and lose one
+ * update.  The kernel's GUP write path can sleep, so the wait is a short yield
+ * loop followed by an msleep; writers are rare and never held for long. */
+static int g_write_busy;
+
+static void uy_write_enter(void)
+{
+    unsigned spins = 0;
+
+    while (__atomic_exchange_n(&g_write_busy, 1, __ATOMIC_ACQ_REL)) {
+        if (spins++ < 512U) __asm__ volatile("yield" : : : "memory");
+        else f_msleep(1);
+    }
+}
+
+static void uy_write_leave(void)
+{
+    __atomic_store_n(&g_write_busy, 0, __ATOMIC_RELEASE);
+}
+
+/* The store decoder covers every ordinary A64 store, but not the SIMD
+ * single-lane forms, STTR, the SVE/SME store classes or future shapes.  Letting
+ * the page go native on such a store was the last write-side fingerprint.
+ *
+ * 2.17.0 instead lets the hardware execute the unknown store itself:
+ *
+ *   1. snapshot the live page, restore AP[1] on its leaf, and invalidate that
+ *      translation on this CPU only, so other CPUs keep the trap entry;
+ *   2. arm AArch64 software step for this task (SPSR.SS + MDSCR_EL1.SS) and let
+ *      the kernel's native page-fault path resolve any COW;
+ *   3. the retried store runs at EL0 and the software-step exception (EC 0x32)
+ *      is taken before the next instruction; the handler diffs the live page
+ *      against the snapshot, publishes the changed bytes into the image and
+ *      restores the AP[1] trap.
+ *
+ * The diff is taken from the page itself, so no instruction encoding is needed
+ * and SVE/SME stores are covered by the same path.  A task migration between
+ * the fault and the step is covered by re-arming MDSCR_EL1.SS in __switch_to;
+ * a step that can no longer be delivered (the native fault turned into a
+ * signal) is finished by the next data abort of that task. */
+#define UY_REPLAY_MAX 2U
+#define UY_REPLAY_PAGES 2U
+#define UY_REPLAY_TRIES 3U
+#define UY_MDSCR_SS (UINT64_C(1) << 0)
+#define UY_PSR_SS (UINT64_C(1) << 21)
+#define UY_EC_SOFTSTP_LOW 0x32UL
+
+struct uy_replay {
+    void *mm;
+    void *task;
+    uint64_t pc;
+    uint64_t page[UY_REPLAY_PAGES];
+    uint32_t index[UY_REPLAY_PAGES];
+    uint32_t npages;
+    uint32_t tries;
+    uint32_t used;
+};
+
+static struct uy_replay g_replay[UY_REPLAY_MAX];
+static int g_replay_active;
+static int g_replay_block;
+static int g_ss_ok;
+static void *f_debug_exception;
+static void *f_switch_to;
+static int g_dbg_hooked;
+static int g_switch_hooked;
+/* A step that had to be cancelled still owes the app exactly one consumed
+ * software-step exception; remember which task it belongs to. */
+static void *g_step_orphan_mm;
+static void *g_step_orphan_task;
+
+static inline uint64_t uy_mdscr_read(void)
+{
+    uint64_t value;
+
+    __asm__ volatile("mrs %0, mdscr_el1" : "=r"(value));
+    return value;
+}
+
+static inline void uy_mdscr_write(uint64_t value)
+{
+    __asm__ volatile("msr mdscr_el1, %0" : : "r"(value));
+    __asm__ volatile("isb" : : : "memory");
+}
+
+static void uy_tlb_flush_local(uint64_t va)
+{
+    __asm__ volatile("dsb ishst" : : : "memory");
+    __asm__ volatile("tlbi vae1, %0" : : "r"(va >> 12) : "memory");
+    __asm__ volatile("dsb ish" : : : "memory");
+    __asm__ volatile("isb" : : : "memory");
+}
+
+static struct uy_replay *uy_replay_current(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < UY_REPLAY_MAX; ++i) {
+        struct uy_replay *r = &g_replay[i];
+
+        if (!__atomic_load_n(&r->used, __ATOMIC_ACQUIRE)) continue;
+        if (r->mm != mm_of_task(current) || r->task != current) continue;
+        return r;
+    }
+    return 0;
+}
+
+/* Publish the bytes the native store changed in one page. */
+static void uy_replay_publish(struct uy_replay *r, uint32_t n)
+{
+    struct uy_page *p = page_by_index(r->index[n]);
+    unsigned off = 0, len = (unsigned)g_page_size;
+
+    if (!p || f_copy_in(p->post, (const void *)(uintptr_t)r->page[n], len)) return;
+    while (off < len) {
+        unsigned start;
+
+        if (p->post[off] == p->pre[off]) {
+            ++off;
+            continue;
+        }
+        start = off;
+        while (off < len && p->post[off] != p->pre[off]) ++off;
+        if (r->mm == g_sess.mm) {
+            page_store_bytes(p, start, p->post + start, off - start);
+        } else {
+            struct uy_shadow *sh = uy_shadow_get(r->mm, p->index);
+
+            if (sh) uy_shadow_store(sh, start, p->post + start, off - start);
+        }
+    }
+}
+
+/* Finish a replay: optionally publish the store's bytes, then put the AP[1]
+ * trap back on every page the instruction touched. */
+static void uy_replay_end(struct uy_replay *r, int publish)
+{
+    uint32_t i;
+    int changed = 0;
+
+    for (i = 0; i < r->npages; ++i) {
+        struct uy_page *p = page_by_index(r->index[i]);
+
+        if (!p) continue;
+        if (publish) uy_replay_publish(r, i);
+        __atomic_store_n(&p->replay, 0, __ATOMIC_RELEASE);
+    }
+    for (i = 0; i < r->npages; ++i) {
+        struct uy_page *p = page_by_index(r->index[i]);
+
+        if (!p) continue;
+        if (page_set_ap_any(r->mm, r->page[i], 0) > 0) changed = 1;
+    }
+    if (changed) flush_tlb_all();
+    memset(r, 0, sizeof(*r));
+    __atomic_sub_fetch(&g_replay_active, 1, __ATOMIC_RELEASE);
+}
+
+/* A replay whose step can no longer be delivered must still consume the step
+ * exception the kernel will raise for this task, or it would become a
+ * SIGTRAP. */
+static void uy_replay_cancel(void)
+{
+    struct uy_replay *r = uy_replay_current();
+
+    if (!r) return;
+    uy_replay_end(r, 0);
+    g_step_orphan_mm = mm_of_task(current);
+    g_step_orphan_task = current;
+}
+
+static int uy_replay_begin(struct pt_regs *regs, void *mm, struct uy_page *p, uint64_t far)
+{
+    struct uy_replay *r;
+    uint64_t page = page_base(far);
+    uint32_t i;
+    int fresh = 0;
+
+    if (!g_ss_ok || !mm || !p || (regs->pstate & UY_PSR_SS) ||
+        __atomic_load_n(&g_replay_block, __ATOMIC_ACQUIRE) ||
+        (uy_mdscr_read() & UY_MDSCR_SS))
+        return -1;
+    r = uy_replay_current();
+    if (r) {
+        if (r->pc != regs->pc) return -1;
+        for (i = 0; i < r->npages; ++i)
+            if (r->page[i] == page) return 1; /* origin still has to COW */
+        if (r->npages == UY_REPLAY_PAGES || r->tries >= UY_REPLAY_TRIES) return -1;
+    } else {
+        for (i = 0; i < UY_REPLAY_MAX; ++i)
+            if (!__atomic_load_n(&g_replay[i].used, __ATOMIC_ACQUIRE)) break;
+        if (i == UY_REPLAY_MAX) return -1;
+        r = &g_replay[i];
+        r->mm = mm;
+        r->task = current;
+        r->pc = regs->pc;
+        r->npages = 0;
+        r->tries = 0;
+        __atomic_store_n(&r->used, 1, __ATOMIC_RELEASE);
+        __atomic_add_fetch(&g_replay_active, 1, __ATOMIC_RELEASE);
+        fresh = 1;
+    }
+    if (__atomic_exchange_n(&p->replay, 1, __ATOMIC_ACQ_REL)) {
+        if (g_verbose) pr_info("urov-y: replay page busy\n");
+        goto fail;
+    }
+    if (page_set_ap_any(mm, page, 1) < 0) {
+        if (g_verbose) pr_info("urov-y: replay leaf restore failed\n");
+        __atomic_store_n(&p->replay, 0, __ATOMIC_RELEASE);
+        goto fail;
+    }
+    uy_tlb_flush_local(page);
+    if (f_copy_in(p->pre, (const void *)(uintptr_t)page, g_page_size)) {
+        if (g_verbose) pr_info("urov-y: replay pre read failed\n");
+        if (page_set_ap_any(mm, page, 0) > 0) flush_tlb_all();
+        __atomic_store_n(&p->replay, 0, __ATOMIC_RELEASE);
+        goto fail;
+    }
+    r->index[r->npages] = p->index;
+    r->page[r->npages] = page;
+    ++r->npages;
+    ++r->tries;
+    uy_mdscr_write(uy_mdscr_read() | UY_MDSCR_SS);
+    regs->pstate |= UY_PSR_SS;
+    return 0;
+fail:
+    if (fresh) {
+        memset(r, 0, sizeof(*r));
+        __atomic_sub_fetch(&g_replay_active, 1, __ATOMIC_RELEASE);
+    }
+    return -1;
+}
+
+/* Does the current task already own a replay for `pc` on this page?  A retry
+ * that faults again on the same instruction and page is the kernel's write
+ * protection (COW) still in the way, not a second undecodable store. */
+static int uy_replay_owns(uint64_t pc, uint32_t index)
+{
+    struct uy_replay *r = uy_replay_current();
+    uint32_t i;
+
+    if (!r || r->pc != pc) return 0;
+    for (i = 0; i < r->npages; ++i)
+        if (r->index[i] == index) return 1;
+    return 0;
+}
+
+/* Software-step exception for the current task.  Returns 1 when the exception
+ * belongs to a replay and must be consumed. */
+static int uy_replay_step(struct pt_regs *regs)
+{
+    struct uy_replay *r = uy_replay_current();
+    void *mm = mm_of_task(current);
+
+    if (!r) {
+        if (!g_step_orphan_task || g_step_orphan_mm != mm || g_step_orphan_task != current)
+            return 0;
+        g_step_orphan_mm = 0;
+        g_step_orphan_task = 0;
+        uy_mdscr_write(uy_mdscr_read() & ~UY_MDSCR_SS);
+        regs->pstate &= ~UY_PSR_SS;
+        return 1;
+    }
+    uy_replay_end(r, 1);
+    uy_mdscr_write(uy_mdscr_read() & ~UY_MDSCR_SS);
+    regs->pstate &= ~UY_PSR_SS;
+    return 1;
+}
+
+/* Wait for all replays to finish before the session is torn down.  A new
+ * replay is refused while the wait runs, so this terminates unless a task is
+ * stuck inside the kernel; in that case the caller fails closed. */
+static int uy_replay_quiesce(void)
+{
+    unsigned i;
+
+    __atomic_store_n(&g_replay_block, 1, __ATOMIC_RELEASE);
+    for (i = 0; i < 4000U; ++i) {
+        if (!__atomic_load_n(&g_replay_active, __ATOMIC_ACQUIRE)) return 0;
+        f_msleep(1);
+    }
+    return -1;
+}
+
+static void uy_replay_unblock(void)
+{
+    __atomic_store_n(&g_replay_block, 0, __ATOMIC_RELEASE);
+}
+
+/* Software-step exception (EC 0x32) for a task with a deferred replay: publish
+ * the bytes the native store changed and re-arm the AP[1] trap.  The kernel
+ * would otherwise turn our step into a SIGTRAP. */
+static void uy_dbg_before(hook_fargs3_t *args, void *udata)
+{
+    uint64_t esr = args->arg1;
+    struct pt_regs *regs = (struct pt_regs *)args->arg2;
+
+    (void)udata;
+    if (!regs || !user_mode(regs) || compat_user_mode(regs) ||
+        ((esr >> 26) & 0x3fUL) != UY_EC_SOFTSTP_LOW)
+        return;
+    if (!uy_replay_step(regs)) return;
+    args->ret = 0;
+    args->skip_origin = 1;
+}
+
+/* MDSCR_EL1.SS is per CPU while SPSR_EL1.SS is per task.  If the replaying
+ * task migrates between the fault and its retry, re-arm the hardware bit on
+ * the CPU that is about to run it. */
+static void uy_switch_after(hook_fargs2_t *args, void *udata)
+{
+    void *mm;
+
+    (void)args;
+    (void)udata;
+    if (!__atomic_load_n(&g_replay_active, __ATOMIC_ACQUIRE) && !g_step_orphan_task)
+        return;
+    mm = mm_of_task(current);
+    if (!mm) return;
+    if (uy_replay_current() ||
+        (g_step_orphan_task == current && g_step_orphan_mm == mm))
+        uy_mdscr_write(uy_mdscr_read() | UY_MDSCR_SS);
+}
+
+/* Snapshot every registered page into the child's private shadow at fork
+ * time, so a later owner SET cannot change what the child observes and a child
+ * write never leaks into the parent image. */
+static void uy_copy_mm_after(hook_fargs2_t *args, void *udata)
+{
+    void *tsk = (void *)args->arg1;
+    void *parent, *child;
+    uint64_t ref;
+    uint32_t i;
+
+    (void)udata;
+    if ((long)args->ret) return;
+    if (!overlay_live() || g_sess.mode != UROV_Y_MODE_PAGE_AP ||
+        __atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE))
+        return;
+    parent = mm_of_task(current);
+    if (!parent || parent != __atomic_load_n(&g_owner, __ATOMIC_ACQUIRE)) return;
+    child = tsk ? mm_of_task(tsk) : 0;
+    if (!child || child == parent) return;
+    ref = session_get_mm(parent);
+    if (!ref) return;
+    if ((uint64_t)g_shadow_used + g_sess.page_count <= g_shadow_max) {
+        for (i = 0; i < g_sess.page_count; ++i) {
+            struct uy_page *p = &g_sess.pages[i];
+
+            if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
+            if (!uy_shadow_get(child, p->index)) break;
+        }
+    }
+    uy_reader_exit(&g_readers, ref);
 }
 
 /* Emulate one load at `pc`: serve the bytes from the registered page images
@@ -2774,7 +3232,7 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
             uy_llsc_prepare(&model, pc, &load, llsc);
     }
 
-    covered = range_covered(load.address, (unsigned)total);
+    covered = range_covered(mm_of_task(current), load.address, (unsigned)total);
     if (!covered) {
         if (f_copy_in(bytes, (const void *)(uintptr_t)load.address, (unsigned long)total)) {
             *bad = load.address;
@@ -2904,6 +3362,15 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
         (g_abort_has_iss2 && (esr & UY_ESR_ISS2)) ||
         !uy_user_range(far, 1))
         return;
+    /* A pending deferred replay expects at most a retry of the same
+     * instruction (a cross-page store faulting on its next page).  Any other
+     * fault means the native retry cannot complete, so finish the replay
+     * before the new fault is handled. */
+    if (__atomic_load_n(&g_replay_active, __ATOMIC_ACQUIRE)) {
+        struct uy_replay *rp = uy_replay_current();
+
+        if (rp && rp->pc != regs->pc) uy_replay_cancel();
+    }
     ap_read = ec == UY_EC_DABT_LOW && !(esr & (UY_ESR_WNR | UY_ESR_CM));
     ref = session_get();
     if (!ref) {
@@ -2923,7 +3390,7 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
          * frees it only after both reader epochs are drained. */
         ref = session_get_any();
         if (ref) {
-            if (g_sess.mode == UROV_Y_MODE_PAGE_AP && page_find(page_base(far)))
+            if (g_sess.mode == UROV_Y_MODE_PAGE_AP && uy_page_for_fault(reader, far))
                 goto serve;
             uy_reader_exit(&g_readers, ref);
             /* The mapping was retired (munmap/MAP_FIXED) or moved while a
@@ -2948,17 +3415,19 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
 serve:
     /* A store that the VMA would accept natively is absorbed: its bytes are
      * applied to the live page through the kernel's COW path and published
-     * into the image, while the AP[1] trap stays installed.  Only a store the
-     * decoder cannot reproduce falls back to the 2.14 handoff (restore AP[1],
-     * mark this page dead, let Linux run the original store).
+     * into the image, while the AP[1] trap stays installed.  A store the
+     * decoder cannot reproduce is executed by the hardware itself under
+     * software step (uy_replay_begin).  Only when that mechanism is not
+     * available does the pre-2.17 handoff run: restore AP[1], mark this page
+     * dead, and let Linux execute the original store.
      *
      * A store to a VMA that is not writable is left alone: the native outcome
      * is SIGSEGV, and it must stay SIGSEGV (a detector must not be able to
      * kill the overlay with an illegal write it catches). */
     if (g_sess.mode == UROV_Y_MODE_PAGE_AP && ec == UY_EC_DABT_LOW &&
         (esr & UY_ESR_WNR) && !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) {
-        struct uy_page *wp = page_find(page_base(far));
         void *mm = mm_of_task(current);
+        struct uy_page *wp = uy_page_for_fault(mm, far);
 
         if (wp && mm && __atomic_load_n(&wp->armed, __ATOMIC_ACQUIRE) &&
             !__atomic_load_n(&wp->dead, __ATOMIC_ACQUIRE)) {
@@ -2967,18 +3436,24 @@ serve:
                 *(unsigned long *)((char *)vma + g_layout.vma_flags) : 0;
 
             if (flags & UY_VM_WRITE) {
-                int sret = uy_store_emulate(regs, far, wp, mm);
+                int rp;
 
-                if (!sret) {
+                if (uy_replay_owns(regs->pc, wp->index)) goto out;
+                if (!uy_store_emulate(regs, far, wp, mm)) {
                     args->ret = 0;
                     args->skip_origin = 1;
                     goto out;
                 }
+                /* The store is retried natively: restore AP[1] on this CPU and
+                 * let the kernel resolve any COW.  No skip_origin here. */
+                rp = uy_replay_begin(regs, mm, wp, far);
+                if (rp >= 0) goto out;
+                uy_replay_cancel();
             }
             if (flags & UY_VM_WRITE) {
                 /* Keep the child's copy writable-native rather than touching
                  * the owner's session state. */
-                if (page_set_ap_any(mm, wp->base, 1) >= 0) {
+                if (page_set_ap_any(mm, page_base(far), 1) >= 0) {
                     if (mm == g_sess.mm) {
                         __atomic_store_n(&wp->dead, 1, __ATOMIC_RELEASE);
                         __atomic_store_n(&wp->armed, 0, __ATOMIC_RELEASE);
@@ -2991,8 +3466,9 @@ serve:
     }
 
     if (g_sess.mode == UROV_Y_MODE_PAGE_AP && ap_read) {
-        struct uy_page *page = page_find(page_base(far));
-        struct uy_page *code = page_find(page_base(regs->pc));
+        void *mm = mm_of_task(current);
+        struct uy_page *page = uy_page_for_fault(mm, far);
+        struct uy_page *code = uy_page_for_fault(mm, regs->pc);
         uint64_t fault_pc = regs->pc;
         struct uy_llsc llsc;
         int emulated = -1;
@@ -3002,7 +3478,7 @@ serve:
         /* LSE atomics (LDADD/SWP/CAS/...) are reported as a read fault on
          * this CPU even though they also write.  Complete the RMW before the
          * generic load decoder can reject the encoding. */
-        if (!uy_atomic_emulate(regs, far, mm_of_task(current))) {
+        if (!uy_atomic_emulate(regs, far, mm)) {
             args->ret = 0;
             args->skip_origin = 1;
             goto out;
@@ -3013,7 +3489,8 @@ serve:
         } else if (code) {
             /* Instruction fetch still uses the original RX bytes, but
              * data uaccess to that same code page can fault on AP[1]. */
-            memcpy(&opcode, code->snapshot + (fault_pc - code->base), sizeof(opcode));
+            memcpy(&opcode, code->snapshot + (fault_pc & (g_page_size - 1U)),
+                   sizeof(opcode));
             emulated = emulate_or_signal(regs, opcode, far, 1, &llsc);
         } else if (f_copy_in(&opcode, (const void *)(uintptr_t)regs->pc, sizeof(opcode))) {
             session_count_failure(regs->pc, -EFAULT);
@@ -3104,7 +3581,29 @@ static void uy_mm_fault_after(hook_fargs4_t *args, void *udata)
     if (!__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) {
         if (g_sess.mode == UROV_Y_MODE_PAGE_AP) {
             struct uy_page *p = page_find(page);
-            if (p && __atomic_load_n(&p->want, __ATOMIC_ACQUIRE) &&
+            if (p && __atomic_load_n(&p->replay, __ATOMIC_ACQUIRE)) {
+                /* A deferred native replay owns this leaf: the store is about
+                 * to be retried and the step handler re-arms the trap. */
+                ret = 0;
+            } else if (p && (args->local.data2 & UY_FAULT_WRITE) &&
+                       __atomic_load_n(&g_internal_access, __ATOMIC_ACQUIRE) != current) {
+                /* A writer outside the module faulted the page in for write:
+                 * fast-GUP FOLL_WRITE (read()/O_DIRECT into the mapping) or a
+                 * remote writer.  Re-arming AP[1] here would make the GUP loop
+                 * retry the same fault forever, so the write is allowed to land
+                 * and the page stops being overlaid. */
+                if (g_verbose)
+                    pr_info("urov-y: foreign write fault page=%llx internal=%llx\n",
+                            (unsigned long long)page,
+                            (unsigned long long)(uintptr_t)
+                            __atomic_load_n(&g_internal_access, __ATOMIC_ACQUIRE));
+                if (mm == g_sess.mm) {
+                    __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
+                    __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
+                    __atomic_store_n(&p->dead, 1, __ATOMIC_RELEASE);
+                }
+                ret = 0;
+            } else if (p && __atomic_load_n(&p->want, __ATOMIC_ACQUIRE) &&
                 !__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) {
                 ret = page_set_ap_any(mm, page, 0);
                 if (ret == 0) __atomic_store_n(&p->armed, 1, __ATOMIC_RELEASE);
@@ -3161,6 +3660,9 @@ static void session_free_storage(void)
     uy_shadow_free_all();
     uy_free(g_shadow_arena);
     g_shadow_arena = 0;
+    uy_free(g_shadow);
+    g_shadow = 0;
+    g_shadow_max = 0;
     uy_free(g_sess.pages);
     uy_free(g_sess.arena);
     memset(&g_sess, 0, sizeof(g_sess));
@@ -3177,6 +3679,13 @@ static int release_session(int wait_brk_tasks)
     int ret = 0;
 
     if (!overlay_live()) return 0;
+    /* A deferred native replay still owns an AP[1]-restored leaf and a pending
+     * software step.  Refuse to tear the page array down underneath it; the
+     * normal case drains in a few microseconds. */
+    if (uy_replay_quiesce()) {
+        uy_replay_unblock();
+        return -EBUSY;
+    }
     mm = g_sess.mm;
     __atomic_store_n(&g_suspend, 1, __ATOMIC_RELEASE);
     drain_readers(uy_readers_flip(&g_readers));
@@ -3190,6 +3699,7 @@ static int release_session(int wait_brk_tasks)
     }
     if (ret) {
         __atomic_store_n(&g_degraded, 1, __ATOMIC_RELEASE);
+        uy_replay_unblock();
         return ret;
     }
     if (wait_brk_tasks && g_sess.mode == UROV_Y_MODE_SITE_BRK && mm_has_live_user(mm) && f_sync_tasks)
@@ -3198,6 +3708,7 @@ static int release_session(int wait_brk_tasks)
     __atomic_store_n(&g_state, UY_STATE_OFF, __ATOMIC_RELEASE);
     session_free_storage();
     __atomic_store_n(&g_degraded, 0, __ATOMIC_RELEASE);
+    uy_replay_unblock();
     return 0;
 }
 
@@ -3351,13 +3862,29 @@ static long do_register(struct urov_y_request *q)
 
     g_sess.pages = uy_alloc(n * sizeof(*g_sess.pages));
     /* Page-aligned vmalloc storage keeps every image page convertible to a
-     * struct page for the GUP overlay (kvmalloc may return kmalloc memory). */
-    g_sess.arena = f_vmalloc ? f_vmalloc(3UL * n * g_page_size) :
-                               uy_alloc(3UL * n * g_page_size);
-    g_shadow_arena = f_vmalloc ? f_vmalloc((unsigned long)UY_SHADOW_MAX * g_page_size) :
-                                 uy_alloc((unsigned long)UY_SHADOW_MAX * g_page_size);
+     * struct page for the GUP overlay (kvmalloc may return kmalloc memory).
+     * Five pages per descriptor: image, spare, snapshot, replay pre/post. */
+    g_sess.arena = f_vmalloc ? f_vmalloc(5UL * n * g_page_size) :
+                               uy_alloc(5UL * n * g_page_size);
+    /* One private image per page per forked child, snapshotted at fork.  Four
+     * generations by default, bounded by the byte cap; a session with more
+     * pages still gets enough slots for a single child. */
+    {
+        uint64_t slots = (uint64_t)n * 4U;
+
+        if (slots > UY_SHADOW_BYTES_MAX / (2U * g_page_size)) {
+            slots = UY_SHADOW_BYTES_MAX / (2U * g_page_size);
+            if (slots < 2U) slots = 2U;
+        }
+        if (slots > UY_SHADOW_CAP) slots = UY_SHADOW_CAP;
+        g_shadow_max = (uint32_t)slots;
+    }
+    g_shadow = uy_alloc((unsigned long)g_shadow_max * sizeof(*g_shadow));
+    g_shadow_arena = f_vmalloc ?
+        f_vmalloc(2ULL * (uint64_t)g_shadow_max * g_page_size) :
+        uy_alloc((unsigned long)(2ULL * (uint64_t)g_shadow_max * g_page_size));
     uy_shadow_free_all();
-    if (!g_sess.pages || !g_sess.arena) {
+    if (!g_sess.pages || !g_sess.arena || !g_shadow || !g_shadow_arena) {
         ret = -ENOMEM;
         goto fail;
     }
@@ -3376,9 +3903,11 @@ static long do_register(struct urov_y_request *q)
         p->base = d->base;
         p->index = d->reserved;
         p->flags = d->flags;
-        p->image = g_sess.arena + 3UL * i * g_page_size;
+        p->image = g_sess.arena + 5UL * i * g_page_size;
         p->spare = p->image + g_page_size;
         p->snapshot = p->spare + g_page_size;
+        p->pre = p->snapshot + g_page_size;
+        p->post = p->pre + g_page_size;
         uy_mmap_write_lock(mm);
         {
             void *vma = f_find_vma(mm, p->base);
@@ -3828,7 +4357,7 @@ static void uy_kread_overlay(uint64_t remote, void *buf, uint64_t len, int allow
         struct uy_page *p;
 
         if ((uint64_t)seg > len) seg = (unsigned)len;
-        p = page_find(page);
+        p = uy_page_for_fault(mm, remote);
         if (p && (owner || uy_trap_leaf(mm, page)))
             page_view_mm(mm, p, off, seg, out, !allow_fake);
         remote += seg;
@@ -3849,9 +4378,16 @@ static void uy_kwrite_overlay(uint64_t remote, const void *buf, uint64_t len,
         struct uy_page *p;
 
         if ((uint64_t)seg > len) seg = (unsigned)len;
-        p = page_find(page);
-        if (p && (owner || uy_trap_leaf(mm, page)))
-            page_store_bytes(p, off, src, seg);
+        p = uy_page_for_fault(mm, remote);
+        if (p && (owner || uy_trap_leaf(mm, page))) {
+            if (mm == g_sess.mm) {
+                page_store_bytes(p, off, src, seg);
+            } else {
+                struct uy_shadow *sh = uy_shadow_get(mm, p->index);
+
+                if (sh) uy_shadow_store(sh, off, src, seg);
+            }
+        }
         remote += seg;
         src += seg;
         len -= seg;
@@ -3894,10 +4430,13 @@ static void uy_kread_after(hook_fargs6_t *args, void *udata)
          * the EL0 store fault.  The live page already holds the bytes by the
          * time the hook runs; publish the same bytes into the image so a
          * following read observes the write exactly as it would natively.
-         * Only the owning mm is updated: a forked child has its own COW
-         * copy, and the parent's image must not see that child's store. */
-        if (owner && !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE))
+         * A forked child has its own COW copy, so its bytes go to the child's
+         * shadow and never into the parent's image. */
+        if (!__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) {
+            uy_write_enter();
             uy_kwrite_overlay(remote, buf, len, mm, owner);
+            uy_write_leave();
+        }
         uy_reader_exit(&g_readers, ref);
         return;
     }
@@ -3926,17 +4465,15 @@ static void uy_gup_after(hook_fargs4_t *args, void *udata)
     long got = (long)args->ret;
     void *mm;
     uint64_t ref;
-    int owner;
+    int owner, writer;
     unsigned i;
 
     (void)udata;
     if (got <= 0 || !pages || !f_alloc_pages || !f_put_page ||
         !f_copy_highpage || !f_vmalloc_to_page)
         return;
-    /* vmsplice() reads from user memory and asks GUP for FOLL_WRITE to force
-     * a private COW page; the pages are still a data source.  Actual
-     * GUP-fast writers of a registered page (ptrace/proc mem) go through
-     * access_remote_vm instead.  PIN/LONGTERM require the exact user page. */
+    /* PIN/LONGTERM require the exact user page.  PIN/LONGTERM are also used by
+     * the kernel's own long-term pins, which must never see a replacement. */
     if ((flags & (UY_FOLL_LONGTERM | UY_FOLL_PIN)) ||
         (start & (g_page_size - 1U)) || !overlay_live() ||
         g_sess.mode != UROV_Y_MODE_PAGE_AP ||
@@ -3947,17 +4484,35 @@ static void uy_gup_after(hook_fargs4_t *args, void *udata)
     owner = mm == __atomic_load_n(&g_owner, __ATOMIC_ACQUIRE);
     ref = owner ? session_get_mm(mm) : session_get_any();
     if (!ref) return;
+    /* A registered page is a data source for vmsplice()/pipe and that path asks
+     * GUP without FOLL_WRITE.  FOLL_WRITE marks a real write destination (for
+     * example read() or O_DIRECT into a writable mapping): the bytes must reach
+     * the live page, so that page goes native instead of being intercepted by
+     * the replacement copy.  The kernel's own FOLL_WRITE fault-in has already
+     * installed a writable leaf, so the trap is gone for that page anyway. */
+    writer = (flags & UY_FOLL_WRITE) != 0;
     if ((unsigned long)got > nr) got = (long)nr;
     for (i = 0; i < (unsigned)got; ++i) {
         uint64_t va = (uint64_t)start + (uint64_t)i * g_page_size;
-        struct uy_page *p = page_find(page_base(va));
+        uint64_t page = page_base(va);
+        struct uy_page *p = uy_page_for_fault(mm, va);
         struct uy_shadow *sh = 0;
         void *src, *fake;
         int allow_fake = g_sess.caller_count == 0U;
 
         if (!p) continue;
-        if (!owner && !uy_trap_leaf(mm, page_base(va))) continue;
-        if (!owner) sh = uy_shadow_find(mm, p->base);
+        if (!owner && !uy_trap_leaf(mm, page)) continue;
+        if (writer) {
+            if (owner && mm == g_sess.mm && !__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) {
+                __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
+                __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
+                __atomic_store_n(&p->dead, 1, __ATOMIC_RELEASE);
+            } else if (!owner && page_set_ap_any(mm, page, 0) > 0) {
+                flush_tlb_all();
+            }
+            continue;
+        }
+        if (!owner) sh = uy_shadow_find(mm, p->index);
         src = f_vmalloc_to_page(sh ? sh->image :
                                 (allow_fake ? p->image : p->snapshot));
         if (!src) continue;
@@ -3966,6 +4521,12 @@ static void uy_gup_after(hook_fargs4_t *args, void *udata)
         f_copy_highpage(fake, src);
         if (pages[i]) f_put_page(pages[i]);
         pages[i] = fake;
+        /* A source-side GUP does not write, but keep the trap authoritative:
+         * if anything dropped it, restore it before the caller returns. */
+        if (__atomic_load_n(&p->armed, __ATOMIC_ACQUIRE) &&
+            !__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE) &&
+            !uy_trap_leaf(mm, page) && page_set_ap_any(mm, page, 0) > 0)
+            flush_tlb_all();
     }
     uy_reader_exit(&g_readers, ref);
 }
@@ -4273,16 +4834,22 @@ static void uy_gate_before(hook_fargs6_t *args, void *udata)
         if (overlay_live() && g_sess.mode == UROV_Y_MODE_PAGE_AP) return;
     }
     if (kind == UY_GATE_REMAP_FILE_PAGES) {
-        /* The deprecated remap_file_pages() rejects a non-shared VMA before
-         * it changes any PTE.  An app's .text is MAP_PRIVATE, so this call
-         * must not be able to end the session on its way to EINVAL.  A
-         * genuinely shared VMA still takes the conservative teardown. */
+        /* remap_file_pages() rejects a private VMA before it changes any PTE;
+         * that call must not be able to end the session on its way to EINVAL.
+         * A successful shared remap changes which file offsets the range maps,
+         * so the pages it covers are retired after the syscall instead of
+         * releasing the whole session. */
         void *vma;
 
-        if (!overlay_live() || g_sess.mode != UROV_Y_MODE_PAGE_AP) goto remap_release;
+        if (!overlay_live() || g_sess.mode != UROV_Y_MODE_PAGE_AP)
+            goto remap_release;
         vma = f_find_vma(g_sess.mm, sys_arg(args, 0));
         if (!vma || !(*(unsigned long *)((char *)vma + g_layout.vma_flags) & UY_VM_SHARED))
             return;
+        args->local.data0 = sys_arg(args, 0);
+        args->local.data1 = sys_arg(args, 1);
+        args->local.data5 = 1;
+        return;
     }
 remap_release:
     if ((kind == UY_GATE_MPROTECT || kind == UY_GATE_PKEY_MPROTECT) &&
@@ -4325,27 +4892,24 @@ remap_release:
 static void uy_child_protection_update(void *mm, uint64_t start, uint64_t len,
                                        uint64_t prot)
 {
-    uint64_t end = start + len;
+    uint64_t end = start + len, cur;
     uint64_t ref;
-    uint32_t i;
     int changed = 0;
 
     if (!mm || mm == g_sess.mm || !len || end < start) return;
     if (!(prot & (UY_PROT_READ | UY_PROT_WRITE | UY_PROT_EXEC))) return;
     ref = session_get_any();
     if (!ref) return;
-    for (i = 0; i < g_sess.page_count; ++i) {
-        struct uy_page *p = &g_sess.pages[i];
-        void *vma;
-        void *file;
+    /* The child may have moved or split its copy of the mapping, so walk the
+     * mprotect range and resolve each page by file identity. */
+    for (cur = start & ~((uint64_t)g_page_size - 1U); cur < end; cur += g_page_size) {
+        struct uy_page *p = uy_page_for_fault(mm, cur);
 
-        if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
-        if (p->base < start || p->base + g_page_size > end) continue;
-        vma = f_find_vma(mm, p->base);
-        if (!vma) continue;
-        file = *(void **)((char *)vma + g_layout.vma_file);
-        if (file != p->vma_file) continue;
-        if (page_set_ap_any(mm, p->base, 0) > 0) changed = 1;
+        if (!p || __atomic_load_n(&p->gone, __ATOMIC_ACQUIRE) ||
+            __atomic_load_n(&p->replay, __ATOMIC_ACQUIRE))
+            continue;
+        if (!uy_trap_leaf(mm, cur) && page_set_ap_any(mm, cur, 0) > 0)
+            changed = 1;
     }
     if (changed) flush_tlb_all();
     uy_reader_exit(&g_readers, ref);
@@ -4389,6 +4953,8 @@ static void uy_gate_after(hook_fargs6_t *args, void *udata)
             uy_range_gone(g_sess.mm, a0, a1);
         else if (kind == UY_GATE_MREMAP)
             uy_mremap_update(g_sess.mm, a0, a1, a2, a3, (uint64_t)ret);
+        else if (kind == UY_GATE_REMAP_FILE_PAGES)
+            uy_range_gone(g_sess.mm, a0, a1);
     }
     if ((kind == UY_GATE_MPROTECT || kind == UY_GATE_PKEY_MPROTECT) &&
         g_sess.mode == UROV_Y_MODE_PAGE_AP) {
@@ -4660,6 +5226,23 @@ static long resolve_symbols(const struct kclf_btf *btf, int *brk_argc, int *mmf_
         f_gup_fast = 0;
 
 
+    /* Deferred native replay: do_debug_exception consumes the software-step
+     * exception and __switch_to re-arms MDSCR_EL1.SS after a migration.  Both
+     * are required; without them an undecodable store keeps the pre-2.17
+     * per-page handoff instead of a replay that could lose its step. */
+    f_debug_exception = lookup("do_debug_exception");
+    if (f_debug_exception && !uy_symbol_abi(btf, "do_debug_exception", "vllr"))
+        f_debug_exception = 0;
+    f_switch_to = lookup("__switch_to");
+    if (f_switch_to && !uy_symbol_abi(btf, "__switch_to", "ptt"))
+        f_switch_to = 0;
+    /* Snapshot the image at fork time.  copy_mm() is the arm64 fork helper
+     * (dup_mm is inlined into it on this kernel). */
+    f_copy_mm = lookup("copy_mm");
+    if (f_copy_mm && !uy_symbol_abi(btf, "copy_mm", "ilt"))
+        f_copy_mm = 0;
+    if (!f_copy_mm) f_copy_mm = lookup("dup_mm");
+
     /* Newer update_current_state() only updates the saved state. Use the
      * save-and-flush helper when present so the EL0 return reloads it. */
     f_fp_preserve = (fpsimd_preserve_t)lookup(fp_name);
@@ -4927,6 +5510,25 @@ long urov_y_backend_init(const char *args)
         urov_y_backend_exit();
         return -EOPNOTSUPP;
     }
+    /* Deferred native replay needs the software-step consumer and the
+     * migration re-arm.  A failure here only keeps the pre-2.17 store
+     * handoff; init still succeeds. */
+    if (f_debug_exception) {
+        ret = hook_wrap(f_debug_exception, 3, uy_dbg_before, 0, 0);
+        g_dbg_hooked = ret ? 0 : 1;
+        if (ret && g_verbose) pr_info("urov-y: hook debug exception failed: %ld\n", ret);
+    }
+    if (f_switch_to) {
+        ret = hook_wrap(f_switch_to, 2, 0, uy_switch_after, 0);
+        g_switch_hooked = ret ? 0 : 1;
+        if (ret && g_verbose) pr_info("urov-y: hook __switch_to failed: %ld\n", ret);
+    }
+    if (f_copy_mm) {
+        ret = hook_wrap(f_copy_mm, 2, 0, uy_copy_mm_after, 0);
+        g_copymm_hooked = ret ? 0 : 1;
+        if (ret && g_verbose) pr_info("urov-y: hook copy_mm failed: %ld\n", ret);
+    }
+    g_ss_ok = g_dbg_hooked && g_switch_hooked;
     if (g_brk_hooked) g_caps |= UROV_Y_CAP_SITE_BRK;
     if (g_page_shift == 14U) g_caps |= UROV_Y_CAP_16K;
     if (g_page_hooked) {
@@ -4937,6 +5539,9 @@ long urov_y_backend_init(const char *args)
     }
     __atomic_store_n(&g_ready, 1, __ATOMIC_RELEASE);
 
+    if (g_verbose)
+        pr_info("urov-y: mdscr at init=%llx step_hooks=%d/%d\n",
+                (unsigned long long)uy_mdscr_read(), g_dbg_hooked, g_switch_hooked);
     if (g_verbose)
         pr_info("urov-y: backend ready brk_imm=%x trap=%x page_mode=%d kread=%d/%d\n",
                 (unsigned)g_imm, (unsigned)g_trap_insn, g_page_hooked && g_mmf_hooked,
@@ -5032,6 +5637,19 @@ long urov_y_backend_exit(void)
         hook_unwrap(f_handle_mm_fault, uy_mm_fault_before, uy_mm_fault_after);
         g_mmf_hooked = 0;
     }
+    if (g_copymm_hooked) {
+        hook_unwrap(f_copy_mm, 0, uy_copy_mm_after);
+        g_copymm_hooked = 0;
+    }
+    if (g_switch_hooked) {
+        hook_unwrap(f_switch_to, 0, uy_switch_after);
+        g_switch_hooked = 0;
+    }
+    if (g_dbg_hooked) {
+        hook_unwrap(f_debug_exception, uy_dbg_before, 0);
+        g_dbg_hooked = 0;
+    }
+    g_ss_ok = 0;
     memset(&g_keys, 0, sizeof(g_keys));
     return 0;
 }

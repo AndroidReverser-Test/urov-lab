@@ -1,0 +1,10 @@
+--------- beginning of main
+10-05 04:48:32.749 13866 13889 I urovdetect: CONTEXT pid=13866 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 04:48:32.749 13866 13889 I urovdetect: BEGIN mode=read-defense-v216-clean repeats=128
+10-05 04:48:33.216 13866 13889 I urovdetect: READ_DEFENSE_V216 stage=clean n=128 split=0 post=0 post_ok=0 unknown=0 read_errno=0 old_accept=128 guarded_accept=128 raw_ok=128 alu=0 alu_failed=0 alu_accepted=96 alu_errno=0 vma_preserved=1 execute=1234 read_mean_ns=3454780 alu_ns=21478149
+10-05 04:48:33.216 13866 13889 I urovdetect: DOBBY_HOOK address=0x70e130d000 original=1234 hooked=1235
+10-05 04:48:33.618 13866 13889 I urovdetect: READ_DEFENSE_V216 stage=patch_only n=128 split=0 post=0 post_ok=0 unknown=0 read_errno=0 old_accept=0 guarded_accept=0 raw_ok=128 alu=0 alu_failed=0 alu_accepted=96 alu_errno=0 vma_preserved=1 execute=1235 read_mean_ns=3107250 alu_ns=3123291
+10-05 04:48:33.619 13866 13889 I urovdetect: READ_DEFENSE_BUSINESS ops=175488 errors=0
+10-05 04:48:33.619 13866 13889 I urovdetect: CONTEXT pid=13866 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 04:48:33.619 13866 13889 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=264 failures=0 mode=read-defense-v216-clean
+10-05 04:48:33.622 13866 13866 I urovdetect: DETECT_RESULT PASS mode=read-defense-v216-clean worker_ms=871 ui_ticks=180 ui_max_gap_ms=17 native=PASS cases=2 assertions=264 failures=0

@@ -2,6 +2,22 @@
 
 更新于 2026-11-08（Asia/Shanghai）。
 
+> 2026-11-08 补充：`urov-y` 2.17.0 消掉 2.16.0 “残余”里除读取计时外的全部
+> 条目：未解码 store（SIMD 单 lane、STTR、SVE/SME）改由硬件在 EL0 执行、
+> 插件用 `pre`/`post` 整页 diff 发布；并发 LSE 原子由可睡眠写锁串行化，不再
+> 丢更新；fork 快照改在 `copy_mm` 时创建，子进程自己的 `mremap`/`mprotect`
+> 用 `vm_file`+页偏移按文件身份解析；fast-GUP `FOLL_WRITE` 不再被替换页截获
+> （并修掉 2.16 就存在的 GUP 重试死循环）；被拒绝的 shared
+> `remap_file_pages` 不再先拆会话。App 2×6（store/atomic/fork/gup/remap/crc）
+> 与 root 探针 5 模式全部 PASS；生产 CRC 的 `.text` 页在 EL0、`crc32`、pipe、
+> `process_vm_readv` 与 fork 子进程读上一致等于文件摘要 `96964c4f`，执行仍是
+> Dobby 的 `1235`。加固读防御 8×1、旧读防御 8×1、CRC 5×1、Dobby 24×1、
+> 消除 3×1（`ELIM_PROT_STORE shapes=16`）、多页 3×1 均 PASS；
+> `site_call_ns=508`。构建 `urov-y.kpm cb8b6be4...`、
+> `urovdetect.apk a50e0343...`。见
+> [ELIMINATION_2_17_DESIGN.md](ELIMINATION_2_17_DESIGN.md) 与
+> [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.17.0 节。
+>
 > 2026-11-08 补充：`urov-y` 2.16.0 消除 2.15.0 仍成立的三条无密钥读侧路径
 > 和两类写侧残余：`vmsplice` 的 GUP-fast 读、`LDXP; LDRB; STXP` 成对独占、
 > 等长 `mremap` 撤销；LSE 原子 RMW（`LDADD` 族/SWP/CAS/CASP）、`STXR/STXP`

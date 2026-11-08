@@ -77,12 +77,17 @@ foreach ($test in @('emulate_test','native_test','kpm_check_test','copy_probe','
         (Join-Path $PSScriptRoot ('tests/' + $test + '.c')) -o (Join-Path $out $filename)
     if ($LASTEXITCODE -ne 0) { throw "Android compile failed: $test" }
 }
+# Root-only residual probe (the app's seccomp policy blocks remap_file_pages).
+& $clang @userFlags ('-I' + $repo) ('-I' + $PSScriptRoot) `
+    (Join-Path $PSScriptRoot 'tests/v217_probe.c') -o (Join-Path $out 'v217_probe')
+if ($LASTEXITCODE -ne 0) { throw 'v217 probe compile failed' }
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-lab-check.kpm')
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-lab.kpm')
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-x.kpm')
 $built = @('urov-lab.kpm', 'urov-lab-check.kpm', 'urov-x.kpm', 'urov-y.kpm', 'urov_overlay_test',
     'urov_hold_test', 'urov_hold2_test', 'urov_foreign_test', 'urov_y_test', 'urov_copy_probe',
-    'urov_vector_fault_probe', 'urov_emulate_test', 'urov_native_test', 'urov_kpm_check_test')
+    'urov_vector_fault_probe', 'urov_emulate_test', 'urov_native_test', 'urov_kpm_check_test',
+    'v217_probe')
 $sums = foreach ($name in $built) {
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out $name)).Hash.ToLowerInvariant()
     "$hash  $name"

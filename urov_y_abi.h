@@ -22,6 +22,15 @@
  * boundary are served by the same PAGE_AP data-trap path. QUERY reports the
  * running base page shift; use it to size and align descriptors and images.
  *
+ * 2.17.0 keeps ABI v8 and removes the remaining non-timing fingerprints:
+ * the store decoder no longer bounds the write path (a store it cannot
+ * reproduce is executed by the hardware under software step and its bytes are
+ * diffed into the image, covering SVE/SME and every future shape), concurrent
+ * LSE RMWs are serialised so no update is lost, a forked child snapshots the
+ * image at fork time and resolves its own mremap/mprotect writes by file
+ * identity, a fast-GUP FOLL_WRITE writer reaches the live page instead of being
+ * intercepted, and a rejected `remap_file_pages` no longer ends the session.
+ *
  * The prctl magic is fixed. The option word and request MAC key are derived
  * from a per-load secret as in UROV-X.
  */
@@ -66,10 +75,12 @@
  * EL0 data permission (AP[1]) on the *target* pages in the leaf PTE only, so
  * every EL0 data read of those pages takes a permission abort while fetch of
  * the same or any other page stays native.  The data abort is emulated with
- * the same fake/caller-window rules.  Since 2.15.0 a decoded store is absorbed
- * by the handler: the same bytes are written through the kernel's COW/GUP
- * path, the image is updated and the trap stays installed.  Unsupported store
- * shapes fall back to the 2.14 per-page handoff.  An adjacent
+ * the same fake/caller-window rules.  A decoded store is absorbed by the
+ * handler: the same bytes are written through the kernel's COW/GUP path, the
+ * image is updated and the trap stays installed.  Since 2.17.0 a store the
+ * decoder cannot reproduce (SIMD single-lane, SVE/SME, any future shape) is
+ * executed by the hardware under software step and its changed bytes are
+ * diffed into the image, so no store shape retires the page.  An adjacent
  * LDXR;load;STXR whose LDXR executed (including XZR destinations) is completed
  * by the handler so the exception return does not turn a native success into a
  * failure.  This mode supports the v8 page array, LD1/LD2/LD3/LD4 and loads

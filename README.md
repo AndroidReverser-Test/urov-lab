@@ -1,5 +1,21 @@
 # UROV-LAB
 
+`urov-y` 2.17.0 消掉 2.16.0 “残余”里除读取计时外的全部条目：解码器之外的
+store（SIMD 单 lane、STTR、SVE/SME 与将来形状）改由硬件在 EL0 执行，插件
+恢复本 CPU 的 AP[1]、开 Software Step，在内核完成 COW 后用 `pre`/`post`
+整页 diff 把变化字节发布进镜像并重装陷阱；并发 LSE 原子由可睡眠写锁串行化；
+fork 快照改在 `copy_mm` 时创建，子进程自己的 `mremap`/`mprotect` 用
+`vm_file`+页偏移解析；fast-GUP `FOLL_WRITE` 不再被替换页截获（同时修掉 2.16
+就存在的 GUP 重试死循环）；被拒绝的 shared `remap_file_pages` 不再先拆会话。
+ABI 仍为 v8，`hooks=0xff`、请求布局、`ctl0` 字段和返回码不变。
+App 2×6（store/atomic/fork/gup/remap/crc）与 root 探针 5 模式全部 PASS，
+生产 CRC 的 `.text` 页在 EL0/`crc32`/pipe/`process_vm_readv`/fork 子进程读上
+一致等于文件摘要，执行仍是 Dobby 的 `1235`；加固读防御 8×1、旧读防御 8×1、
+CRC 5×1、Dobby 24×1、消除 3×1（`ELIM_PROT_STORE shapes=16`）、多页 3×1 均
+PASS；`site_call_ns=508`。设计与残余见
+[ELIMINATION_2_17_DESIGN.md](ELIMINATION_2_17_DESIGN.md)。构建
+`urov-y.kpm cb8b6be4...`、`urovdetect.apk a50e0343...`。
+
 `urov-y` 2.16.0 消除 2.15.0 仍成立的三条无密钥读侧路径和两类写侧残余：
 `vmsplice()` 的 `get_user_pages_fast()` 读改由 GUP after hook 返回镜像页；
 `LDXP; LDRB; STXP` 成对独占由与单寄存器桥相同的控制流证据完成；等长
@@ -48,6 +64,19 @@ no-op store。ABI v8 请求布局、`ctl0` 字段和计数器不变，`hooks` �
 2.4.0 的参数校验、并发镜像发布和陷阱撤销适配继续用于 Android ARM64 的 5.4 起的 5.x 和 6.x 内核，
 支持 4 KiB 及符合条件的 16 KiB 页表。实测、支持边界和复跑命令见
 [UROV-Y 兼容性与审计](COMPATIBILITY_Y.md)。下方日期条目保留各历史版本的行为和证据。
+
+2026-11-08 第十六轮消除：`urov-y` 2.17.0 消掉 2.16.0 残余里除计时外的全部
+条目。未解码 store（SIMD 单 lane、STTR、SVE/SME）由硬件在 EL0 执行，插件
+只做整页 diff 发布；并发 LSE 原子由写锁串行化；fork 快照在 `copy_mm` 创建，
+子进程 `mremap`/`mprotect` 按文件身份解析；fast-GUP `FOLL_WRITE` 写者不再被
+截获，并修掉 GUP 重试死循环；shared `remap_file_pages` 不再先拆会话。
+App 2×6 与 root 探针 5 模式全部 PASS；生产 CRC 的 `.text` 页在 EL0、`crc32`、
+pipe、`process_vm_readv` 与 fork 子进程读上一致等于文件摘要 `96964c4f`，执行
+仍是 `1235`。加固读防御 8×1、旧读防御 8×1、CRC 5×1、Dobby 24×1、消除 3×1
+（`ELIM_PROT_STORE shapes=16`）、多页 3×1 均 PASS。构建
+`urov-y.kpm cb8b6be4...`、`urovdetect.apk a50e0343...`。方案与残余见
+[2.17.0 设计](ELIMINATION_2_17_DESIGN.md) 与
+[结果 2.17.0](APP_READ_INTEGRITY_RESULTS.md#2170-任意写形状fork-快照与并发原子)。
 
 2026-11-08 第十五轮消除：`urov-y` 2.15.0 让普通 store 不再退役覆盖：解码
 11 种 GPR/SIMD/STP/ST1/DC ZVA 写形状，由内核 COW/GUP 写路径完成同一批字节，

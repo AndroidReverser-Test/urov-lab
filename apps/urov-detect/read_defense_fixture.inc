@@ -20,13 +20,13 @@ static int read_defense_pipe(const uint8_t *source, uint8_t out[DOBBY_CRC_BYTES]
 }
 
 /* Ground truth only: keyless observation and recovery take no context/key. */
-static int read_defense_arm(const struct uy_ctx *ctx, const uint8_t *text, unsigned mode,
-                            bool all_callers)
+static int read_defense_arm(const struct uy_ctx *ctx, const uint8_t *text, const uint8_t *image,
+                            unsigned mode, bool all_callers)
 {
     struct urov_y_request q = uy_req(UROV_Y_REGISTER);
     q.address = (uintptr_t)text;
     q.mode = mode;
-    q.fake_addr = (uintptr_t)dobby_file_page;
+    q.fake_addr = (uintptr_t)image;
     q.length = DOBBY_CRC_BYTES;
     if (mode != UROV_Y_MODE_PAGE_AP) {
         q.site_count = 1;
@@ -41,8 +41,8 @@ static int read_defense_arm(const struct uy_ctx *ctx, const uint8_t *text, unsig
     return q.state == UROV_Y_ACTIVE ? 0 : EPROTO;
 }
 
-/* The only store writes the old values back to private scratch. UROV-Y's
- * PAGE_AP bridge recognizes single-register exclusives, not this pair. */
+/* The only store writes the old values back to private scratch. This shape
+ * serves as a regression control for the paired bridge in 2.16.0. */
 static bool read_defense_pair_store(const uint8_t *address)
 {
     _Alignas(16) uint64_t scratch[2] = { UINT64_C(0x12345678), UINT64_C(0x87654321) };
@@ -151,8 +151,68 @@ static void read_defense_stage(const char *name, const uint8_t *text, const uint
     read_defense_pair(name, text, control, ap_trap && !hardened);
 }
 
-/* Equal lengths and flags=0: this syscall asks Linux to keep the same VMA.
- * UROV-Y's range gate releases an overlapping session before Linux runs. */
+static void read_defense_v216_stage(const char *name, const uint8_t *text,
+                                    const struct page *reference, const uint8_t *file,
+                                    const uint8_t *expected_live, unsigned mode,
+                                    bool all_callers, int repeats)
+{
+    const uint8_t *control = reference->address + reference->entry;
+    off_t offset = reference->file_offset + reference->entry;
+    const bool ap = mode == UROV_Y_MODE_PAGE_AP;
+    const bool original = expected_live == file;
+    struct ud_exclusive_observation alu;
+    struct ud_mapping before, after;
+    int map_error = ud_mapping_at("/proc/self/maps", text, &before), read_error = 0;
+    unsigned split = 0, post = 0, post_ok = 0, unknown = 0, raw_ok = 0;
+    unsigned old_accept = 0, guarded_accept = 0;
+    uint64_t read_ns = 0;
+    uint32_t returned = 0;
+    ++g_cases;
+
+    ud_observe_ap_alu(text + DOBBY_CRC_BYTES, control + DOBBY_CRC_BYTES,
+                     reference->fd, offset + DOBBY_CRC_BYTES, &alu);
+    for (int i = 0; i < repeats; ++i) {
+        struct ud_readv_observation views;
+        ud_observe_readv_redirect(text, control, DOBBY_CRC_BYTES, reference->fd, offset,
+                                  crc_copy_window, &views);
+        read_ns += views.elapsed_ns;
+        if (views.reader_diff == UD_UNKNOWN || views.post_copy == UD_UNKNOWN) {
+            read_error = views.error;
+            ++unknown;
+            continue;
+        }
+        split += views.reader_diff == UD_MATCH;
+        if (views.post_copy == UD_MATCH) {
+            ++post;
+            post_ok += !memcmp(views.post_bytes, all_callers ? file : expected_live, DOBBY_CRC_BYTES);
+        }
+        old_accept += !memcmp(views.user_bytes, file, DOBBY_CRC_BYTES);
+        guarded_accept += !memcmp(views.live_bytes, file, DOBBY_CRC_BYTES);
+        raw_ok += !memcmp(views.live_bytes, expected_live, DOBBY_CRC_BYTES);
+        returned = dobby_crc_payload();
+        REQUIRE(returned == (original ? DOBBY_ORIGINAL : DOBBY_HOOKED),
+                "v216 %s execute=%04x", name, returned);
+    }
+    bool preserved = !map_error && !ud_mapping_at("/proc/self/maps", text, &after) &&
+                     dobby_same_vma(&before, &after);
+    unsigned n = (unsigned)repeats;
+    REQUIRE(alu.reservation_loss == (ap ? UD_MATCH : UD_NO_MATCH),
+            "v216 %s ALU verdict=%d errno=%d", name, alu.reservation_loss, alu.error);
+    REQUIRE(!unknown && split == (mode && !original ? n : 0U) &&
+            post == (mode ? n : 0U) && post_ok == post && raw_ok == n && preserved &&
+            old_accept == (mode || original ? n : 0U) && guarded_accept == (original ? n : 0U),
+            "v216 %s split=%u post=%u post_ok=%u unknown=%u read_errno=%d raw_ok=%u",
+            name, split, post, post_ok, unknown, read_error, raw_ok);
+    LOG("READ_DEFENSE_V216 stage=%s n=%u split=%u post=%u post_ok=%u unknown=%u read_errno=%d "
+        "old_accept=%u guarded_accept=%u raw_ok=%u alu=%d alu_failed=%u alu_accepted=%u "
+        "alu_errno=%d vma_preserved=%d execute=%04x read_mean_ns=%llu alu_ns=%llu",
+        name, n, split, post, post_ok, unknown, read_error, old_accept, guarded_accept, raw_ok,
+        alu.reservation_loss, alu.target_failed, alu.accepted, alu.error, preserved, returned,
+        (unsigned long long)(read_ns / n), (unsigned long long)alu.elapsed_ns);
+}
+
+/* Equal lengths and flags=0 keep the same VMA. Older range gates and
+ * 2.16.0's BRK/UXN modes release an overlapping session. */
 static void read_defense_same_remap(const char *name, const uint8_t *page, size_t page_size)
 {
     struct ud_mapping before, after;
@@ -190,10 +250,11 @@ static void read_defense_anonymous_guard(const struct uy_ctx *ctx, const uint8_t
         struct urov_y_request status;
         bool shape = !ud_mapping_at("/proc/self/maps", alias, &map) && !map.inode && !map.shared &&
                      map.readable && map.executable && !map.writable;
-        int error = shape ? read_defense_arm(ctx, alias, mode, all_callers) : EPROTO;
+        int error = shape ? read_defense_arm(ctx, alias, file, mode, all_callers) : EPROTO;
         uint32_t executed = crc_execute(alias);
         bool inactive = !uy_status(ctx, &status) && status.state == UROV_Y_INACTIVE;
-        REQUIRE(shape && error == EINVAL && executed == DOBBY_ORIGINAL && inactive,
+        REQUIRE(shape && error == EINVAL && executed == DOBBY_ORIGINAL && inactive &&
+                !memcmp(alias, file, DOBBY_CRC_BYTES),
                 "read-defense anonymous guard shape=%d errno=%d execute=%04x inactive=%d",
                 shape, error, executed, inactive);
         LOG("READ_DEFENSE_GUARD shape=%d errno=%d execute=%04x inactive=%d", shape, error, executed, inactive);
@@ -204,14 +265,15 @@ static void read_defense_anonymous_guard(const struct uy_ctx *ctx, const uint8_t
 static void read_defense_fixture(const char *name, const char *key, int repeats)
 {
     unsigned mode = 0;
-    bool hardened = strstr(name, "-hard") != NULL;
-    bool all_callers = !strcmp(name, "read-defense-ap-all") ||
-                       !strcmp(name, "read-defense-ap-all-hard");
-    if (all_callers || !strcmp(name, "read-defense-ap") ||
-        !strcmp(name, "read-defense-ap-hard")) mode = UROV_Y_MODE_PAGE_AP;
-    else if (!strcmp(name, "read-defense-brk")) mode = UROV_Y_MODE_SITE_BRK;
-    else if (!strcmp(name, "read-defense-uxn")) mode = UROV_Y_MODE_PAGE_UXN;
-    else if (strcmp(name, "read-defense-clean")) {
+    const char *shape = name + sizeof("read-defense-") - 1;
+    bool v216 = !strncmp(shape, "v216-", sizeof("v216-") - 1);
+    if (v216) shape += sizeof("v216-") - 1;
+    bool hardened = strstr(shape, "-hard") != NULL;
+    bool all_callers = !strcmp(shape, "ap-all") || !strcmp(shape, "ap-all-hard");
+    if (all_callers || !strcmp(shape, "ap") || !strcmp(shape, "ap-hard")) mode = UROV_Y_MODE_PAGE_AP;
+    else if (!strcmp(shape, "brk")) mode = UROV_Y_MODE_SITE_BRK;
+    else if (!strcmp(shape, "uxn")) mode = UROV_Y_MODE_PAGE_UXN;
+    else if (strcmp(shape, "clean")) {
         REQUIRE(0, "unknown read-defense mode");
         return;
     }
@@ -235,27 +297,57 @@ static void read_defense_fixture(const char *name, const char *key, int repeats)
     int error = app_pread(reference.fd, reference.file_offset + reference.entry, file, sizeof(file));
     REQUIRE(!error, "read-defense file read errno=%d", error);
     if (error) goto close_reference;
+    if (v216 && mprotect(reference.address, (size_t)page_size, PROT_READ)) {
+        REQUIRE(0, "v216 read-only control errno=%d", errno);
+        goto close_reference;
+    }
 
     have_thread = pthread_create(&thread, NULL, business_main, &business) == 0;
     REQUIRE(have_thread, "read-defense business thread");
-    read_defense_stage("clean", text, control, file, file, false, false, DOBBY_ORIGINAL,
-                       repeats, hardened);
+    if (v216) read_defense_v216_stage("clean", text, &reference, file, file, 0, false, repeats);
+    else read_defense_stage("clean", text, control, file, file, false, false, DOBBY_ORIGINAL,
+                            repeats, hardened);
+    if (mode) {
+        error = uy_init_key(&ctx, key);
+        REQUIRE(!error, "read-defense fixture key invalid");
+        if (error) goto close_reference;
+    }
+    if (v216 && mode) {
+        error = read_defense_arm(&ctx, text, file, mode, all_callers);
+        may_have_session = error != EBUSY;
+        REQUIRE(!error, "v216 identity register mode=%u errno=%d", mode, error);
+        if (error) goto close_reference;
+        read_defense_v216_stage("identity", text, &reference, file, file, mode, all_callers, repeats);
+        error = uy_deactivate(&ctx);
+        REQUIRE(!error, "v216 identity deactivate errno=%d", error ? errno : 0);
+        if (error) goto close_reference;
+    }
     dobby_setup_error = dobby_crc_setup((void *)text, (size_t)page_size);
     REQUIRE(!dobby_setup_error, "read-defense Dobby setup errno=%d", dobby_setup_error);
     if (dobby_setup_error) goto close_reference;
     copy_scalar(patched, text, sizeof(patched));
-    read_defense_same_remap("unarmed", text, (size_t)page_size);
-    read_defense_stage("patch_only", text, control, file, patched, false, false, DOBBY_HOOKED,
-                       repeats, hardened);
+    if (v216) read_defense_v216_stage("patch_only", text, &reference, file, patched, 0, false, repeats);
+    else {
+        read_defense_same_remap("unarmed", text, (size_t)page_size);
+        read_defense_stage("patch_only", text, control, file, patched, false, false, DOBBY_HOOKED,
+                           repeats, hardened);
+    }
     if (!mode) goto close_reference;
 
-    error = uy_init_key(&ctx, key);
-    REQUIRE(!error, "read-defense fixture key invalid");
-    if (error) goto close_reference;
-    error = read_defense_arm(&ctx, text, mode, all_callers || hardened);
+    error = read_defense_arm(&ctx, text, dobby_file_page, mode, all_callers || hardened);
     may_have_session = error != EBUSY;
     REQUIRE(!error, "read-defense register mode=%u errno=%d", mode, error);
     if (error) goto close_reference;
+    if (v216) {
+        read_defense_v216_stage("overlay", text, &reference, file, patched, mode, all_callers, repeats);
+        bool still_active = !uy_status(&ctx, &status) && status.state == UROV_Y_ACTIVE && !status.failures;
+        REQUIRE(still_active, "v216 parent session was changed by the probes");
+        LOG("READ_DEFENSE_V216_STATUS parent_active=%d callers=%u", still_active, all_callers ? 0U : 1U);
+        REQUIRE(!uy_deactivate(&ctx), "v216 deactivate errno=%d", errno);
+        read_defense_v216_stage("deactivated", text, &reference, file, patched, 0, false, repeats);
+        read_defense_anonymous_guard(&ctx, file, (size_t)page_size, mode, all_callers);
+        goto close_reference;
+    }
     read_defense_same_remap("outside", reference.address, (size_t)page_size);
     read_defense_stage("overlay", text, control, file,
                        hardened && mode == UROV_Y_MODE_PAGE_AP ? file : patched, true,
