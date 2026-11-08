@@ -623,3 +623,73 @@ int uro_decode_store(uint32_t insn, const struct uro_regs *regs,
     *out = store;
     return 0;
 }
+
+/* --------------------------------------------------------------- atomics */
+
+/* A64 LSE atomics all use a single 64/128-bit naturally aligned access.  The
+ * PAGE_AP handler cannot replay the instruction after the exception (the
+ * local monitor and the exact RMW window are gone), so it decodes the
+ * operation here and applies it to the image and live page itself. */
+int uro_decode_atomic(uint32_t insn, const struct uro_regs *regs,
+                      struct uro_atomic *out)
+{
+    struct uro_atomic a = { 0 };
+    uint64_t base;
+
+    a.size = 1U << (insn >> 30);
+    a.count = 1;
+    a.rs = (insn >> 16) & 31U;
+    a.rt = insn & 31U;
+    a.rs2 = (a.rs + 1U) & 31U;
+    a.rt2 = (a.rt + 1U) & 31U;
+
+    if ((insn & 0x3f20fc00U) == 0x08207c00U) {
+        /* CAS/CASA/CASL/CASAL, and CASP with bit 15 set. */
+        if ((insn & 0x0000fc00U) != 0x00007c00U) return -1;
+        a.op = URO_ATOMIC_CAS;
+        a.return_old = 1;
+        a.acquire = (insn >> 23) & 1U;
+        a.release = (insn >> 22) & 1U;
+        if ((insn >> 30) < 2U) {
+            /* CASP/CASPA/CASPL/CASPAL encode 0=W (4 bytes per half),
+             * 1=X (8 bytes per half); the pair registers are consecutive. */
+            unsigned enc = insn >> 30;
+
+            a.size = enc ? 8U : 4U;
+            a.count = 2;
+            a.total = (uint64_t)a.size * 2U;
+            if (a.rs == 31U || a.rt == 31U || (a.rs & 1U) || (a.rt & 1U))
+                return -1;
+        } else {
+            a.total = a.size;
+        }
+    } else if ((insn & 0x3f20fc00U) == 0x38208000U) {
+        /* SWP/SWPA/SWPL/SWPAL */
+        a.op = URO_ATOMIC_SWP;
+        a.return_old = 1;
+        a.acquire = (insn >> 23) & 1U;
+        a.release = (insn >> 22) & 1U;
+        a.total = a.size;
+    } else if ((insn & 0x3f200c00U) == 0x38200000U &&
+               ((insn >> 10) & 0x3fU) != 0x20U) {
+        /* LDADD/LDCLR/LDEOR/LDSET/LDSMAX/LDSMIN/LDUMAX/LDUMIN and the
+         * no-return ST* forms.  o3 (bit 15) selects "no result". */
+        a.op = (insn >> 12) & 7U;
+        a.return_old = !((insn >> 15) & 1U);
+        a.acquire = (insn >> 23) & 1U;
+        a.release = (insn >> 22) & 1U;
+        a.total = a.size;
+    } else {
+        return -1;
+    }
+
+    if (a.total > 64U || base_value(regs, (insn >> 5) & 31U, &base))
+        return -1;
+    if (base & (a.total - 1U))
+        return -1;
+    if (a.total - 1U > URO_U64_MAX - base)
+        return -1;
+    a.address = base;
+    *out = a;
+    return 0;
+}

@@ -227,6 +227,54 @@ __attribute__((noinline)) static void prot_zero64(volatile uint8_t *p)
     __asm__ volatile("dc zva, %0" : : "r"(p) : "memory");
 }
 
+/* LSE read-modify-write shapes: the exception return loses the instruction's
+ * own RMW window, so the handler has to reproduce it. */
+__attribute__((noinline)) static uint64_t prot_ldadd64(volatile uint64_t *p, uint64_t v)
+{
+    uint64_t old;
+
+    __asm__ volatile("ldadd %1, %0, [%2]" : "=&r"(old) : "r"(v), "r"(p) : "memory");
+    return old;
+}
+
+__attribute__((noinline)) static uint64_t prot_swp64(volatile uint64_t *p, uint64_t v)
+{
+    uint64_t old;
+
+    __asm__ volatile("swp %1, %0, [%2]" : "=&r"(old) : "r"(v), "r"(p) : "memory");
+    return old;
+}
+
+__attribute__((noinline)) static uint64_t prot_cas64(volatile uint64_t *p,
+                                                      uint64_t expected, uint64_t desired)
+{
+    __asm__ volatile("cas %0, %1, [%2]" : "+r"(expected) : "r"(desired), "r"(p) : "memory");
+    return expected;
+}
+
+__attribute__((noinline)) static void prot_stadd64(volatile uint64_t *p, uint64_t v)
+{
+    __asm__ volatile("stadd %0, [%1]" : : "r"(v), "r"(p) : "memory");
+}
+
+__attribute__((noinline)) static void prot_casp128(volatile uint64_t *p,
+                                                    uint64_t e0, uint64_t e1,
+                                                    uint64_t n0, uint64_t n1,
+                                                    uint64_t *out0, uint64_t *out1)
+{
+    register uint64_t x0 asm("x0") = e0;
+    register uint64_t x1 asm("x1") = e1;
+    register uint64_t x2 asm("x2") = n0;
+    register uint64_t x3 asm("x3") = n1;
+    register volatile uint64_t *x4 asm("x4") = p;
+
+    __asm__ volatile("casp x0, x1, x2, x3, [x4]"
+                     : "+r"(x0), "+r"(x1)
+                     : "r"(x2), "r"(x3), "r"(x4) : "memory");
+    *out0 = x0;
+    *out1 = x1;
+}
+
 /* Kernel-assisted writer: /proc/self/mem takes access_remote_vm(), never the
  * EL0 data abort, so the bytes have to be reflected by the kread hook. */
 static int prot_mem_write8(void *address, uint8_t value)
@@ -423,7 +471,71 @@ static void elimination_protection_case(struct uy_ctx *ctx)
                     "PROT zva=%llx/%llx", (unsigned long long)uy_business_ldr(sb + 256),
                     (unsigned long long)uy_business_ldr(sb + 312));
             REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT zva retired");
-            LOG("ELIM_PROT_STORE shapes=11 smaps=%d dirty_kb=%u anon_kb=%u",
+
+            /* LSE atomics are decoded and completed by the handler. */
+            {
+                uint64_t old, got, expect;
+
+                old = uy_business_ldr(sb + 384);
+                got = prot_ldadd64((volatile uint64_t *)(sb + 384), 0x11);
+                REQUIRE(got == old && uy_business_ldr(sb + 384) == old + 0x11U,
+                        "PROT ldadd old=%llx got=%llx now=%llx",
+                        (unsigned long long)old, (unsigned long long)got,
+                        (unsigned long long)uy_business_ldr(sb + 384));
+                REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT ldadd retired");
+
+                old = uy_business_ldr(sb + 400);
+                got = prot_swp64((volatile uint64_t *)(sb + 400), 0xfeedfacecafebeefU);
+                REQUIRE(got == old && uy_business_ldr(sb + 400) == 0xfeedfacecafebeefU,
+                        "PROT swp old=%llx got=%llx now=%llx",
+                        (unsigned long long)old, (unsigned long long)got,
+                        (unsigned long long)uy_business_ldr(sb + 400));
+                REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT swp retired");
+
+                old = uy_business_ldr(sb + 416);
+                expect = old;
+                got = prot_cas64((volatile uint64_t *)(sb + 416), expect, 0x123456789abcdef0U);
+                REQUIRE(got == old && uy_business_ldr(sb + 416) == 0x123456789abcdef0U,
+                        "PROT cas old=%llx got=%llx now=%llx",
+                        (unsigned long long)old, (unsigned long long)got,
+                        (unsigned long long)uy_business_ldr(sb + 416));
+                REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT cas retired");
+
+                old = uy_business_ldr(sb + 432);
+                expect = old ^ UINT64_C(0xffff);
+                got = prot_cas64((volatile uint64_t *)(sb + 432), expect, 0x5555);
+                REQUIRE(got == old && uy_business_ldr(sb + 432) == old,
+                        "PROT cas-fail old=%llx got=%llx now=%llx",
+                        (unsigned long long)old, (unsigned long long)got,
+                        (unsigned long long)uy_business_ldr(sb + 432));
+                REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT cas-fail retired");
+
+                old = uy_business_ldr(sb + 448);
+                prot_stadd64((volatile uint64_t *)(sb + 448), 7);
+                REQUIRE(uy_business_ldr(sb + 448) == old + 7U,
+                        "PROT stadd old=%llx now=%llx", (unsigned long long)old,
+                        (unsigned long long)uy_business_ldr(sb + 448));
+                REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT stadd retired");
+
+                {
+                    uint64_t e0 = uy_business_ldr(sb + 464);
+                    uint64_t e1 = uy_business_ldr(sb + 472);
+                    uint64_t g0 = 0, g1 = 0;
+
+                    prot_casp128((volatile uint64_t *)(sb + 464), e0, e1,
+                                 UINT64_C(0x1111222233334444),
+                                 UINT64_C(0x5555666677778888), &g0, &g1);
+                    REQUIRE(g0 == e0 && g1 == e1 &&
+                            uy_business_ldr(sb + 464) == UINT64_C(0x1111222233334444) &&
+                            uy_business_ldr(sb + 472) == UINT64_C(0x5555666677778888),
+                            "PROT casp got=%llx/%llx now=%llx/%llx",
+                            (unsigned long long)g0, (unsigned long long)g1,
+                            (unsigned long long)uy_business_ldr(sb + 464),
+                            (unsigned long long)uy_business_ldr(sb + 472));
+                    REQUIRE(!uy_status(ctx, &st) && st.reserved == 1, "PROT casp retired");
+                }
+            }
+            LOG("ELIM_PROT_STORE shapes=16 smaps=%d dirty_kb=%u anon_kb=%u",
                 have_smaps, dirty, anon);
         } else {
             LOG("ELIM_PROT_STORE skipped entry=%u", (unsigned)p.entry);

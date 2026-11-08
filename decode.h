@@ -84,4 +84,43 @@ struct uro_store {
 int uro_decode_store(uint32_t insn, const struct uro_regs *regs,
                      struct uro_store *out);
 
+/* LSE atomic read-modify-write (LDADD/LDCLR/LDEOR/LDSET/LDSMAX/LDSMIN/
+ * LDUMAX/LDUMIN, SWP, CAS/CASP), including the no-return ST* forms.  The
+ * PAGE_AP write handler executes the same operation on the image/live page.
+ * `size` is the number of bytes per register (1, 2, 4 or 8); `count` is 2
+ * for CASP only.  `rs`/`rs2` are the source (or CAS expected) registers and
+ * `rt`/`rt2` the old-value (or CAS desired) registers.  `return_old` is clear
+ * for the ST* forms, which write without a result register. */
+enum uro_atomic_op {
+    URO_ATOMIC_ADD,
+    URO_ATOMIC_CLR,
+    URO_ATOMIC_EOR,
+    URO_ATOMIC_SET,
+    URO_ATOMIC_SMAX,
+    URO_ATOMIC_SMIN,
+    URO_ATOMIC_UMAX,
+    URO_ATOMIC_UMIN,
+    URO_ATOMIC_SWP,
+    URO_ATOMIC_CAS,
+};
+
+struct uro_atomic {
+    uint64_t address;
+    unsigned size;
+    unsigned count;
+    unsigned op;
+    unsigned rs;
+    unsigned rs2;
+    unsigned rt;
+    unsigned rt2;
+    unsigned return_old;
+    unsigned acquire;
+    unsigned release;
+    uint64_t total;
+};
+
+/* Return 0 on a supported atomic RMW, -1 otherwise. */
+int uro_decode_atomic(uint32_t insn, const struct uro_regs *regs,
+                      struct uro_atomic *out);
+
 #endif

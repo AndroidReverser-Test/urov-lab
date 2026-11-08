@@ -103,6 +103,11 @@ static inline void uy_flush_icache_all(void)
 #define UY_BTI_JC 0xd50324dfU
 
 #define UY_FOLL_WRITE 0x01U
+/* enum in mm.h: LONGTERM and PIN are the two callers that require the exact
+ * pinned user page, so the GUP overlay leaves them alone. */
+#define UY_FOLL_LONGTERM 0x100U
+#define UY_FOLL_PIN 0x200U
+#define UY_GFP_ATOMIC 0xa20U
 
 /* Linux user protection bits (uapi/asm-generic/mman-common.h).  On arm64
  * only PROT_NONE produces a leaf that EL0 cannot read; PROT_WRITE and
@@ -151,11 +156,14 @@ _Static_assert(sizeof(struct uy_fpstate) == UY_FPSIMD_BYTES, "FPSIMD image size"
 struct uy_llsc {
     uint64_t base;
     uint64_t value;
+    uint64_t value2;     /* second half of LDXP/STXP */
     uint64_t stxr_pc;    /* STXR may sit after a bounded run of NOPs */
-    unsigned size;
+    unsigned size;       /* bytes per register half (LDXP uses 4 or 8) */
     unsigned data_reg;
+    unsigned data_reg2;
     unsigned base_reg;
     unsigned status_reg;
+    unsigned pair;       /* LDXP/LDAXP;...;STXP/STLXP */
     unsigned acquire;
     unsigned release;
     unsigned valid;
@@ -185,6 +193,13 @@ typedef long (*kernel_read_t)(void *file, void *buf, unsigned long count,
 typedef void (*msleep_t)(unsigned int msecs);
 typedef void *(*filp_open_t)(const char *path, int flags, unsigned short mode);
 typedef int (*filp_close_t)(void *file, void *owner);
+typedef int (*gup_fast_t)(unsigned long start, int nr_pages, unsigned int gup_flags,
+                          void **pages);
+typedef void *(*alloc_pages_t)(unsigned int gfp, unsigned int order, int nid,
+                               void *nodemask);
+typedef void (*put_page_t)(void *page);
+typedef void (*copy_highpage_t)(void *to, void *from);
+typedef void *(*vmalloc_to_page_t)(const void *addr);
 
 extern uint64_t *pgtable_entry(uint64_t pgd, uint64_t va);
 
@@ -210,6 +225,7 @@ struct uy_page {
     uint32_t armed;      /* an AP[1]=0 trap is installed in the leaf PTE */
     uint32_t want;       /* the current VMA allows EL0 reads: trap desired */
     uint32_t dead;       /* a real store reached the page: overlay is stale */
+    uint32_t gone;       /* the registered mapping was unmapped/replaced */
     uint32_t seq;        /* image publication sequence for in-place stores */
     /* Registration-time VMA identity.  A fork copies the VMA with
      * vm_area_dup(), so the child keeps the same vm_file pointer, pgoff and
@@ -241,7 +257,24 @@ struct uy_session {
     struct uy_site sites[UROV_Y_MAX_SITES];
 };
 
+/* A forked child gets its own COW copy of every registered page.  Reads are
+ * still served from the owner's image until the child writes; the first
+ * child write allocates one private image page so the child's bytes never
+ * leak into the parent's image (and vice versa).  A fixed pool keeps the
+ * fault path allocation-free. */
+#define UY_SHADOW_MAX 32U
+struct uy_shadow {
+    void *mm;
+    uint64_t base;
+    uint8_t *image;
+    uint32_t used;
+    uint32_t seq;
+};
+
 static struct uy_session g_sess;
+static struct uy_shadow g_shadow[UY_SHADOW_MAX];
+static uint8_t *g_shadow_arena;
+static uint32_t g_shadow_used;
 static struct uy_layout g_layout;
 static uint8_t g_selftest_ws[UROV_Y_PAGE];
 static int g_state;
@@ -308,6 +341,15 @@ static int g_page_hooked;
 static int g_mmf_hooked;
 static int g_degraded;
 static int g_abort_has_iss2;
+/* GUP fast is the one user-page pin path that bypasses both the EL0 data
+ * abort and the kernel access_remote_vm hook (vmsplice is the standard
+ * reader).  The after hook substitutes a private page holding the image. */
+static gup_fast_t f_gup_fast;
+static alloc_pages_t f_alloc_pages;
+static put_page_t f_put_page;
+static copy_highpage_t f_copy_highpage;
+static vmalloc_to_page_t f_vmalloc_to_page;
+static int g_gup_hooked;
 /* Kernel-assisted reads (access_remote_vm/__access_remote_vm) are overlaid by
  * a function hook.  The hook target is the implementation entry when it
  * exists, so both /proc/<pid>/mem and access_process_vm() are covered. */
@@ -455,6 +497,7 @@ static void uy_free(void *p)
 }
 
 static int overlay_live(void);
+static void uy_rearm_written(void *mm, uint64_t address, unsigned len);
 
 static uint64_t session_get_mm(void *mm)
 {
@@ -511,7 +554,8 @@ static struct uy_page *page_find(uint64_t page)
 
         if (page < base) hi = mid;
         else if (page > base) lo = mid + 1;
-        else return &g_sess.pages[mid];
+        else return __atomic_load_n(&g_sess.pages[mid].gone, __ATOMIC_ACQUIRE) ?
+                     NULL : &g_sess.pages[mid];
     }
     return 0;
 }
@@ -521,7 +565,9 @@ static struct uy_page *page_by_index(uint32_t index)
     uint32_t i;
 
     for (i = 0; i < g_sess.page_count; ++i)
-        if (g_sess.pages[i].index == index) return &g_sess.pages[i];
+        if (g_sess.pages[i].index == index &&
+            !__atomic_load_n(&g_sess.pages[i].gone, __ATOMIC_ACQUIRE))
+            return &g_sess.pages[i];
     return 0;
 }
 
@@ -628,6 +674,130 @@ static void page_store_bytes(struct uy_page *p, uint64_t off,
     __atomic_store_n(&p->seq, seq + 2U, __ATOMIC_RELEASE);
 }
 
+static struct uy_shadow *uy_shadow_find(void *mm, uint64_t base)
+{
+    uint32_t i;
+
+    for (i = 0; i < UY_SHADOW_MAX; ++i)
+        if (g_shadow[i].used && g_shadow[i].mm == mm && g_shadow[i].base == base)
+            return &g_shadow[i];
+    return 0;
+}
+
+static struct uy_shadow *uy_shadow_get(void *mm, uint64_t base, int create)
+{
+    struct uy_shadow *sh = uy_shadow_find(mm, base);
+    struct uy_page *p;
+    uint32_t idx;
+
+    if (sh || !create || !mm || mm == g_sess.mm || !g_shadow_arena)
+        return sh;
+    for (idx = 0; idx < UY_SHADOW_MAX; ++idx)
+        if (!g_shadow[idx].used) break;
+    if (idx == UY_SHADOW_MAX) return 0;
+    p = page_find(base);
+    if (!p) return 0;
+    sh = &g_shadow[idx];
+    sh->image = g_shadow_arena + (uint64_t)idx * g_page_size;
+    page_view(p, 0, g_page_size, sh->image, 0);
+    sh->mm = mm;
+    sh->base = base;
+    sh->seq = 0;
+    __atomic_store_n(&sh->used, 1, __ATOMIC_RELEASE);
+    ++g_shadow_used;
+    return sh;
+}
+
+static void uy_shadow_store(struct uy_shadow *sh, unsigned off,
+                            const uint8_t *bytes, unsigned len)
+{
+    uint32_t seq = __atomic_load_n(&sh->seq, __ATOMIC_RELAXED);
+
+    __atomic_store_n(&sh->seq, seq + 1U, __ATOMIC_RELEASE);
+    __asm__ volatile("dmb ishst" : : : "memory");
+    memcpy(sh->image + off, bytes, len);
+    __asm__ volatile("dmb ishst" : : : "memory");
+    __atomic_store_n(&sh->seq, seq + 2U, __ATOMIC_RELEASE);
+}
+
+static void uy_shadow_view(struct uy_shadow *sh, unsigned off, unsigned total,
+                           uint8_t *out)
+{
+    unsigned attempt;
+
+    for (attempt = 0; attempt < 64U; ++attempt) {
+        uint32_t seq1 = __atomic_load_n(&sh->seq, __ATOMIC_ACQUIRE);
+        uint32_t seq2;
+
+        if (seq1 & 1U) {
+            __asm__ volatile("yield" : : : "memory");
+            continue;
+        }
+        memcpy(out, sh->image + off, total);
+        seq2 = __atomic_load_n(&sh->seq, __ATOMIC_ACQUIRE);
+        if (seq1 == seq2 && !(seq2 & 1U)) return;
+    }
+    memcpy(out, sh->image + off, total);
+}
+
+static void uy_shadow_free_all(void)
+{
+    memset(g_shadow, 0, sizeof(g_shadow));
+    g_shadow_used = 0;
+}
+
+static void page_view_mm(void *mm, struct uy_page *p, uint64_t off, unsigned total,
+                         uint8_t *out, int replay)
+{
+    struct uy_shadow *sh = mm && mm != g_sess.mm ? uy_shadow_find(mm, p->base) : 0;
+
+    if (sh) uy_shadow_view(sh, (unsigned)off, total, out);
+    else page_view(p, off, total, out, replay);
+}
+
+/* Mirror a successful write of [address, address+len) into every registered
+ * page it covers.  The live bytes are written by the caller through the
+ * kernel's GUP path; this only keeps the read view consistent.  Cross-page
+ * stores are split at page boundaries. */
+static void uy_image_store(uint64_t address, const uint8_t *bytes, unsigned len)
+{
+    uint64_t done = 0;
+
+    while (done < len) {
+        uint64_t cur = address + done;
+        uint64_t page = page_base(cur);
+        unsigned off = (unsigned)(cur - page);
+        unsigned seg = g_page_size - off;
+        struct uy_page *p;
+
+        if (seg > len - done) seg = len - (unsigned)done;
+        p = page_find(page);
+        if (p) page_store_bytes(p, off, bytes + done, seg);
+        done += seg;
+    }
+}
+
+static void uy_shadow_store_range(void *mm, uint64_t address,
+                                  const uint8_t *bytes, unsigned len)
+{
+    uint64_t done = 0;
+
+    while (done < len) {
+        uint64_t cur = address + done;
+        uint64_t page = page_base(cur);
+        unsigned off = (unsigned)(cur - page);
+        unsigned seg = g_page_size - off;
+        struct uy_page *p;
+        struct uy_shadow *sh;
+
+        if (seg > len - done) seg = len - (unsigned)done;
+        p = page_find(page);
+        sh = p ? uy_shadow_get(mm, p->base, 1) : 0;
+        if (sh) uy_shadow_store(sh, off, bytes + done, seg);
+        done += seg;
+    }
+}
+
 static int range_covered(uint64_t address, unsigned total)
 {
     uint64_t done = 0;
@@ -649,7 +819,7 @@ static int range_covered(uint64_t address, unsigned total)
  * least one segment was served by the session, 0 when the whole range was
  * native memory, and a negative fail-closed code otherwise.  Cross-page
  * access is just this loop; a 64-byte LD1 can span two pages. */
-static int read_range(uint64_t address, unsigned total, int allow_fake,
+static int read_range(void *mm, uint64_t address, unsigned total, int allow_fake,
                       uint8_t *out, uint64_t *bad)
 {
     uint64_t done = 0;
@@ -665,7 +835,7 @@ static int read_range(uint64_t address, unsigned total, int allow_fake,
         p = page_find(page_base(cur));
         if (p) {
             covered = 1;
-            page_view(p, off, seg, out + done, !allow_fake);
+            page_view_mm(mm, p, off, seg, out + done, !allow_fake);
         } else if (f_copy_in(out + done, (const void *)(uintptr_t)cur, seg)) {
             *bad = cur;
             return -5;
@@ -942,12 +1112,6 @@ static int page_set_uxn(void *mm, uint64_t page, int set)
  * trap is independent of execute permission.  An execute-only page is never
  * armed this way; its AP[1]=0 is the kernel's own execute-only encoding and
  * is left untouched. */
-static int page_set_ap(void *mm, uint64_t page, int set)
-{
-    return page_update_bits(mm, page, set ? PTE_USER : 0, set ? 0 : PTE_USER,
-                            PTE_RDONLY, PTE_DBM, 0);
-}
-
 /* The same AP[1] transition on a leaf whose write/COW state may already have
  * changed.  A successful PAGE_AP store lets Linux perform its normal COW, so
  * the leaf can be writable when the trap has to be reinstalled; AP[1] is
@@ -996,7 +1160,8 @@ static int ap_disarm_pages(struct uy_session *s, void *mm)
         int ret;
 
         __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
-        if (!__atomic_load_n(&p->armed, __ATOMIC_ACQUIRE)) continue;
+        if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE) ||
+            !__atomic_load_n(&p->armed, __ATOMIC_ACQUIRE)) continue;
         ret = page_set_ap_any(mm, p->base, 1);
         if (ret < 0 && ret != -ENOENT) {
             rc = ret;
@@ -1044,6 +1209,7 @@ static void ap_protection_update(void *mm, uint64_t start, uint64_t len, uint64_
         int ret;
 
         if (p->base < start || p->base + g_page_size > end) continue;
+        if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
         if (!readable) {
             __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
             __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
@@ -1084,11 +1250,22 @@ static int ap_shadow_rearm(void *mm, uint64_t page, uint64_t file, uint64_t pgof
     if (!p || !mm || mm == g_sess.mm) return 0;
     if (__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE) ||
         !__atomic_load_n(&p->want, __ATOMIC_ACQUIRE)) return 0;
-    if (file != (uint64_t)(uintptr_t)p->vma_file || pgoff != p->vma_pgoff ||
-        start != p->vma_start || end != p->vma_end)
+    if (page < start || page + g_page_size > end ||
+        file != (uint64_t)(uintptr_t)p->vma_file)
         return 0;
-    ret = page_set_ap(mm, page, 0);
-    return ret > 0 ? 1 : 0;
+    /* A child mprotect/mremap can split or move the VMA, so compare the
+     * page's file offset rather than the whole VMA range when BTF provides
+     * vm_pgoff.  Fall back to the exact range on older layouts. */
+    if (g_layout.vma_pgoff_ok) {
+        uint64_t want = p->vma_pgoff + ((p->base - p->vma_start) >> g_page_shift);
+        uint64_t have = pgoff + ((page - start) >> g_page_shift);
+
+        if (want != have) return 0;
+    } else if (start != p->vma_start || end != p->vma_end) {
+        return 0;
+    }
+    ret = page_set_ap_any(mm, page, 0);
+    return ret >= 0 ? 1 : 0;
 }
 
 /* Fault the page in if needed, then install the trap bit. No byte of the code
@@ -1422,6 +1599,32 @@ static int uy_is_stxr(uint32_t insn, unsigned *size, unsigned *rs, unsigned *rt,
     return 1;
 }
 
+/* Pair exclusives: size[31:30], 001000, R=1 for LDXP/LDAXP (bit 22), R=0
+ * for STXP/STLXP, Rt2[14:10], acquire/release in bit 15, Rn[9:5], Rt[4:0].
+ * bit 21 is fixed one. */
+static int uy_is_ldxp(uint32_t insn, unsigned *size, unsigned *rt, unsigned *rt2,
+                      unsigned *rn)
+{
+    if ((insn & 0x3f600000U) != 0x08600000U) return 0;
+    *size = insn >> 30;
+    *rt = insn & 31U;
+    *rt2 = (insn >> 10) & 31U;
+    *rn = (insn >> 5) & 31U;
+    return 1;
+}
+
+static int uy_is_stxp(uint32_t insn, unsigned *size, unsigned *rs, unsigned *rt,
+                      unsigned *rt2, unsigned *rn)
+{
+    if ((insn & 0x3f600000U) != 0x08200000U) return 0;
+    *size = insn >> 30;
+    *rs = (insn >> 16) & 31U;
+    *rt = insn & 31U;
+    *rt2 = (insn >> 10) & 31U;
+    *rn = (insn >> 5) & 31U;
+    return 1;
+}
+
 /* A direct branch can enter the load without executing the LDXR.  Retiring
  * the STXR on such a path would report a success the hardware never produced.
  * 2.7.0 scanned only the faulting page; the 2.8.0 cross-page probe puts the
@@ -1613,6 +1816,7 @@ static int uy_page_present(void *mm, uint64_t addr)
 static int uy_code_scan_page_buf(void *mm, uint64_t page, const struct uy_code_region *src,
                                  uint32_t *buf, unsigned bytes)
 {
+    struct uy_page *tp = page_find(page);
     uint64_t at;
     int result = 0;
 
@@ -1621,7 +1825,12 @@ static int uy_code_scan_page_buf(void *mm, uint64_t page, const struct uy_code_r
         unsigned n = (left > bytes ? bytes : (unsigned)left) >> 2;
         unsigned k;
 
-        if (f_copy_in(buf, (const void *)(uintptr_t)at, n * 4U)) {
+        /* copy_from_user_nofault() uses an unprivileged load under PAN and
+         * therefore faults on the module's own AP[1]=0 leaf.  The immutable
+         * snapshot is the same code and is readable from the kernel. */
+        if (tp) {
+            memcpy(buf, tp->snapshot + (at - page), n * 4U);
+        } else if (f_copy_in(buf, (const void *)(uintptr_t)at, n * 4U)) {
             if (uy_page_present(mm, at)) return -1;
             if (!result) result = 1;
             continue;
@@ -1799,6 +2008,47 @@ out:
     uy_scan_unlock();
 }
 
+/* mremap() can move a whole VMA without changing its contents.  The branch
+ * bitmap is indexed relative to each region start, so shifting every region
+ * that lies entirely inside the moved range keeps the bitmap valid without
+ * freeing memory that a concurrent fault path may still be reading.  Any
+ * partial move makes the map incomplete and the bridge declines. */
+static void uy_code_mremap(uint64_t old, uint64_t old_len, uint64_t new,
+                           uint64_t new_len)
+{
+    uint64_t old_end = old + old_len, new_end = new + new_len;
+    uint64_t delta = new - old;
+    uint32_t i;
+
+    if (!delta || old_end < old || new_end < new) return;
+    for (i = 0; i < g_code.count; ++i) {
+        struct uy_code_region *r = &g_code.region[i];
+
+        if (r->end > old && r->start < old_end) {
+            if (r->start < old || r->end > old_end || r->start - old >= new_len ||
+                r->end - old > new_len) {
+                __atomic_store_n(&g_code.complete, 0, __ATOMIC_RELEASE);
+                return;
+            }
+            continue;
+        }
+        /* A code region already at the destination would be replaced by the
+         * move; its old bitmap indices are no longer valid. */
+        if (r->end > new && r->start < new_end) {
+            __atomic_store_n(&g_code.complete, 0, __ATOMIC_RELEASE);
+            return;
+        }
+    }
+    for (i = 0; i < g_code.count; ++i) {
+        struct uy_code_region *r = &g_code.region[i];
+
+        if (r->end > old && r->start < old_end) {
+            r->start += delta;
+            r->end += delta;
+        }
+    }
+}
+
 /* A file-backed code page that REGISTER saw non-resident became present.  The
  * fault hook runs under the fault's mmap read lock, so the page and its VMA
  * are stable and the scan finishes before the task returns to EL0. */
@@ -1903,6 +2153,91 @@ static int uy_llsc_stxr_after(uint64_t pc, uint64_t *stxr_pc, uint32_t *stxr_ins
 }
 
 
+static int uy_llsc_stxp_after(uint64_t pc, uint64_t *stxp_pc, uint32_t *stxp_insn,
+                              unsigned *ssize, unsigned *srs, unsigned *srt,
+                              unsigned *srt2, unsigned *srn)
+{
+    unsigned gap;
+
+    for (gap = 0; gap < UY_LLSC_FORWARD_MAX; ++gap) {
+        uint64_t at = pc + 4U + 4U * gap;
+        uint32_t insn;
+
+        if (!uy_user_range(at, sizeof(insn)) || uy_read_insn(at, &insn)) return 0;
+        if (uy_is_stxp(insn, ssize, srs, srt, srt2, srn)) {
+            *stxp_pc = at;
+            *stxp_insn = insn;
+            return 1;
+        }
+        if (insn != UY_NOP && insn != UY_BTI_C && insn != UY_BTI_J && insn != UY_BTI_JC)
+            return 0;
+    }
+    return 0;
+}
+
+/* LDXP/LDAXP; load; STXP/STLXP.  The paired exclusive is the AP probe's
+ * construction: the LDXP targets private scratch, the load samples the
+ * registered page, and the STXP writes the scratch back.  Unlike the single
+ * case the pair register proof is two registers, but the same control-flow
+ * rules apply. */
+static void uy_llsc_prepare_pair(const struct uro_regs *regs, uint64_t pc,
+                                 const struct uro_load *load, struct uy_llsc *out)
+{
+    uint32_t stxp_insn = 0, ldxp_insn = 0;
+    unsigned lsize = 0, lrt = 0, lrt2 = 0, lrn = 0, ssize = 0, srs = 0, srt = 0, srt2 = 0, srn = 0;
+    uint64_t mem[2] = { 0, 0 }, mask, ldxp_pc = 0, stxp_pc = 0;
+    unsigned gap, total;
+
+    if (!uy_llsc_stxp_after(pc, &stxp_pc, &stxp_insn, &ssize, &srs, &srt, &srt2, &srn))
+        return;
+    for (gap = 0; gap < 4U; ++gap) {
+        uint64_t at = pc - 4U - 4U * gap;
+        uint32_t insn;
+
+        if (at < 4U || uy_read_insn(at, &insn)) break;
+        if (uy_is_ldxp(insn, &lsize, &lrt, &lrt2, &lrn)) {
+            ldxp_pc = at;
+            ldxp_insn = insn;
+            break;
+        }
+        if (insn != UY_NOP) break;
+    }
+    if (!ldxp_pc || lsize < 2U || lsize != ssize) return;
+    if (lrt == lrt2 || lrt != srt || lrt2 != srt2 || srt == srt2) return;
+    if (lrn == 31U || srn != lrn) return;
+    if (lrt == 31U && lrt2 == 31U) {
+        /* Both halves discarded: same control-flow-only proof as LDXR XZR. */
+    } else {
+        total = 2U << lsize;
+        if (regs->x[lrn] & ((UINT64_C(1) << lsize) * 2U - 1U)) return;
+        if (f_copy_in(mem, (const void *)(uintptr_t)regs->x[lrn], total)) return;
+        mask = lsize == 3U ? ~UINT64_C(0) : UINT64_C(0xffffffff);
+        if (lrt != 31U && regs->x[lrt] != (mem[0] & mask)) return;
+        if (lrt2 != 31U && regs->x[lrt2] != (mem[1] & mask)) return;
+    }
+    if (uy_llsc_skipped(ldxp_pc, pc) || uy_llsc_indirect(regs, ldxp_pc, pc)) return;
+    if ((lrt != 31U && load->rt == lrt) || (lrt2 != 31U && load->rt == lrt2) ||
+        load->rt == lrn || (load->count == 2U &&
+        ((lrt != 31U && load->rt2 == lrt) || (lrt2 != 31U && load->rt2 == lrt2) ||
+         load->rt2 == lrn)))
+        return;
+    if (load->writeback && load->rn == lrn) return;
+
+    out->base = regs->x[lrn];
+    out->value = lrt == 31U ? 0 : regs->x[lrt];
+    out->value2 = lrt2 == 31U ? 0 : regs->x[lrt2];
+    out->stxr_pc = stxp_pc;
+    out->size = 1U << lsize;
+    out->data_reg = lrt;
+    out->data_reg2 = lrt2;
+    out->base_reg = lrn;
+    out->status_reg = srs;
+    out->pair = 1;
+    out->acquire = (ldxp_insn & (1U << 15)) != 0;
+    out->release = (stxp_insn & (1U << 15)) != 0;
+    out->valid = 1;
+}
+
 /* Decide whether the faulting load sits in an LDXR/LDAXR; load; STXR/STLXR
  * sequence that the handler can complete.
  *
@@ -1914,8 +2249,8 @@ static int uy_llsc_stxr_after(uint64_t pc, uint64_t *stxr_pc, uint32_t *stxr_ins
  * now found in every executable mapping of the process, and an indirect
  * branch that leaves that span in a GPR is rejected.  The store value must
  * still equal memory, so the bridge never changes bytes. */
-static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
-                            const struct uro_load *load, struct uy_llsc *out)
+static void uy_llsc_prepare_single(const struct uro_regs *regs, uint64_t pc,
+                                   const struct uro_load *load, struct uy_llsc *out)
 {
     uint32_t stxr_insn = 0, ldxr_insn = 0;
     unsigned lsize = 0, lrt = 0, lrn = 0, ssize, srt, srn, srs;
@@ -1992,6 +2327,19 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
     out->valid = 1;
 }
 
+static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
+                            const struct uro_load *load, struct uy_llsc *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (!f_copy_out || !load || load->vector || load->multi || load->count != 1U)
+        return;
+    if (pc < 4U || !uy_user_range(pc - 4U, 4U))
+        return;
+    uy_llsc_prepare_single(regs, pc, load, out);
+    if (!out->valid)
+        uy_llsc_prepare_pair(regs, pc, load, out);
+}
+
 /* Commit a prepared bridge after uy_emulate_load() advanced PC past the
  * faulting load.  The store is the STXR's own (same address, width and value),
  * so a failure to write leaves PC on the STXR and the native instruction runs
@@ -2000,12 +2348,31 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
 static void uy_llsc_commit(struct pt_regs *regs, uint64_t fault_pc,
                            const struct uy_llsc *plan)
 {
+    uint64_t values[2];
+    unsigned total;
+
     if (!plan->valid || regs->pc != fault_pc + 4U) return;
-    if (!uy_user_range(plan->base, plan->size) ||
-        plan->base + plan->size < plan->base)
+    total = plan->pair ? plan->size * 2U : plan->size;
+    if (!total || !uy_user_range(plan->base, total) ||
+        plan->base + total < plan->base)
         return;
-    if (f_copy_out((void *)(uintptr_t)plan->base, &plan->value, plan->size))
+    values[0] = plan->value;
+    values[1] = plan->value2;
+    if (f_copy_out((void *)(uintptr_t)plan->base, values, total))
         return;
+    /* The STXR/STXP may legitimately write a registered page.  The write
+     * already reached the live bytes through GUP; publish the same bytes so
+     * the next read of the page still sees one coherent view. */
+    {
+        void *mm = mm_of_task(current);
+
+        if (mm == g_sess.mm)
+            uy_image_store(plan->base, (const uint8_t *)values, total);
+        else if (mm)
+            uy_shadow_store_range(mm, plan->base, (const uint8_t *)values, total);
+        if (page_find(page_base(plan->base)) && mm)
+            uy_rearm_written(mm, plan->base, total);
+    }
     if (plan->acquire) __asm__ volatile("dmb ishld" : : : "memory");
     if (plan->release) __asm__ volatile("dmb ishst" : : : "memory");
     if (plan->status_reg != 31U) regs->regs[plan->status_reg] = 0;
@@ -2056,58 +2423,302 @@ static int uy_store_bytes(const struct uro_store *st, const struct pt_regs *regs
     return 0;
 }
 
-static int uy_store_emulate(struct pt_regs *regs, uint64_t far, struct uy_page *wp)
+/* Read the bytes a reader would see for [address, address+len): image for
+ * registered segments, nofault uaccess for the rest.  Only used by the write
+ * emulator, where the faulting page is always registered. */
+static int uy_read_logical(void *mm, uint64_t address, uint8_t *out, unsigned len)
+{
+    uint64_t done = 0;
+
+    (void)mm;
+
+    while (done < len) {
+        uint64_t cur = address + done;
+        uint64_t page = page_base(cur);
+        unsigned off = (unsigned)(cur - page);
+        unsigned seg = g_page_size - off;
+        struct uy_page *p;
+
+        if (seg > len - done) seg = len - (unsigned)done;
+        p = page_find(page);
+        if (p) page_view_mm(mm, p, off, seg, out + done, 0);
+        else if (f_copy_in(out + done, (const void *)(uintptr_t)cur, seg))
+            return -1;
+        done += seg;
+    }
+    return 0;
+}
+
+/* Complete a write on the live bytes through the kernel's COW/GUP path and,
+ * for the owning mm, publish the same bytes into every registered page. */
+static int uy_write_live(void *mm, uint64_t address, const uint8_t *data, unsigned len)
+{
+    uint64_t done = 0;
+
+    if (!g_write_gup_flags) return -1;
+    while (done < len) {
+        uint64_t cur = address + done;
+        uint64_t page = page_base(cur);
+        unsigned off = (unsigned)(cur - page);
+        unsigned seg = g_page_size - off;
+
+        if (seg > len - done) seg = len - (unsigned)done;
+        if (uy_access_vm(mm, cur, (void *)(uintptr_t)(data + done), (int)seg,
+                         g_write_gup_flags) != (int)seg)
+            return -1;
+        {
+            struct uy_page *p = page_find(page);
+
+            if (p) {
+                if (mm == g_sess.mm) {
+                    page_store_bytes(p, off, data + done, seg);
+                } else {
+                    struct uy_shadow *sh = uy_shadow_get(mm, p->base, 1);
+
+                    if (sh) uy_shadow_store(sh, off, data + done, seg);
+                }
+            }
+        }
+        done += seg;
+    }
+    return 0;
+}
+
+/* A GUP/COW write can install a writable leaf with AP[1] set.  Re-assert the
+ * trap immediately; the fault hook is not guaranteed to run for every GUP
+ * path, and a forked child's split VMA can miss the shadow rearm check. */
+static void uy_rearm_written(void *mm, uint64_t address, unsigned len)
+{
+    uint64_t done = 0;
+    int changed = 0;
+
+    while (done < len) {
+        uint64_t cur = address + done;
+        uint64_t page = page_base(cur);
+        unsigned seg = g_page_size - (unsigned)(cur - page);
+        struct uy_page *p;
+
+        if (seg > len - done) seg = len - (unsigned)done;
+        p = page_find(page);
+        if (p && !__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) {
+            int ret = page_set_ap_any(mm, page, 0);
+
+            if (ret > 0) changed = 1;
+        }
+        done += seg;
+    }
+    if (changed) flush_tlb_all();
+}
+
+static uint64_t uy_atomic_mask(unsigned size)
+{
+    return size >= 8U ? ~UINT64_C(0) : ((UINT64_C(1) << (size * 8U)) - 1U);
+}
+
+static int64_t uy_atomic_signed(uint64_t value, unsigned size)
+{
+    if (size >= 8U) return (int64_t)value;
+    if (value & (UINT64_C(1) << (size * 8U - 1U)))
+        value |= ~((UINT64_C(1) << (size * 8U)) - 1U);
+    return (int64_t)value;
+}
+
+static uint64_t uy_atomic_apply(unsigned op, uint64_t old, uint64_t src, unsigned size)
+{
+    uint64_t mask = uy_atomic_mask(size);
+    int64_t a, b;
+
+    src &= mask;
+    switch (op) {
+    case URO_ATOMIC_ADD: return (old + src) & mask;
+    case URO_ATOMIC_CLR: return old & ~src & mask;
+    case URO_ATOMIC_EOR: return (old ^ src) & mask;
+    case URO_ATOMIC_SET: return (old | src) & mask;
+    case URO_ATOMIC_SWP: return src;
+    case URO_ATOMIC_SMAX:
+        a = uy_atomic_signed(old, size); b = uy_atomic_signed(src, size);
+        return (uint64_t)(a > b ? a : b) & mask;
+    case URO_ATOMIC_SMIN:
+        a = uy_atomic_signed(old, size); b = uy_atomic_signed(src, size);
+        return (uint64_t)(a < b ? a : b) & mask;
+    case URO_ATOMIC_UMAX:
+        return (old > src ? old : src) & mask;
+    case URO_ATOMIC_UMIN:
+        return (old < src ? old : src) & mask;
+    default: return old;
+    }
+}
+
+static void uy_atomic_reg(struct pt_regs *regs, unsigned reg, uint64_t value,
+                          unsigned size)
+{
+    if (reg == 31U) return;
+    regs->regs[reg] = size >= 8U ? value : value & uy_atomic_mask(size);
+}
+
+/* Decode and complete one LSE atomic RMW.  CAS failure is a normal outcome:
+ * the old value is written back to Rs and nothing is stored. */
+static int uy_atomic_emulate(struct pt_regs *regs, uint64_t far, void *mm)
+{
+    struct uro_regs model;
+    struct uro_atomic a;
+    uint8_t old[16], newb[16];
+    uint64_t mask, o0, o1, n0, n1, src, expect, expect2;
+    uint32_t opcode;
+    unsigned i;
+
+    if ((regs->pc & 3U) || uy_read_insn(regs->pc, &opcode)) return -1;
+    for (i = 0; i < 31; ++i) model.x[i] = regs->regs[i];
+    model.sp = regs->sp;
+    model.pc = regs->pc;
+    model.pstate = regs->pstate;
+    if (uro_decode_atomic(opcode, &model, &a) || a.address != far) return -1;
+    if (!uy_user_range(a.address, a.total)) return -1;
+    for (i = 0; i < (a.count == 2U ? 2U : 1U); ++i) {
+        uint64_t at = a.address + (uint64_t)i * a.size;
+        void *vma = f_find_vma(mm, at);
+        unsigned long flags;
+
+        if (!vma) return -1;
+        flags = *(unsigned long *)((char *)vma + g_layout.vma_flags);
+        if (!(flags & UY_VM_WRITE)) return -1;
+    }
+    if (uy_read_logical(mm, a.address, old, (unsigned)a.total)) return -1;
+    mask = uy_atomic_mask(a.size);
+    o0 = 0; o1 = 0;
+    for (i = 0; i < a.size; ++i) {
+        o0 |= (uint64_t)old[i] << (8U * i);
+        if (a.count == 2U)
+            o1 |= (uint64_t)old[a.size + i] << (8U * i);
+    }
+
+    if (a.op == URO_ATOMIC_CAS) {
+        expect = a.rs == 31U ? 0 : (regs->regs[a.rs] & mask);
+        expect2 = a.rs2 == 31U ? 0 : (regs->regs[a.rs2] & mask);
+        if (a.count == 1U ? (o0 != expect) : (o0 != expect || o1 != expect2)) {
+            /* CAS writes the observed old value back to the expected pair. */
+            uy_atomic_reg(regs, a.rs, o0, a.size);
+            if (a.count == 2U) uy_atomic_reg(regs, a.rs2, o1, a.size);
+            if (a.acquire) __asm__ volatile("dmb ishld" : : : "memory");
+            regs->pc += 4U;
+            return 0;
+        }
+        n0 = a.rt == 31U ? 0 : (regs->regs[a.rt] & mask);
+        n1 = a.rt2 == 31U ? 0 : (regs->regs[a.rt2] & mask);
+    } else {
+        src = a.rs == 31U ? 0 : (regs->regs[a.rs] & mask);
+        n0 = uy_atomic_apply(a.op, o0, src, a.size);
+        n1 = 0;
+    }
+
+    for (i = 0; i < a.size; ++i) {
+        newb[i] = (uint8_t)(n0 >> (8U * i));
+        if (a.count == 2U)
+            newb[a.size + i] = (uint8_t)(n1 >> (8U * i));
+    }
+    if (uy_write_live(mm, a.address, newb, (unsigned)a.total)) return -1;
+    uy_rearm_written(mm, a.address, (unsigned)a.total);
+    if (a.return_old) {
+        if (a.op == URO_ATOMIC_CAS) {
+            uy_atomic_reg(regs, a.rs, o0, a.size);
+            if (a.count == 2U) uy_atomic_reg(regs, a.rs2, o1, a.size);
+        } else {
+            uy_atomic_reg(regs, a.rt, o0, a.size);
+        }
+    }
+    if (a.acquire) __asm__ volatile("dmb ishld" : : : "memory");
+    if (a.release) __asm__ volatile("dmb ishst" : : : "memory");
+    regs->pc += 4U;
+    uy_flush_icache_all();
+    return 0;
+}
+
+/* A store-exclusive to a trapped page cannot succeed after the exception
+ * return: the PE clears the local monitor.  Report the native failure and
+ * retire the instruction without touching the page, so the overlay survives
+ * instead of being retired by an STXR/STXP probe. */
+static int uy_exclusive_store_emulate(struct pt_regs *regs, uint64_t far)
+{
+    uint32_t insn;
+    unsigned size, rs, rt, rt2, rn;
+    uint64_t total;
+
+    if ((regs->pc & 3U) || uy_read_insn(regs->pc, &insn)) return -1;
+    if (uy_is_stxr(insn, &size, &rs, &rt, &rn)) {
+        total = 1U << size;
+        if (regs->regs[rn] != far || regs->regs[rn] & (total - 1U)) return -1;
+    } else if (uy_is_stxp(insn, &size, &rs, &rt, &rt2, &rn)) {
+        total = 2U << size;
+        if (regs->regs[rn] != far || regs->regs[rn] & (total - 1U)) return -1;
+    } else {
+        return -1;
+    }
+    if (rs != 31U) regs->regs[rs] = 1;
+    regs->pc += 4U;
+    return 0;
+}
+
+static int uy_store_emulate(struct pt_regs *regs, uint64_t far, struct uy_page *wp,
+                            void *mm)
 {
     struct uy_fpstate fp;
     struct uro_regs model;
     struct uro_store st;
     uint32_t opcode;
     uint8_t data[64];
-    void *vma;
-    unsigned long flags;
+    uint64_t done;
     unsigned i;
-    unsigned off;
 
+    (void)wp;
     if ((regs->pc & 3U) || uy_read_insn(regs->pc, &opcode))
         return -1;
     for (i = 0; i < 31; ++i) model.x[i] = regs->regs[i];
     model.sp = regs->sp;
     model.pc = regs->pc;
     model.pstate = regs->pstate;
-    if (uro_decode_store(opcode, &model, &st))
+    /* LSE RMW and pair/single exclusive stores are not ordinary stores, and
+     * some of their encodings can resemble a normal store.  Try them first. */
+    {
+        struct uro_atomic probe;
+
+        if (!uro_decode_atomic(opcode, &model, &probe)) {
+            if (!uy_atomic_emulate(regs, far, mm))
+                return 0;
+            return -1;
+        }
+    }
+    if (uro_decode_store(opcode, &model, &st)) {
+        if (!uy_exclusive_store_emulate(regs, far))
+            return 0;
         return -1;
-    if (st.address != far || st.total > g_page_size)
+    }
+    if (st.address != far || !st.total || st.total > sizeof(data))
         return -1;
-    off = (unsigned)(far - page_base(far));
-    if (off + st.total > g_page_size)
+    if (!uy_user_range(st.address, st.total))
         return -1;
-    vma = f_find_vma(g_sess.mm, far);
-    if (!vma)
-        return -1;
-    flags = *(unsigned long *)((char *)vma + g_layout.vma_flags);
-    if (!(flags & UY_VM_WRITE))
-        return -1;
+    /* Validate every page the access touches before changing any byte. */
+    for (done = 0; done < st.total; ) {
+        uint64_t at = st.address + done;
+        void *vma = f_find_vma(mm, at);
+        unsigned long flags;
+
+        if (!vma)
+            return -1;
+        flags = *(unsigned long *)((char *)vma + g_layout.vma_flags);
+        if (!(flags & UY_VM_WRITE))
+            return -1;
+        done = ((at | (g_page_size - 1U)) + 1U) - st.address;
+        if (done > st.total) done = st.total;
+    }
     if (!g_write_gup_flags)
         return -1;
     if (st.vector && !st.zva && uy_fp_snapshot(&fp))
         return -1;
     if (uy_store_bytes(&st, regs, st.vector && !st.zva ? &fp : 0, data))
         return -1;
-
-    /* Write every segment before publishing any image bytes.  A cross-page
-     * store is not absorbed (the caller falls back), because a partial image
-     * update and a partial live write cannot be rolled back. */
-    for (i = 0; i < st.count; ++i) {
-        uint64_t at = st.address + (uint64_t)i * st.size;
-
-        if (page_base(at) != page_base(far))
-            return -1;
-        if (uy_access_vm(g_sess.mm, at, data + (uint64_t)i * st.size,
-                         (int)st.size, g_write_gup_flags) != (int)st.size)
-            return -1;
-    }
-    for (i = 0; i < st.count; ++i)
-        page_store_bytes(wp, off + i * st.size, data + (uint64_t)i * st.size, st.size);
+    if (uy_write_live(mm, st.address, data, (unsigned)st.total))
+        return -1;
+    uy_rearm_written(mm, st.address, (unsigned)st.total);
 
     if (st.writeback) {
         if (st.rn == 31U) regs->sp = st.wb;
@@ -2172,7 +2783,8 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
     } else {
         int allow_fake = !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) &&
                          caller_allowed_deep(regs);
-        int ret = read_range(load.address, (unsigned)total, allow_fake, bytes, bad);
+        int ret = read_range(mm_of_task(current), load.address, (unsigned)total,
+                             allow_fake, bytes, bad);
 
         if (ret < 0) return ret;
         use_fake = allow_fake;
@@ -2304,7 +2916,9 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
          * gone the orphaned trap is turned back into an ordinary readable
          * PTE and the instruction retries, so no reader can take a signal
          * because of a trap left behind. */
-        if (!ap_read || !uy_trap_leaf(reader, far)) return;
+        if ((!ap_read && !(ec == UY_EC_DABT_LOW && (esr & UY_ESR_WNR))) ||
+            !uy_trap_leaf(reader, far))
+            return;
         /* Take the reader reference before touching the page array: release
          * frees it only after both reader epochs are drained. */
         ref = session_get_any();
@@ -2312,6 +2926,16 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
             if (g_sess.mode == UROV_Y_MODE_PAGE_AP && page_find(page_base(far)))
                 goto serve;
             uy_reader_exit(&g_readers, ref);
+            /* The mapping was retired (munmap/MAP_FIXED) or moved while a
+             * forked child still holds the inherited trap leaf.  Restore the
+             * child's PTE and retry natively instead of turning it into a
+             * SIGSEGV. */
+            if (g_sess.mode == UROV_Y_MODE_PAGE_AP &&
+                uy_repair_trap(reader, far)) {
+                args->ret = 0;
+                args->skip_origin = 1;
+                return;
+            }
         }
         if (g_retired_mode == UROV_Y_MODE_PAGE_AP && uy_retired_has(page_base(far)) &&
             uy_repair_trap(reader, far)) {
@@ -2334,24 +2958,33 @@ serve:
     if (g_sess.mode == UROV_Y_MODE_PAGE_AP && ec == UY_EC_DABT_LOW &&
         (esr & UY_ESR_WNR) && !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) {
         struct uy_page *wp = page_find(page_base(far));
+        void *mm = mm_of_task(current);
 
-        if (wp && __atomic_load_n(&wp->armed, __ATOMIC_ACQUIRE) &&
+        if (wp && mm && __atomic_load_n(&wp->armed, __ATOMIC_ACQUIRE) &&
             !__atomic_load_n(&wp->dead, __ATOMIC_ACQUIRE)) {
-            void *vma = f_find_vma(g_sess.mm, far);
+            void *vma = f_find_vma(mm, far);
             unsigned long flags = vma ?
                 *(unsigned long *)((char *)vma + g_layout.vma_flags) : 0;
 
-            if ((flags & UY_VM_WRITE) &&
-                uy_store_emulate(regs, far, wp) == 0) {
-                args->ret = 0;
-                args->skip_origin = 1;
-                goto out;
+            if (flags & UY_VM_WRITE) {
+                int sret = uy_store_emulate(regs, far, wp, mm);
+
+                if (!sret) {
+                    args->ret = 0;
+                    args->skip_origin = 1;
+                    goto out;
+                }
             }
-            if ((flags & UY_VM_WRITE) &&
-                page_set_ap_any(g_sess.mm, wp->base, 1) >= 0) {
-                __atomic_store_n(&wp->dead, 1, __ATOMIC_RELEASE);
-                __atomic_store_n(&wp->armed, 0, __ATOMIC_RELEASE);
-                flush_tlb_all();
+            if (flags & UY_VM_WRITE) {
+                /* Keep the child's copy writable-native rather than touching
+                 * the owner's session state. */
+                if (page_set_ap_any(mm, wp->base, 1) >= 0) {
+                    if (mm == g_sess.mm) {
+                        __atomic_store_n(&wp->dead, 1, __ATOMIC_RELEASE);
+                        __atomic_store_n(&wp->armed, 0, __ATOMIC_RELEASE);
+                    }
+                    flush_tlb_all();
+                }
             }
         }
         goto out;
@@ -2366,6 +2999,14 @@ serve:
 
         memset(&llsc, 0, sizeof(llsc));
         if (!page || !__atomic_load_n(&page->armed, __ATOMIC_ACQUIRE)) goto out;
+        /* LSE atomics (LDADD/SWP/CAS/...) are reported as a read fault on
+         * this CPU even though they also write.  Complete the RMW before the
+         * generic load decoder can reject the encoding. */
+        if (!uy_atomic_emulate(regs, far, mm_of_task(current))) {
+            args->ret = 0;
+            args->skip_origin = 1;
+            goto out;
+        }
         if ((regs->pc & 3U) || !uy_user_range(regs->pc, sizeof(opcode))) {
             session_count_failure(regs->pc, -EFAULT);
             force_segv(far);
@@ -2517,6 +3158,9 @@ static void session_free_storage(void)
     if (g_retired_count && g_sess.pages)
         for (i = 0; i < g_retired_count; ++i) g_retired[i] = g_sess.pages[i].base;
     g_retired_mode = g_sess.mode;
+    uy_shadow_free_all();
+    uy_free(g_shadow_arena);
+    g_shadow_arena = 0;
     uy_free(g_sess.pages);
     uy_free(g_sess.arena);
     memset(&g_sess, 0, sizeof(g_sess));
@@ -2706,7 +3350,13 @@ static long do_register(struct urov_y_request *q)
     }
 
     g_sess.pages = uy_alloc(n * sizeof(*g_sess.pages));
-    g_sess.arena = uy_alloc(3UL * n * g_page_size);
+    /* Page-aligned vmalloc storage keeps every image page convertible to a
+     * struct page for the GUP overlay (kvmalloc may return kmalloc memory). */
+    g_sess.arena = f_vmalloc ? f_vmalloc(3UL * n * g_page_size) :
+                               uy_alloc(3UL * n * g_page_size);
+    g_shadow_arena = f_vmalloc ? f_vmalloc((unsigned long)UY_SHADOW_MAX * g_page_size) :
+                                 uy_alloc((unsigned long)UY_SHADOW_MAX * g_page_size);
+    uy_shadow_free_all();
     if (!g_sess.pages || !g_sess.arena) {
         ret = -ENOMEM;
         goto fail;
@@ -2869,7 +3519,8 @@ static uint32_t armed_pages(void)
     uint32_t i, n = 0;
 
     for (i = 0; i < g_sess.page_count; ++i)
-        if (__atomic_load_n(&g_sess.pages[i].armed, __ATOMIC_ACQUIRE)) ++n;
+        if (!__atomic_load_n(&g_sess.pages[i].gone, __ATOMIC_ACQUIRE) &&
+            __atomic_load_n(&g_sess.pages[i].armed, __ATOMIC_ACQUIRE)) ++n;
     return n;
 }
 
@@ -3063,7 +3714,7 @@ static void uy_vm_overlay(uint64_t local, uint64_t remote, uint64_t len, int all
         if (seg > sizeof(bytes)) seg = (unsigned)sizeof(bytes);
         p = page_find(page);
         if (p && (owner || uy_trap_leaf(mm, page))) {
-            page_view(p, off, seg, bytes, !allow_fake);
+            page_view_mm(mm, p, off, seg, bytes, !allow_fake);
             if (f_copy_out((void *)(uintptr_t)local, bytes, seg)) return;
         }
         local += seg;
@@ -3178,7 +3829,8 @@ static void uy_kread_overlay(uint64_t remote, void *buf, uint64_t len, int allow
 
         if ((uint64_t)seg > len) seg = (unsigned)len;
         p = page_find(page);
-        if (p && (owner || uy_trap_leaf(mm, page))) page_view(p, off, seg, out, !allow_fake);
+        if (p && (owner || uy_trap_leaf(mm, page)))
+            page_view_mm(mm, p, off, seg, out, !allow_fake);
         remote += seg;
         out += seg;
         len -= seg;
@@ -3254,6 +3906,67 @@ static void uy_kread_after(hook_fargs6_t *args, void *udata)
     allow = !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) &&
             g_sess.caller_count == 0U;
     uy_kread_overlay(remote, buf, len, allow, mm, owner);
+    uy_reader_exit(&g_readers, ref);
+}
+
+/* --------------------------------------------------------------- GUP reads */
+
+/* vmsplice() (and any other get_user_pages_fast() reader) pins the live user
+ * pages and never enters the EL0 abort handler or access_remote_vm().  Replace
+ * the pages covering a registered page with private copies of the image.  The
+ * caller owns the reference the GUP call just took, so handing it a fresh
+ * page keeps the normal put_page() lifetime; the returned copy is fully
+ * populated before the reader can touch it. */
+static void uy_gup_after(hook_fargs4_t *args, void *udata)
+{
+    unsigned long start = (unsigned long)args->arg0;
+    unsigned long nr = (unsigned long)args->arg1;
+    unsigned int flags = (unsigned int)args->arg2;
+    void **pages = (void **)args->arg3;
+    long got = (long)args->ret;
+    void *mm;
+    uint64_t ref;
+    int owner;
+    unsigned i;
+
+    (void)udata;
+    if (got <= 0 || !pages || !f_alloc_pages || !f_put_page ||
+        !f_copy_highpage || !f_vmalloc_to_page)
+        return;
+    /* vmsplice() reads from user memory and asks GUP for FOLL_WRITE to force
+     * a private COW page; the pages are still a data source.  Actual
+     * GUP-fast writers of a registered page (ptrace/proc mem) go through
+     * access_remote_vm instead.  PIN/LONGTERM require the exact user page. */
+    if ((flags & (UY_FOLL_LONGTERM | UY_FOLL_PIN)) ||
+        (start & (g_page_size - 1U)) || !overlay_live() ||
+        g_sess.mode != UROV_Y_MODE_PAGE_AP ||
+        __atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE))
+        return;
+    mm = mm_of_task(current);
+    if (!mm) return;
+    owner = mm == __atomic_load_n(&g_owner, __ATOMIC_ACQUIRE);
+    ref = owner ? session_get_mm(mm) : session_get_any();
+    if (!ref) return;
+    if ((unsigned long)got > nr) got = (long)nr;
+    for (i = 0; i < (unsigned)got; ++i) {
+        uint64_t va = (uint64_t)start + (uint64_t)i * g_page_size;
+        struct uy_page *p = page_find(page_base(va));
+        struct uy_shadow *sh = 0;
+        void *src, *fake;
+        int allow_fake = g_sess.caller_count == 0U;
+
+        if (!p) continue;
+        if (!owner && !uy_trap_leaf(mm, page_base(va))) continue;
+        if (!owner) sh = uy_shadow_find(mm, p->base);
+        src = f_vmalloc_to_page(sh ? sh->image :
+                                (allow_fake ? p->image : p->snapshot));
+        if (!src) continue;
+        fake = f_alloc_pages(UY_GFP_ATOMIC, 0, -1, 0);
+        if (!fake) continue;
+        f_copy_highpage(fake, src);
+        if (pages[i]) f_put_page(pages[i]);
+        pages[i] = fake;
+    }
     uy_reader_exit(&g_readers, ref);
 }
 
@@ -3418,6 +4131,112 @@ static int uy_gate_args_invalid(int kind, uint64_t a0, uint64_t a1, uint64_t a2,
     }
 }
 
+/* A page whose mapping was removed or replaced cannot be served from the old
+ * image any more.  Only that page is retired; the rest of the session (and
+ * every other registered page) stays live. */
+static void uy_range_gone(void *mm, uint64_t start, uint64_t len)
+{
+    uint64_t end = start + len;
+    uint64_t ref;
+    uint32_t i;
+
+    if (!mm || !len || end < start) return;
+    ref = session_get_mm(mm);
+    if (!ref) return;
+    for (i = 0; i < g_sess.page_count; ++i) {
+        struct uy_page *p = &g_sess.pages[i];
+
+        if (p->base < start || p->base >= end) continue;
+        __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
+        __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
+        __atomic_store_n(&p->gone, 1, __ATOMIC_RELEASE);
+    }
+    uy_reader_exit(&g_readers, ref);
+}
+
+static void uy_page_sort(void)
+{
+    uint32_t i;
+
+    for (i = 1; i < g_sess.page_count; ++i) {
+        struct uy_page tmp = g_sess.pages[i];
+        uint32_t j = i;
+
+        while (j > 0 && g_sess.pages[j - 1].base > tmp.base) {
+            g_sess.pages[j] = g_sess.pages[j - 1];
+            --j;
+        }
+        g_sess.pages[j] = tmp;
+    }
+}
+
+/* mremap() can keep, move or resize the registered pages without changing
+ * their contents.  A no-op mremap (equal length, flags 0) is the standard
+ * keyless "revoke" call: Linux returns the original address, so the session
+ * must simply stay armed.  For a real move, the trapped leaves move with the
+ * page tables; update the page bases and the captured VMA range, retire pages
+ * that were dropped, and rebuild the branch map for the new addresses. */
+static void uy_mremap_update(void *mm, uint64_t old, uint64_t old_len,
+                             uint64_t new_len, uint64_t flags, uint64_t moved_to)
+{
+    uint64_t old_end = old + old_len;
+    uint64_t new_end = moved_to + new_len;
+    uint64_t ref;
+    uint32_t i;
+    int moved = 0;
+
+    if (!mm || !old_len || !new_len || old_end < old || new_end < moved_to) return;
+    if (flags & UY_MREMAP_DONTUNMAP) return; /* the old VMA also stays mapped */
+    ref = session_get_mm(mm);
+    if (!ref) return;
+    /* The destination of MREMAP_FIXED replaced any mapping that was not part
+     * of the moved range.  Retire those pages first so a moved page that
+     * lands in the destination is not mistaken for an old target. */
+    if (moved_to != old) {
+        for (i = 0; i < g_sess.page_count; ++i) {
+            struct uy_page *p = &g_sess.pages[i];
+
+            if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
+            if (p->base >= moved_to && p->base < new_end &&
+                !(p->base >= old && p->base < old_end)) {
+                __atomic_store_n(&p->gone, 1, __ATOMIC_RELEASE);
+                __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
+                __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
+            }
+        }
+    }
+    for (i = 0; i < g_sess.page_count; ++i) {
+        struct uy_page *p = &g_sess.pages[i];
+
+        if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
+        if (p->base < old || p->base >= old_end) continue;
+        {
+            uint64_t off = p->base - old;
+
+            if (off >= new_len) {
+                __atomic_store_n(&p->gone, 1, __ATOMIC_RELEASE);
+                __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
+                __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
+                continue;
+            }
+            if (moved_to != old) {
+                p->base = moved_to + off;
+                moved = 1;
+            }
+            p->vma_start = moved_to;
+            p->vma_end = new_end;
+        }
+    }
+    if (moved) {
+        uy_page_sort();
+        /* Shift the branch-map base addresses in place.  Rebuilding would
+         * free the arena while another CPU may still be testing its bits. */
+        if (__atomic_load_n(&g_code.valid, __ATOMIC_ACQUIRE))
+            uy_code_mremap(old, old_len, moved_to, new_len);
+    }
+    uy_reader_exit(&g_readers, ref);
+}
+
 /* A protected mapping is restored before the native syscall runs. If a
  * concurrent control transaction owns the session, the mutator must retry
  * instead of proceeding underneath it. */
@@ -3431,6 +4250,21 @@ static void uy_gate_before(hook_fargs6_t *args, void *udata)
     if (uy_gate_args_invalid(kind, sys_arg(args, 0), sys_arg(args, 1),
                              sys_arg(args, 2), sys_arg(args, 3), sys_arg(args, 4)))
         return;
+    if (overlay_live() && g_sess.mode == UROV_Y_MODE_PAGE_AP &&
+        (kind == UY_GATE_MUNMAP || kind == UY_GATE_MREMAP ||
+         (kind == UY_GATE_MMAP && (sys_arg(args, 3) & UY_MAP_FIXED)))) {
+        /* A mapping change is handled after Linux returns: it may fail, keep
+         * the same VMA (the equal-length mremap revocation), or move the
+         * trapped leaves.  None of those may tear down the whole session
+         * before the native syscall has decided. */
+        args->local.data0 = sys_arg(args, 0);
+        args->local.data1 = sys_arg(args, 1);
+        args->local.data2 = sys_arg(args, 2);
+        args->local.data3 = sys_arg(args, 3);
+        args->local.data4 = sys_arg(args, 4);
+        args->local.data5 = 1;
+        return;
+    }
     if (kind == UY_GATE_MADVISE) {
         /* The advice itself never changes page permissions.  With PAGE_AP a
          * zapped PTE is re-armed by the fault path, so the session survives;
@@ -3483,6 +4317,40 @@ remap_release:
     if (ret) gate_error(args, ret);
 }
 
+/* A forked child mprotect()s its private copy of the registered pages.  Linux
+ * rewrites the leaf from the new VMA protection and clears AP[1]; re-assert
+ * the trap so the child keeps reading the overlay.  The owner's own
+ * ap_protection_update() cannot be used here: want/dead are session-wide and
+ * must not be changed by a child. */
+static void uy_child_protection_update(void *mm, uint64_t start, uint64_t len,
+                                       uint64_t prot)
+{
+    uint64_t end = start + len;
+    uint64_t ref;
+    uint32_t i;
+    int changed = 0;
+
+    if (!mm || mm == g_sess.mm || !len || end < start) return;
+    if (!(prot & (UY_PROT_READ | UY_PROT_WRITE | UY_PROT_EXEC))) return;
+    ref = session_get_any();
+    if (!ref) return;
+    for (i = 0; i < g_sess.page_count; ++i) {
+        struct uy_page *p = &g_sess.pages[i];
+        void *vma;
+        void *file;
+
+        if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
+        if (p->base < start || p->base + g_page_size > end) continue;
+        vma = f_find_vma(mm, p->base);
+        if (!vma) continue;
+        file = *(void **)((char *)vma + g_layout.vma_file);
+        if (file != p->vma_file) continue;
+        if (page_set_ap_any(mm, p->base, 0) > 0) changed = 1;
+    }
+    if (changed) flush_tlb_all();
+    uy_reader_exit(&g_readers, ref);
+}
+
 /* An executable mapping created or made executable after REGISTER was not in
  * the branch map.  Scan the new range before the caller can return to EL0 and
  * branch from it.  A syscall the before hook refused (negative return) has no
@@ -3497,7 +4365,31 @@ static void uy_gate_after(hook_fargs6_t *args, void *udata)
     long ret = (long)args->ret;
     uint64_t start, len;
 
-    if (ret < 0 || !session_owned()) return;
+    if (ret < 0) return;
+    if (!session_owned()) {
+        if (overlay_live() && g_sess.mode == UROV_Y_MODE_PAGE_AP &&
+            !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) &&
+            (kind == UY_GATE_MPROTECT || kind == UY_GATE_PKEY_MPROTECT)) {
+            void *mm = mm_of_task(current);
+
+            if (mm) uy_child_protection_update(mm, sys_arg(args, 0),
+                                               sys_arg(args, 1), sys_arg(args, 2));
+        }
+        return;
+    }
+    if (args->local.data5 && overlay_live() &&
+        g_sess.mode == UROV_Y_MODE_PAGE_AP) {
+        uint64_t a0 = args->local.data0, a1 = args->local.data1;
+        uint64_t a2 = args->local.data2, a3 = args->local.data3;
+
+        args->local.data5 = 0;
+        if (kind == UY_GATE_MUNMAP && ret == 0)
+            uy_range_gone(g_sess.mm, a0, a1);
+        else if (kind == UY_GATE_MMAP)
+            uy_range_gone(g_sess.mm, a0, a1);
+        else if (kind == UY_GATE_MREMAP)
+            uy_mremap_update(g_sess.mm, a0, a1, a2, a3, (uint64_t)ret);
+    }
     if ((kind == UY_GATE_MPROTECT || kind == UY_GATE_PKEY_MPROTECT) &&
         g_sess.mode == UROV_Y_MODE_PAGE_AP) {
         unsigned spin;
@@ -3746,6 +4638,28 @@ static long resolve_symbols(const struct kclf_btf *btf, int *brk_argc, int *mmf_
         }
     }
 
+    /* GUP fast is the vmsplice/pipe path.  The page replacement needs a page
+     * allocator, a page-to-virt copy helper and vmalloc_to_page for the image
+     * pages; if any is missing the overlay stays on the older read paths. */
+    f_gup_fast = (gup_fast_t)lookup("get_user_pages_fast");
+    f_alloc_pages = (alloc_pages_t)lookup("__alloc_pages");
+    f_put_page = (put_page_t)lookup("put_page");
+    f_copy_highpage = (copy_highpage_t)lookup("copy_highpage");
+    f_vmalloc_to_page = (vmalloc_to_page_t)lookup("vmalloc_to_page");
+    /* get_user_pages_fast() is a fixed four-argument entry on every supported
+     * arm64 kernel; some builds omit its BTF FUNC record, so trust kallsyms. */
+    (void)btf;
+    if (f_alloc_pages && !uy_symbol_abi(btf, "__alloc_pages", "piiip"))
+        f_alloc_pages = 0;
+    if (f_put_page && !uy_symbol_abi(btf, "put_page", "vp")) f_put_page = 0;
+    if (f_copy_highpage && !uy_symbol_abi(btf, "copy_highpage", "vpp"))
+        f_copy_highpage = 0;
+    if (f_vmalloc_to_page && !uy_symbol_abi(btf, "vmalloc_to_page", "pp"))
+        f_vmalloc_to_page = 0;
+    if (!f_alloc_pages || !f_put_page || !f_copy_highpage || !f_vmalloc_to_page)
+        f_gup_fast = 0;
+
+
     /* Newer update_current_state() only updates the saved state. Use the
      * save-and-flush helper when present so the EL0 return reloads it. */
     f_fp_preserve = (fpsimd_preserve_t)lookup(fp_name);
@@ -3774,6 +4688,11 @@ static long resolve_symbols(const struct kclf_btf *btf, int *brk_argc, int *mmf_
                 read_name, f_copy_out ? write_name : "control-gup",
                 f_find_task_by_vpid ? "task" : "none",
                 g_fp_ready ? fp_name : "none", foll_force, g_page_shift);
+    if (g_verbose)
+        pr_info("urov-y: gup_fast=%d alloc_pages=%d put_page=%d copy_highpage=%d "
+                "vmalloc_to_page=%d\n", f_gup_fast ? 1 : 0, f_alloc_pages ? 1 : 0,
+                f_put_page ? 1 : 0, f_copy_highpage ? 1 : 0,
+                f_vmalloc_to_page ? 1 : 0);
     return 0;
 }
 
@@ -3953,6 +4872,13 @@ long urov_y_backend_init(const char *args)
     } else if (g_verbose) {
         pr_info("urov-y: no access_remote_vm symbol; kernel reads stay uncovered\n");
     }
+    if (f_gup_fast) {
+        ret = hook_wrap((void *)f_gup_fast, 4, 0, uy_gup_after, 0);
+        g_gup_hooked = ret ? 0 : 1;
+        if (ret && g_verbose) pr_info("urov-y: hook GUP fast failed: %ld\n", ret);
+    } else if (g_verbose) {
+        pr_info("urov-y: no GUP-fast overlay; vmsplice reads live bytes\n");
+    }
 
     for (i = 0; i < UY_GATE_NUM; ++i) {
         ret = fp_hook_syscalln(g_gate_nrs[i], 6, uy_gate_before, uy_gate_after,
@@ -4018,6 +4944,10 @@ long urov_y_backend_init(const char *args)
     return 0;
 
 unwind_prctl:
+    if (g_gup_hooked) {
+        hook_unwrap((void *)f_gup_fast, 0, uy_gup_after);
+        g_gup_hooked = 0;
+    }
     if (g_kread_hooked) {
         hook_unwrap(f_kread, 0, uy_kread_after);
         g_kread_hooked = 0;
@@ -4077,6 +5007,10 @@ long urov_y_backend_exit(void)
     if (g_kread_hooked) {
         hook_unwrap(f_kread, 0, uy_kread_after);
         g_kread_hooked = 0;
+    }
+    if (g_gup_hooked) {
+        hook_unwrap((void *)f_gup_fast, 0, uy_gup_after);
+        g_gup_hooked = 0;
     }
     if (g_clone3_hooked) {
         fp_unhook_syscalln(__NR_clone3, uy_clone_before, 0);

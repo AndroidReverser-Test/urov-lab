@@ -448,6 +448,7 @@ static int run_active(const char *key, unsigned mode)
             uint64_t child_business = uy_business_ldr(p.address + WIN);
             uint64_t child_direct = uy_site_ldr(p.address + WIN);
             uint64_t want_business = mode == UROV_Y_MODE_PAGE_AP ? fake_a : original;
+
             _exit(child_business == want_business && child_direct == original ? 0 : 7);
         }
         CHECK(pid > 0, "fork pid=%d errno=%d", (int)pid, errno);
@@ -493,6 +494,105 @@ static int run_active(const char *key, unsigned mode)
     page_close(&p);
     printf("%s cases=%u assertions=%u failures=%u\n",
            g_fail ? "FAIL" : "PASS", 1, g_checks, g_fail);
+    return g_fail ? 1 : 0;
+}
+
+/* A writable private file page (no seals) is the shape of an app .text mapping
+ * after mprotect(PROT_READ|PROT_WRITE).  The child gets its own COW copy; its
+ * write must update only the child's overlay image, never the parent's. */
+static int run_fork_write(const char *key)
+{
+    struct y_ctx ctx;
+    struct page p;
+    uint8_t *map;
+    uint8_t original;
+    unsigned i;
+    pid_t pid;
+    int status = 0;
+
+    memset(&p, 0, sizeof(p));
+    p.fd = memfd_create("urov-y-rw", MFD_CLOEXEC);
+    if (p.fd < 0) { perror("memfd_create"); return 2; }
+    if (ftruncate(p.fd, PAGE)) { perror("ftruncate"); return 2; }
+    for (i = 0; i < PAGE; ++i) {
+        uint8_t v = (uint8_t)(i * 7U + 3U);
+
+        if (pwrite(p.fd, &v, 1, (off_t)i) != 1) { perror("pwrite"); return 2; }
+    }
+    map = mmap(NULL, PAGE, PROT_READ | PROT_EXEC, MAP_PRIVATE, p.fd, 0);
+    if (map == MAP_FAILED) { perror("mmap"); return 2; }
+    p.address = map;
+    original = map[WIN + 64U];
+
+    if (y_init_key(&ctx, key)) { fprintf(stderr, "bad key\n"); return 2; }
+    if (y_register(&ctx, &p, fake_a, UROV_Y_MODE_PAGE_AP)) {
+        fprintf(stderr, "REGISTER errno=%d\n", errno);
+        return 2;
+    }
+    CHECK(uy_business_ldr(map + WIN) == fake_a, "fork-write did not arm");
+    pid = fork();
+    if (pid == 0) {
+        /* Fault the inherited copy in before changing protection; Linux may
+         * leave a clean read-only file mapping non-resident in the child. */
+        volatile uint8_t before = map[WIN + 64U];
+
+        (void)before;
+        if (mprotect(map, PAGE, PROT_READ | PROT_WRITE)) _exit(8);
+        map[WIN + 64U] = 0x5a;
+        if ((uint8_t)uy_business_ldrb(map + WIN + 64U) != 0x5a) _exit(9);
+        if (uy_business_ldr(map + WIN) != fake_a) _exit(10);
+        _exit(0);
+    }
+    CHECK(pid > 0, "fork-write pid=%d errno=%d", (int)pid, errno);
+    if (pid > 0) {
+        CHECK(waitpid(pid, &status, 0) == pid, "fork-write waitpid errno=%d", errno);
+        CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+              "fork-write child status=0x%x", status);
+    }
+    CHECK((uint8_t)uy_business_ldrb(map + WIN + 64U) == original,
+          "fork-write child leaked into parent image");
+    CHECK(uy_business_ldr(map + WIN) == fake_a, "fork-write parent lost overlay");
+    CHECK(y_deactivate(&ctx) == 0, "fork-write DEACTIVATE errno=%d", errno);
+    munmap(map, PAGE);
+    close(p.fd);
+    printf("%s fork-write assertions=%u failures=%u\n",
+           g_fail ? "FAIL" : "PASS", g_checks, g_fail);
+    return g_fail ? 1 : 0;
+}
+
+/* A whole-VMA mremap must carry the trap and the image to the new address;
+ * the page contents do not change, only their virtual address. */
+static int run_mremap(const char *key)
+{
+    struct y_ctx ctx;
+    struct page p;
+    uint8_t *moved;
+    uint64_t original;
+
+    if (page_open(&p)) return 2;
+    original = load64_scalar(p.address + WIN);
+    if (y_init_key(&ctx, key)) return 2;
+    if (y_register(&ctx, &p, fake_a, UROV_Y_MODE_PAGE_AP)) {
+        fprintf(stderr, "mremap REGISTER errno=%d\n", errno);
+        return 2;
+    }
+    CHECK(uy_business_ldr(p.address + WIN) == fake_a, "mremap did not arm");
+    moved = mremap(p.address, PAGE, PAGE, MREMAP_MAYMOVE);
+    CHECK(moved != MAP_FAILED, "mremap errno=%d", errno);
+    if (moved != MAP_FAILED) {
+        CHECK(uy_business_ldr(moved + WIN) == fake_a,
+              "mremap overlay lost at new address");
+        CHECK(y_deactivate(&ctx) == 0, "mremap DEACTIVATE errno=%d", errno);
+        CHECK(uy_business_ldr(moved + WIN) == original,
+              "mremap deactivated read=%llx", (unsigned long long)uy_business_ldr(moved + WIN));
+        munmap(moved, PAGE);
+        p.address = NULL;
+    } else {
+        page_close(&p);
+    }
+    close(p.fd);
+    printf("%s mremap assertions=%u failures=%u\n",
+           g_fail ? "FAIL" : "PASS", g_checks, g_fail);
     return g_fail ? 1 : 0;
 }
 
@@ -552,7 +652,7 @@ int main(int argc, char **argv)
 {
     const char *key = NULL;
     unsigned mode = UROV_Y_MODE_PAGE_UXN;
-    int clean = 0, hold = 0, i;
+    int clean = 0, hold = 0, fork_write = 0, remap = 0, i;
 
     setvbuf(stdout, NULL, _IONBF, 0);
     for (i = 1; i < argc; ++i) {
@@ -566,10 +666,14 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--clean")) clean = 1;
         else if (!strcmp(argv[i], "--hold")) hold = 1;
+        else if (!strcmp(argv[i], "--fork-write")) fork_write = 1;
+        else if (!strcmp(argv[i], "--mremap")) remap = 1;
         else { fprintf(stderr, "unknown arg %s\n", argv[i]); return 2; }
     }
     if (clean) return run_clean();
     if (!key) { fprintf(stderr, "--key required\n"); return 2; }
+    if (remap) return run_mremap(key);
+    if (fork_write) return run_fork_write(key);
     if (hold) return run_hold(key, mode);
     return run_active(key, mode);
 }

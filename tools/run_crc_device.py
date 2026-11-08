@@ -30,16 +30,28 @@ def main():
     parser.add_argument("--serial", required=True)
     parser.add_argument("--key", required=True, help="KernelPatch superkey")
     parser.add_argument("--skip-install", action="store_true", help="use the already installed test APK")
-    parser.add_argument("--dobby-detection", action="store_true",
+    matrix = parser.add_mutually_exclusive_group()
+    matrix.add_argument("--dobby-detection", action="store_true",
                         help="run the keyless probe against a Dobby patch masked by PAGE_AP")
+    matrix.add_argument("--read-defense", action="store_true",
+                        help="compare live and overlaid bytes, then test recovery and registration refusal")
     parser.add_argument("--repeats", type=int, default=15)
     parser.add_argument("--cycles", type=int, default=3)
     args = parser.parse_args()
     if not 3 <= args.repeats <= 200 or not 1 <= args.cycles <= 10:
         parser.error("repeats 3..200, cycles 1..10")
 
+    if args.read_defense:
+        prefix = "read-defense"
+        modes = ("read-defense-brk", "read-defense-uxn", "read-defense-ap-hard",
+                 "read-defense-ap-all-hard")
+    elif args.dobby_detection:
+        prefix = "dobby-detect"
+        modes = ("dobby-detect-active",)
+    else:
+        prefix = "crc"
+        modes = ("crc-brk", "crc-uxn", "crc-ap", "crc-ap-all", "crc-ap-text", "crc-ap-libc", "crc-ap-big")
     stamp = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d-%H%M%S")
-    prefix = "dobby-detect" if args.dobby_detection else "crc"
     output = LAB / "results" / f"{prefix}-{stamp}"
     output.mkdir(parents=True)
     module_key = secrets.token_hex(16)
@@ -69,7 +81,8 @@ def main():
 
     def run_once(label, mode):
         dobby = mode.startswith("dobby-detect-")
-        active = mode not in ("crc-clean", "dobby-detect-clean")
+        defense = mode.startswith("read-defense-")
+        active = mode not in ("crc-clean", "dobby-detect-clean", "read-defense-clean")
         shell("am", "force-stop", PACKAGE)
         argv = ["am", "start", "-W", "-n", ACTIVITY, "--es", "mode", mode,
                 "--ei", "repeats", str(args.repeats)]
@@ -95,7 +108,10 @@ def main():
         if not uid or int(uid[1]) < 10000 or not re.search(r"CapEff:\s*0{16}\b", logs) or not re.search(
                 r"Seccomp:\s*2\b", logs):
             raise RuntimeError(f"{label}: invalid app credentials")
-        if dobby:
+        if defense:
+            stages = [dict(KV.findall(line)) for line in re.findall(r"READ_DEFENSE [^\n]+", logs)]
+            stage_key = "stage"
+        elif dobby:
             stages = [dict(KV.findall(line)) for line in re.findall(r"DOBBY_DETECT [^\n]+", logs)]
             stage_key = "stage"
         elif mode == "crc-ap-text":
@@ -105,7 +121,9 @@ def main():
         else:
             stages = [dict(KV.findall(line)) for line in re.findall(r"CRC_STAGE [^\n]+", logs)]
             stage_key = "name"
-        if dobby:
+        if defense:
+            expected = ["clean", "patch_only", "overlay", "restored"] if active else ["clean", "patch_only"]
+        elif dobby:
             expected = ["clean", "patch_only", "overlay", "deactivated"] if active else ["clean", "patch_only"]
         elif mode in ("crc-ap-text", "crc-ap-libc", "crc-ap-big"):
             expected = ["clean", "overlay", "deactivated"]
@@ -117,9 +135,25 @@ def main():
             raise RuntimeError(f"{label}: unexpected CRC stage order {names}")
         if active and "state=inactive" not in kp("kpm", "ctl0", MODULE, "status"):
             raise RuntimeError(f"{label}: fixture left an active session")
-        marker = "DOBBY_HOOK address=" if dobby else "CRC_FIXTURE dlopen=1"
+        marker = "DOBBY_HOOK address=" if dobby or defense else "CRC_FIXTURE dlopen=1"
         if names != expected or marker not in logs:
             raise IncompleteLog(f"{label}: missing CRC records in {log_path.name}")
+        if defense:
+            remaps = [dict(KV.findall(line)) for line in re.findall(r"READ_DEFENSE_REMAP [^\n]+", logs)]
+            if [step["stage"] for step in remaps] != (["unarmed", "outside", "overlap"] if active else ["unarmed"]):
+                raise IncompleteLog(f"{label}: missing no-op remap controls in {log_path.name}")
+            pairs = [dict(KV.findall(line)) for line in re.findall(r"READ_DEFENSE_PAIR [^\n]+", logs)]
+            if [pair["stage"] for pair in pairs] != expected:
+                raise IncompleteLog(f"{label}: missing paired exclusive records in {log_path.name}")
+            if not re.search(r"READ_DEFENSE_BUSINESS ops=[1-9]\d* errors=0\b", logs):
+                raise IncompleteLog(f"{label}: missing business worker result in {log_path.name}")
+            if active and ("-hard" in mode and
+                           ("READ_DEFENSE_STATUS active_before=1 active_after_remap=1" not in logs or
+                            "READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1" not in logs) or
+                           "-hard" not in mode and
+                           ("READ_DEFENSE_STATUS active_before=1 inactive_after=1" not in logs or
+                            "READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1" not in logs)):
+                raise IncompleteLog(f"{label}: missing recovery/guard result in {log_path.name}")
         if dobby:
             live_views = [dict(KV.findall(line)) for line in
                           re.findall(r"DOBBY_DETECT_LIVE [^\n]+", logs)]
@@ -171,6 +205,13 @@ def main():
                                                      r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC|BIG|BIG_OVERLAY|BIG_VMA|MIXED|"
                                                      r"SET|RESTORE|REREGISTER|LOCK_GUARD)"
                                                      r"|ELIM_EXEC|DOBBY_DETECT_(?:STATUS|RESTORE|LOCK|GUARD|BUSINESS|ACCESS|KMEM|FORK_KMEM|MANY|SIBLING|SPLIT)) [^\n]+", logs)})
+        if defense:
+            report["runs"][-1]["details"] = re.findall(r"READ_DEFENSE_(?:REMAP|STATUS|GUARD|BUSINESS) [^\n]+", logs)
+            report["runs"][-1]["pairs"] = pairs
+            report["runs"][-1]["ui"] = dict(KV.findall(result[0]))
+            matches = ", ".join(f"{s[stage_key]}={s['match']}/{s['n']}" for s in stages)
+            print(f"{label}: {matches}", flush=True)
+            return
         if dobby:
             report["runs"][-1]["live_views"] = live_views
             report["runs"][-1]["many_views"] = many_views
@@ -228,7 +269,7 @@ def main():
         report["artifacts"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (apk, kpm)}
         if not args.skip_install:
             adb("install", "--no-incremental", "-r", str(apk), timeout=120)
-        clean_mode = "dobby-detect-clean" if args.dobby_detection else "crc-clean"
+        clean_mode = f"{prefix}-clean"
         run_app("no-module", clean_mode)
 
         staged = True
@@ -239,12 +280,10 @@ def main():
         if "hooks=0xff" not in report["loaded_status"]:
             raise RuntimeError("UROV-Y hooks incomplete")
         run_app("loaded-idle", clean_mode)
-        modes = ("dobby-detect-active",) if args.dobby_detection else (
-            "crc-brk", "crc-uxn", "crc-ap", "crc-ap-all", "crc-ap-text", "crc-ap-libc", "crc-ap-big")
         for i in range(1, args.cycles + 1):
             for mode in modes:
                 run_app(f"{mode}-{i}", mode)
-        if args.dobby_detection:
+        if args.dobby_detection or args.read_defense:
             kp("kpm", "unload", MODULE)
             loaded = False
             run_app("post-unload", clean_mode)

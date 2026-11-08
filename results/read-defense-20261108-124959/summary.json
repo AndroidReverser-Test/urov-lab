@@ -1,0 +1,130 @@
+{
+  "serial": "25091FDF60063J",
+  "repeats": 12,
+  "cycles": 1,
+  "runs": [
+    {
+      "label": "no-module",
+      "mode": "read-defense-clean",
+      "uid": 10284,
+      "pid": "16398",
+      "log": "no-module-16398.log",
+      "result": "DETECT_RESULT PASS mode=read-defense-clean worker_ms=351 ui_ticks=129 ui_max_gap_ms=16 native=PASS cases=2 assertions=33 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "12",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "12",
+          "guarded_accept": "12",
+          "live_ok": "12",
+          "vma_preserved": "1",
+          "execute": "1234",
+          "user_crc": "96964c4f",
+          "live_crc": "96964c4f",
+          "pipe_mean_ns": "7541",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "12",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "0",
+          "guarded_accept": "0",
+          "live_ok": "12",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "a83a856d",
+          "live_crc": "a83a856d",
+          "pipe_mean_ns": "6069",
+          "errno": "0"
+        }
+      ],
+      "details": [
+        "READ_DEFENSE_REMAP stage=unarmed errno=0 vma_preserved=1 ns=3378",
+        "READ_DEFENSE_BUSINESS ops=2816 errors=0"
+      ],
+      "ui": {
+        "mode": "read-defense-clean",
+        "worker_ms": "351",
+        "ui_ticks": "129",
+        "ui_max_gap_ms": "16",
+        "native": "PASS",
+        "cases": "2",
+        "assertions": "33",
+        "failures": "0"
+      }
+    },
+    {
+      "label": "loaded-idle",
+      "mode": "read-defense-clean",
+      "uid": 10284,
+      "pid": "16484",
+      "log": "loaded-idle-16484.log",
+      "result": "DETECT_RESULT PASS mode=read-defense-clean worker_ms=350 ui_ticks=128 ui_max_gap_ms=17 native=PASS cases=2 assertions=33 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "12",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "12",
+          "guarded_accept": "12",
+          "live_ok": "12",
+          "vma_preserved": "1",
+          "execute": "1234",
+          "user_crc": "96964c4f",
+          "live_crc": "96964c4f",
+          "pipe_mean_ns": "10528",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "12",
+          "match": "0",
+          "unknown": "0",
+          "old_accept": "0",
+          "guarded_accept": "0",
+          "live_ok": "12",
+          "vma_preserved": "1",
+          "execute": "1235",
+          "user_crc": "a83a856d",
+          "live_crc": "a83a856d",
+          "pipe_mean_ns": "9246",
+          "errno": "0"
+        }
+      ],
+      "details": [
+        "READ_DEFENSE_REMAP stage=unarmed errno=0 vma_preserved=1 ns=4313",
+        "READ_DEFENSE_BUSINESS ops=4096 errors=0"
+      ],
+      "ui": {
+        "mode": "read-defense-clean",
+        "worker_ms": "350",
+        "ui_ticks": "128",
+        "ui_max_gap_ms": "17",
+        "native": "PASS",
+        "cases": "2",
+        "assertions": "33",
+        "failures": "0"
+      }
+    }
+  ],
+  "passed": false,
+  "initial_modules": "",
+  "boot_id_before": "7f8a8745-1517-4bf4-a229-bc8ccb4cdc6d",
+  "kernel": "Linux localhost 6.1.134-android14-11-g66e758f7d0c0-ab13748739 #1 SMP PREEMPT Tue Jul  8 09:17:32 UTC 2025 aarch64 Toybox",
+  "kpver": "c00",
+  "selinux": "Enforcing",
+  "artifacts": {
+    "urovdetect.apk": "2ce7ba851987149fd314e03793932c74d738a579572495689b166e03a89f27ad",
+    "urov-y.kpm": "5fa88121848de7818eede63ce2e71e021b2af47a4a0592609e76e124f88cc6be"
+  },
+  "loaded_status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=3d37 hooks=0xff core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x73f",
+  "error": "read-defense-brk-1: app failed, see read-defense-brk-1-16558.log",
+  "final_modules": "",
+  "boot_id_after": "7f8a8745-1517-4bf4-a229-bc8ccb4cdc6d",
+  "kernel_issues": []
+}

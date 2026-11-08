@@ -2,6 +2,201 @@
 
 本文按最新复核在前排列。
 
+## 2.16.0 GUP 读、成对独占、mremap 保活与写形状补全
+
+### 读取路径
+
+ABI 仍为 v8。`REGISTER` 在调用进程的 `mm` 上建立会话；`page_build_image()`
+从当前内存保存整页 `snapshot`，再用请求给的字节覆盖 `image` 的指定窗口。
+`PAGE_AP` 的 EL0 数据读仍由叶 PTE 的 `AP[1]=0` 触发
+`do_mem_abort()`，handler 按调用窗口选镜像/快照并模拟 load。
+
+2.16.0 在 2.15 的 EL0、`process_vm_readv`、`/proc/<pid>/mem`、`ptrace`
+之外补齐：
+
+| 路径 | 入口 | 2.16.0 做法 |
+| --- | --- | --- |
+| `vmsplice`/pipe | `get_user_pages_fast()` | after hook 把覆盖注册页的 GUP 项替换为镜像页副本；调用者按 GUP 约定释放 |
+| 成对独占 | `LDXP/LDAXP; load; STXP/STLXP` | 有界前向/后向窗口 + 直接分支位图 + GPR 门控；handler 提交 `STXP` 自己的值和状态 0 |
+| 等长/移动 `mremap` | `mremap` | after hook 更新页基址/VMA 范围并重排；不拆除会话；代码页位图按整段平移 |
+| `munmap`/`MAP_FIXED` | `munmap`/`mmap(MAP_FIXED)` | 只退役重叠页（`gone`），其余页与会话保持 ACTIVE |
+| 原子 RMW | `LDADD/LDCLR/LDEOR/LDSET/LDSMAX/LDSMIN/LDUMAX/LDUMIN`、`SWP`、`CAS/CASP` | 解码后在镜像/活页上完成同一操作；CAS 失败只写回旧值 |
+| `STXR/STXP` 写注册页 | 独占 store | 按 `ERET` 清监视器的原生结果置状态 1，不退役页 |
+| 跨页 store | 普通/SIMD/`DC ZVA` | 按页拆分写入并逐页发布 |
+| fork 子进程写 | 子进程 `mprotect` + store | 固定池影子镜像；子进程读影子，owner 镜像不变 |
+
+`PAGE_AP` 在缺页和 `mprotect` 后重装陷阱；fork 子进程的 `mprotect` 也会
+重新清 `AP[1]`。普通 store 与原子写通过内核 COW/GUP 路径落到活页，并在
+返回 EL0 前重装 `AP[1]=0`。
+
+### 无密钥检测与保护
+
+2.15.0 结果中的三条普通 App 路径在 2.16.0 上不再产生稳定分叉：
+
+1. **读实页。** `vmsplice` 的 pipe 视图与 EL0 视图都等于镜像；原先
+   `READ_DEFENSE stage=overlay match=8 guarded_accept=0` 改为
+   `match=0 guarded_accept=8`。
+2. **AP 成对独占。** `LDXP; LDRB; STXP` 的目标 `STXP` 成功，探针回到
+   `NO_MATCH`（`READ_DEFENSE_PAIR ... target_ok=64`）。
+3. **撤销会话。** 等长 `mremap(page,page,page,0)` 后会话仍 ACTIVE，
+   `READ_DEFENSE_STATUS active_before=1 active_after_remap=1`；需要显式
+   `DEACTIVATE` 才恢复真实页。
+
+生产 CRC 仍应把“活页字节 + 可信文件摘要”作为最终依据；本版让 EL0/pipe/
+内核辅助读在同一时点看到同一镜像，但读时间、SVE/SME store、root 可见性
+等边界见 2.16.0 设计 §6。
+
+### 真机数据
+
+Pixel 6 / Android 16 / ARM64 / 4 KiB / `6.1.134-android14-11` / KernelPatch
+`0xc00`。探针运行在 `untrusted_app`，`CapEff=0`、`Seccomp=2`，SELinux
+Enforcing。模块密钥只用于夹具注册和状态对照。
+
+```text
+urov-y.kpm      9d715b110ecf6b505fb7a7a7fa326f510cc93ddfca162371b749c297ef2283c8
+urovdetect.apk  6d7b8ae8d123aaf7501f23074c20bc2534a6dc621b240267232377aa87d73b17
+```
+
+| 矩阵 | 结果 | 目录 |
+| --- | --- | --- |
+| 加固读防御 8×1 | PASS；BRK/UXN 保持原语义；AP/AP-all 的 `overlay=0/8`、`guarded_accept=8/8`、pipe 与 EL0 均为文件页；pair 全 `NO_MATCH`；`mremap` 后仍 ACTIVE | [read-defense-20261108-134410](results/read-defense-20261108-134410/summary.json) |
+| CRC 5×1 | PASS；`crc-ap-*` 的 direct/window 均等于镜像 | [crc-20261108-134434](results/crc-20261108-134434/summary.json) |
+| 消除 3×1 | PASS；`ELIM_PROT ... store_absorbed=1`、`ELIM_PROT_STORE shapes=16`（LDADD/SWP/CAS/CAS-fail/STADD/CASP）、`ELIM_BRIDGE` 全 0、`site_call_ns≈340` | [eliminate-20261108-134502](results/eliminate-20261108-134502/summary.json) |
+| 多页 3×1 | PASS；24 页/96 KiB、五条读路径、fork 子进程 | [multipage-20261108-134615](results/multipage-20261108-134615/summary.json) |
+| Dobby 24×1 | PASS；`accepted_crc=24/24`、`ap=0/24`、`views=0/24` | [dobby-detect-20261108-134638](results/dobby-detect-20261108-134638/summary.json) |
+| `urov_y_test` | `--mode ap` PASS；`--fork-write` PASS；`--mremap` PASS | 设备输出 |
+
+全部矩阵前后 boot ID 一致，增量内核日志未匹配 `BUG:`/`WARNING:`/`Oops`/
+panic/RCU stall/hung task，测试后 `kpm list` 为空。
+
+### 机制要点
+
+- **GUP fast**：只替换 owner 或带陷阱叶的 fork 子进程的页；跳过
+  `FOLL_PIN`/`FOLL_LONGTERM`；镜像页由调用者的 GUP 引用持有，会话结束/
+  模块卸载不影响已入 pipe 的页。
+- **成对桥**：`LDXP` 的两半结果仍等于内存（或两半 `XZR` 时使用控制流证据），
+  间隔只允许 `NOP/BTI`；提交 `STXP` 的原始值、状态 0、PC 跳过间隔。
+- **映射保活**：等长 `mremap` 不前拆会话；移动 `mremap` 更新页基址/VMA；
+  `munmap`/`MAP_FIXED` 只退役重叠页。代码位图整段平移，部分移动才
+  fail-closed。
+- **写形状**：普通 store、SIMD、`STP`、`ST1`、`DC ZVA`、LSE 原子、
+  `CASP`、跨页写都由 handler 完成；`STXR/STXP` 写注册页按原生失败处理。
+- **fork 影子**：子进程第一次写注册页时从固定池取影子页；父镜像不受影响，
+  子进程读/pipe/内核辅助读都取影子。
+- **输出面**：没有新增 syscall hook、ABI 字段、文件、线程、定时器或返回码；
+  `hooks=0xff`、`ctl0` 文本格式不变。
+
+### 残余（2.16.0）
+
+1. 每次 EL0 数据读仍一次同步异常，GUP/原子/影子有额外计时；计时/PMU 是
+   架构边界，按本轮要求保留。
+2. SVE/SME store、非 `NOP/BTI` 间隔的独占序列仍 fail-closed；Pixel 6 无
+   SVE/SME。
+3. fork 子进程自己的 `mremap`/`munmap` 没有重建影子地址；owner 不受影响。
+4. fork 影子在子进程第一次写时创建；owner 在 fork 后、子进程首次写前
+   `SET` 会让子进程看到新镜像而不是 fork 快照。
+5. 原子 RMW 的读-算-写不是硬件单指令原子；并发同页写可能丢更新。
+6. fast-GUP 的 `FOLL_WRITE` 被当作源页；当前内核真正写注册页的 GUP 写者
+   走 `access_remote_vm`。
+7. `pkey_mprotect` 已分配 pkey/POE、shared VMA 的合法 `remap_file_pages`
+   仍保守处理；`execve`/进程退出仍结束会话。
+8. root 仍可用 `kpm list`/`ctl0 status` 看到模块与会话；需要改
+   KernelPatch 核心才能隐藏，超出只改 `urov-y` 的范围。
+
+### 复跑
+
+```powershell
+./kpms/urov-lab/build.ps1
+./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --read-defense --repeats 8 --cycles 1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --repeats 5 --cycles 1
+python ./kpms/urov-lab/tools/run_elimination_device.py --serial $Serial --key $KpKey --skip-x-control --repeats 3 --cycles 1
+python ./kpms/urov-lab/tools/run_multipage_device.py --serial $Serial --key $KpKey --repeats 3 --cycles 1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --dobby-detection --repeats 24 --cycles 1
+```
+
+## 2.15.0 普通 App 读实页与撤销会话
+
+### 读取路径
+
+ABI v8 控制面校验请求 MAC。`REGISTER` 在调用进程的 `mm` 上建立会话。
+`page_build_image()` 从当前内存保存整页 `snapshot`，再用请求给的字节覆盖 `image`
+的指定窗口。对走仿真的读，命中 LR 或帧链中的调用范围时用 `image`，范围外用 `snapshot`。
+调用范围为空时所有受拦截的读都用 `image`。未拦截的 load 由 CPU 执行。
+
+| 模式 | 捕获点 | 伪造发生的位置 |
+| --- | --- | --- |
+| `SITE_BRK` | 指定读指令在私有 COW 页上被替换为 `BRK` | BRK handler 解码原 load，把镜像数据写回 GPR 或 FPSIMD，推进 PC |
+| `PAGE_UXN` | 读者代码页的叶 PTE 置 UXN | 取指异常走同一 load 仿真，支持有限的 `RET`、`NOP`、`BTI` |
+| `PAGE_AP` | 目标页叶 PTE 清 AP[1]，取指继续从活页执行 | EL0 数据权限异常仿真标量、SIMD 等已支持的 load。`process_vm_readv` 和 `__access_remote_vm` 的 after hook 另外改写内核辅助读的结果 |
+
+`PAGE_AP` 在缺页和 `mprotect` 后重装陷阱。2.15.0 让受支持的 store 走内核 COW/GUP 写路径，
+把同一批字节发布到镜像与快照，同时保留 AP 陷阱。单寄存器 `LDXR/STXR` 桥用直接分支位图、
+寄存器值和间隔指令校验约束提交，覆盖 XZR scratch 非零的情形。普通 store、权限切换和
+旧 XZR 探针因此不能作为撤销或可靠告警。详见 [后端源码](urov_y_backend.c) 和
+[2.15.0 设计](ELIMINATION_2_15_DESIGN.md)。
+
+### 无密钥检测与保护
+
+1. **读实页并校验。** 对 App 持有且生命周期稳定的 RX 地址，用 `vmsplice` 把该地址的
+   `iovec` 送入私有非阻塞 pipe，再用 `read` 取到普通缓冲区。内核通过 GUP 引用当前映射的
+   页，路径绕开三个异常仿真入口和两条内核辅助读改写入口。同地址的活页字节可直接作为
+   完整性校验的输入。需要确认伪造时，与业务读者交错取两份，确认各自稳定后逐字节比较。
+   纯 Dobby 改码会使两条读取路径都看到改码，因而只报代码完整性不符。短读、错误、映射
+   或样本变化归为未知。上线时按页分块，在后台对受控范围运行，检查目标机型允许该 syscall。
+   [Android 内核 splice 实现](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1-sp/fs/splice.c)
+   [Linux GUP 入口](https://raw.githubusercontent.com/torvalds/linux/v6.1/lib/iov_iter.c)
+2. **AP 辅证。** 在 16 字节对齐的线程私有 scratch 上执行 `LDXP`，中间用 `LDRB` 读 RX，
+   最后 `STXP` 把 scratch 原值写回。2.15.0 的桥不处理成对独占。预热并交替读取目标与
+   RX 对照，本次使用 64 对样本。仅在对照成功至少 62 次、目标成功 0 次、采样字节相等时
+   判为陷阱信号。调度、其他异常和 CPU 差异会影响独占状态，这条信号用于佐证。
+3. **撤销现有会话。** 确认分叉后，仅对受控且页对齐的映射调用
+   `mremap(page, page_size, page_size, 0)`。2.15.0 的范围门控在原 syscall 前撤销重叠会话。
+   本机内核在等长、零标志条件下返回原地址，测试检查 VMA、活页字节及执行结果。
+   撤销范围是整个会话。BRK 释放可能等待 RCU Tasks，适合后台维护点。原映射仍可再次注册。
+   [Android 内核 mremap 实现](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1-sp/mm/mremap.c)
+4. **防止特定目标注册。** 对 App 本来就管理的独立代码页，`MAP_PRIVATE|MAP_ANONYMOUS`
+   的 RX VMA 没有 `vm_file`，三个模式的目标页校验都返回 `EINVAL`。测试仅用一段位置无关
+   的自有函数，先 RW 填充再改 RX。常规 ELF `.text` 采用读实页校验，无需重映射。
+   只读 fd 的 `MAP_SHARED` 在真机试跑中仍能注册。Linux 会清掉内部 `VM_SHARED`，而
+   `/proc/self/maps` 仍可显示 `s`，因此不能用 `r-xs` 推断它会被此模块拒绝。
+   [共享映射的内核标志](https://raw.githubusercontent.com/torvalds/linux/v6.1/mm/mmap.c#L1277)
+   [共享映射试跑日志](results/read-defense-20261108-124959/read-defense-brk-1-16558.log)
+
+### 真机数据
+
+Pixel 6 / Android 16 / ARM64 / 4 KiB / `6.1.134-android14-11` / KernelPatch `0xc00`。
+探针运行在 `untrusted_app`，`CapEff=0`、`Seccomp=2`，SELinux Enforcing。模块密钥只用于
+夹具注册和状态对照。使用下方历史矩阵同一份 `urov-y.kpm`，SHA-256 为 `5fa88121…`。
+
+| 阶段 | 两条路径的稳定分叉 | 原校验接受原始字节 | 实页校验接受原始字节 |
+| --- | ---: | ---: | ---: |
+| 原始代码 | 0 / 3,456 | 3,456 / 3,456 | 3,456 / 3,456 |
+| 仅 Dobby 改码 | 0 / 3,456 | 0 / 3,456 | 0 / 3,456 |
+| 活动伪造，四种配置各 6 个进程 | 3,072 / 3,072 | 3,072 / 3,072 | 0 / 3,072 |
+| 等长 `mremap` 撤销后 | 0 / 3,072 | 0 / 3,072 | 0 / 3,072 |
+
+- `vmsplice` 的 13,056 次对照和活动采样均取得与真实页一致的 32 字节，未知数为 0。
+  各阶段单次管道取样均值为 3.2–27.3 μs，含创建和关闭私有 pipe。
+- 两种 AP 配置各 6 个进程命中成对独占探针。目标 `STXP` 成功 0/768，对照 768/768。
+  其余 90 组无命中。旧 Dobby `process_vm_readv`、单寄存器独占和 XZR 探针复跑仍漏掉
+  96/96 次活动 AP 样本。[旧探针复跑](results/dobby-detect-20261108-125713/summary.json)
+- 不重叠的 `mremap` 对照保持会话活动，24/24 次目标页撤销成功，24/24 次匿名 RX 注册被拒。
+  BRK 撤销最长约 112 ms，UXN 和 AP 最长低于 0.3 ms。业务线程 703,744 次迭代零错误，UI
+  心跳最大间隔 25 ms，VMA 与预期执行结果均通过。前后 boot ID 相同，增量日志未匹配内核故障，
+  最终模块列表为空。
+
+结果覆盖当前二进制和所测机型的采样范围。相等表示该次采样未发现分叉，加载但未布置伪造的
+模块不会因此产生告警。`vmsplice` 取到的是当时的活页，业务校验仍需可信的期望摘要。
+
+[测试实现](apps/urov-detect/read_defense_fixture.inc) ·
+[正式矩阵及逐进程日志索引](results/read-defense-20261108-125531/summary.json)
+
+```powershell
+./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --read-defense --repeats 128 --cycles 6
+```
+
 ## 2.15.0 写入吸收与 XZR 桥接
 
 2026-11-08，Pixel 6 / Android 16 / `6.1.134-android14-11` / 4 KiB / KernelPatch

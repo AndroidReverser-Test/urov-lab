@@ -9,7 +9,8 @@ add_library(urovdetect SHARED app.c "${lab}/native/urov_detect.c" "${lab}/native
 target_include_directories(urovdetect PRIVATE "${lab}/native")
 set_target_properties(urovdetect PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
 target_compile_options(urovdetect PRIVATE
-    -O2 -g0 -Wall -Wextra -Werror -Wformat=2 -Wshadow -fno-omit-frame-pointer -pthread)
+    -O2 -g0 -Wall -Wextra -Werror -Wformat=2 -Wshadow -fno-omit-frame-pointer -pthread
+    -march=armv8.1-a)
 target_link_options(urovdetect PRIVATE
     -pthread -Wl,--build-id=sha1 -Wl,-z,noexecstack -Wl,-z,max-page-size=16384
     -Wl,--exclude-libs,libdobby.a)

@@ -2,6 +2,20 @@
 
 更新于 2026-11-08（Asia/Shanghai）。
 
+> 2026-11-08 补充：`urov-y` 2.16.0 消除 2.15.0 仍成立的三条无密钥读侧路径
+> 和两类写侧残余：`vmsplice` 的 GUP-fast 读、`LDXP; LDRB; STXP` 成对独占、
+> 等长 `mremap` 撤销；LSE 原子 RMW（`LDADD` 族/SWP/CAS/CASP）、`STXR/STXP`
+> 写注册页、跨页 store、fork 子进程 `mprotect`+写。`munmap`/`MAP_FIXED`
+> 只退役重叠页，移动 `mremap` 更新页基址/VMA；代码页重复扫描改读 snapshot，
+> 避开 PAN 下 `AP[1]=0` 的 uaccess 失败。加固读防御 8×1（AP 的 pipe/EL0
+> 视图相等、pair `NO_MATCH`、`mremap` 后仍 ACTIVE）、CRC 5×1、消除 3×1
+> （`ELIM_PROT_STORE shapes=16`）、多页 3×1、Dobby 24×1 均 PASS；
+> `site_call_ns≈340`。构建 `urov-y.kpm 9d715b11...`、
+> `urovdetect.apk 6d7b8ae8...`。见
+> [ELIMINATION_2_16_DESIGN.md](ELIMINATION_2_16_DESIGN.md)、
+> [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.16.0 节
+> 与 [APP_READ_INTEGRITY_AUDIT.md](APP_READ_INTEGRITY_AUDIT.md) 的 2.16.0 节。
+>
 > 2026-11-08 补充：`urov-y` 2.15.0 消除 2.14.0 仍成立的两条写侧特征：
 > 已登记页的普通 store 不再退役覆盖（解码 11 种 GPR/SIMD/STP/ST1/DC ZVA
 > 写形状，由内核 COW/GUP 写路径完成同一批字节，同步镜像并保持 `AP[1]=0`）；

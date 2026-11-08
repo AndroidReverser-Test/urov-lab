@@ -1,0 +1,21 @@
+--------- beginning of main
+10-05 03:30:39.564 19813 19837 I urovdetect: CONTEXT pid=19813 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 03:30:39.564 19813 19837 I urovdetect: BEGIN mode=read-defense-uxn repeats=128
+10-05 03:30:39.581 19813 19837 I urovdetect: READ_DEFENSE stage=clean n=128 match=0 unknown=0 old_accept=128 guarded_accept=128 live_ok=128 vma_preserved=1 execute=1234 user_crc=96964c4f live_crc=96964c4f pipe_mean_ns=18274 errno=0
+10-05 03:30:39.582 19813 19837 I urovdetect: READ_DEFENSE_PAIR stage=clean n=64 match=0 target_ok=64 control_ok=64 same_byte=1
+10-05 03:30:39.583 19813 19837 I urovdetect: DOBBY_HOOK address=0x70e00ea000 original=1234 hooked=1235
+10-05 03:30:39.593 19813 19837 I urovdetect: READ_DEFENSE_REMAP stage=unarmed errno=0 vma_preserved=1 ns=8463
+10-05 03:30:39.608 19813 19837 I urovdetect: READ_DEFENSE stage=patch_only n=128 match=0 unknown=0 old_accept=0 guarded_accept=0 live_ok=128 vma_preserved=1 execute=1235 user_crc=070fd536 live_crc=070fd536 pipe_mean_ns=17979 errno=0
+10-05 03:30:39.608 19813 19837 I urovdetect: READ_DEFENSE_PAIR stage=patch_only n=64 match=0 target_ok=64 control_ok=64 same_byte=1
+10-05 03:30:39.654 19813 19837 I urovdetect: READ_DEFENSE_REMAP stage=outside errno=0 vma_preserved=1 ns=9685
+10-05 03:30:39.664 19813 19837 I urovdetect: READ_DEFENSE stage=overlay n=128 match=128 unknown=0 old_accept=128 guarded_accept=0 live_ok=128 vma_preserved=1 execute=1235 user_crc=96964c4f live_crc=070fd536 pipe_mean_ns=6378 errno=0
+10-05 03:30:39.664 19813 19837 I urovdetect: READ_DEFENSE_PAIR stage=overlay n=64 match=0 target_ok=64 control_ok=64 same_byte=1
+10-05 03:30:39.668 19813 19837 I urovdetect: READ_DEFENSE_REMAP stage=overlap errno=0 vma_preserved=1 ns=19694
+10-05 03:30:39.668 19813 19837 I urovdetect: READ_DEFENSE_STATUS active_before=1 inactive_after=1
+10-05 03:30:39.672 19813 19837 I urovdetect: READ_DEFENSE stage=restored n=128 match=0 unknown=0 old_accept=0 guarded_accept=0 live_ok=128 vma_preserved=1 execute=1235 user_crc=070fd536 live_crc=070fd536 pipe_mean_ns=4858 errno=0
+10-05 03:30:39.672 19813 19837 I urovdetect: READ_DEFENSE_PAIR stage=restored n=64 match=0 target_ok=64 control_ok=64 same_byte=1
+10-05 03:30:39.674 19813 19837 I urovdetect: READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1
+10-05 03:30:39.675 19813 19837 I urovdetect: READ_DEFENSE_BUSINESS ops=21504 errors=0
+10-05 03:30:39.675 19813 19837 I urovdetect: CONTEXT pid=19813 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 03:30:39.675 19813 19837 I urovdetect: NATIVE_RESULT PASS cases=4 assertions=541 failures=0 mode=read-defense-uxn
+10-05 03:30:39.918 19813 19813 I urovdetect: DETECT_RESULT PASS mode=read-defense-uxn worker_ms=350 ui_ticks=128 ui_max_gap_ms=16 native=PASS cases=4 assertions=541 failures=0

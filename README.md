@@ -1,5 +1,19 @@
 # UROV-LAB
 
+`urov-y` 2.16.0 消除 2.15.0 仍成立的三条无密钥读侧路径和两类写侧残余：
+`vmsplice()` 的 `get_user_pages_fast()` 读改由 GUP after hook 返回镜像页；
+`LDXP; LDRB; STXP` 成对独占由与单寄存器桥相同的控制流证据完成；等长
+`mremap` 不再先拆会话，移动 `mremap` 会更新页基址/VMA，`munmap`/`MAP_FIXED`
+只退役重叠页。写侧新增 LSE 原子 RMW（`LDADD` 族、`SWP`、`CAS/CASP`）、
+`STXR/STXP` 写注册页的原生失败处理、跨页 store，以及 fork 子进程的私有
+影子镜像；代码页重复扫描改读 snapshot，避开 PAN 下 `AP[1]=0` 的 uaccess
+失败。ABI 仍为 v8，`hooks=0xff`、请求布局、`ctl0` 字段和返回码不变。
+2.16.0 的矩阵：加固读防御 8×1、CRC 5×1、消除 3×1
+（`ELIM_PROT_STORE shapes=16`）、多页 3×1、Dobby 24×1 均 PASS；
+`site_call_ns≈340`。设计与残余见
+[ELIMINATION_2_16_DESIGN.md](ELIMINATION_2_16_DESIGN.md)。构建
+`urov-y.kpm 9d715b11...`、`urovdetect.apk 6d7b8ae8...`。
+
 `urov-y` 2.15.0 消除 2.14.0 的两个稳定写侧特征：对已登记页的普通 store
 不再把该页退役，而是解码出原指令、由内核 COW/GUP 写路径完成同样的字节，
 再把镜像与快照同步并重新装回 `AP[1]=0` 陷阱；`LDXR XZR; LDRB; STXR XZR`

@@ -2,7 +2,7 @@
 
 2026-11-07，Pixel 6，Android 16，内核 `6.1.134-android14-11`，4 KiB 页，KernelPatch `0xc00`。检测在 `untrusted_app` 域运行，`CapEff=0`，`Seccomp=2`。ADB 端使用 root 装卸模块和收集内核真值。活动测试夹具用单独的模块密钥注册自己的页，检测函数只接收地址、同文件参考映射和偏移。
 
-**当前 `urov-y` 2.15.0 的普通 App 方案**见[写入吸收与 XZR 桥接](APP_READ_INTEGRITY_RESULTS.md#2150-写入吸收与-xzr-桥接)。2.15.0 在 2.14.0 的读侧之上让普通 store 不再退役覆盖：解码 11 种写形状，由内核 COW/GUP 写路径完成同一批字节，保持 `AP[1]=0`；`LDXR XZR` 的非零目标也按控制流证据完成。2.14.0 让成功的 `mprotect` 保护切换不再结束会话（`PROT_NONE` 仍原生 `SIGSEGV`），第一次真实 store 才由 Linux COW 并退役该页；Linux 会拒绝的 pkey/remap_file_pages/fixed-mmap 调用不再先拆会话。以下保留各版本的实验记录。
+**当前 `urov-y` 2.16.0 的普通 App 方案**见[GUP 读、成对独占、mremap 保活与写形状补全](APP_READ_INTEGRITY_RESULTS.md#2160-gup-读成对独占mremap-保活与写形状补全)。2.16.0 在 2.15.0 之上补齐 `vmsplice` 的 GUP-fast 读、`LDXP/STXP` 成对独占、等长/移动 `mremap`、按页 `munmap`/`MAP_FIXED`、LSE 原子 RMW（含 `CAS/CASP`）、跨页 store 和 fork 子进程影子镜像。2.15.0 让普通 store 不再退役覆盖并桥接 `LDXR XZR`；2.14.0 让 `mprotect` 保护切换不再结束会话。以下保留各版本的实验记录。
 
 ## 当前源码怎样伪造读取
 
@@ -404,6 +404,65 @@ VMA，把每个 `B/BL/B.cond/CBZ/CBNZ/TBZ/TBNZ` 的静态目标写入按 VMA 划
 `madvise` 撤销、`mlock` 拒绝、PTE 重装窗口、单次同步异常和非硬件独占 store
 仍在；兄弟 tid 路径依赖可选的 `find_task_by_vpid`。完整数据和复跑命令见
 [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.11.0 节。
+
+## 2.16.0 GUP 读、成对独占与映射保活（2026-11-08）
+
+同一 Pixel 6、`6.1.134-android14-11`、4 KiB、KernelPatch `0xc00`。构建
+`urov-y.kpm 9d715b11...`、`urovdetect.apk 6d7b8ae8...`。检测仍在
+`untrusted_app`（`CapEff=0`、`Seccomp=2`、SELinux Enforcing）中执行。
+
+2.15.0 仍有三条无密钥读侧路径和两条写侧残余：
+
+1. `vmsplice()` 通过 `get_user_pages_fast()` 读活页；
+2. `LDXP; LDRB; STXP` 成对独占在 `ERET` 后失败；
+3. 等长 `mremap` 在 Linux 返回前拆会话；
+4. 原子 RMW、`STXR/STXP` 写注册页、跨页 store 退役该页；
+5. fork 子进程 `mprotect(RW)` 后写自己的 COW 拷贝并读真实页。
+
+2.16.0 的读取/写入路径：
+
+- **GUP fast。** after hook 把覆盖注册页的 GUP 页替换为镜像副本；只处理
+  owner/带陷阱叶的 fork 子进程，跳过 `FOLL_PIN`/`FOLL_LONGTERM`。镜像页
+  由调用者的 GUP 引用持有，pipe 可安全读取。
+- **成对桥。** 在 `LDXP/LDAXP; load; STXP/STLXP` 上复用单寄存器桥的
+  直接分支位图 + GPR 间接目标门控；校验两半寄存器/基址/宽度，提交
+  `STXP` 自己的值、状态 0、PC 跳过 `NOP/BTI` 间隔。
+- **映射保活。** 等长 `mremap` 不前拆会话；移动 `mremap` 更新页基址/VMA；
+  `munmap`/`MAP_FIXED` 只把重叠页标 `gone`；代码位图整段平移，部分移动
+  才 fail-closed。
+- **写形状。** 新增 LSE 原子解码/模拟（`LDADD` 族、`SWP`、`CAS/CASP` 和
+  `ST*` 无返回形式）、`STXR/STXP` 原生失败处理、跨页 store；写后重装
+  `AP[1]=0`。
+- **fork 影子。** 子进程 `mprotect` 后重新装陷阱；第一次子进程写分配影子
+  镜像，父镜像不受影响。
+- **输出面。** ABI 仍 v8；`hooks=0xff`、`ctl0` 文本、计数器、返回码不变；
+  没有新增 syscall hook、文件、线程或定时器。
+
+真机结果：
+
+| 矩阵 | 结果 |
+| --- | --- |
+| 加固读防御 8×1 | PASS；AP 的 `overlay=0/8`、`guarded_accept=8/8`、pair `NO_MATCH`、`mremap` 后 `active_after_remap=1` |
+| CRC 5×1 | PASS，`crc-ap-*` 的 direct/window 均等于镜像 |
+| 消除 3×1 | PASS；`ELIM_PROT ... store_absorbed=1`、`ELIM_PROT_STORE shapes=16`（含 LDADD/SWP/CAS/CASP）、`ELIM_BRIDGE` 全 0 |
+| 多页 3×1 | PASS，24 页/96 KiB、五条读路径、fork 子进程 |
+| Dobby 24×1 | PASS；`accepted_crc=24/24`、`ap=0/24`、`views=0/24` |
+
+残余（2.16.0）：
+
+1. 每次 EL0 数据读仍一次同步异常；GUP/原子/影子有额外计时，计时/PMU 保留。
+2. SVE/SME store、非 `NOP/BTI` 间隔独占仍 fail-closed；Pixel 6 无 SVE/SME。
+3. fork 子进程自己的 `mremap`/`munmap` 没有重建影子地址；owner 不受影响。
+4. fork 影子在子进程第一次写时创建；owner 在 fork 后、子进程首次写前
+   `SET` 会改变子进程看到的初始镜像。
+5. 原子 RMW 不是硬件单指令原子；并发同页写可能丢更新。
+6. fast-GUP 的 `FOLL_WRITE` 被当作源页；当前真正写注册页的 GUP 写者走
+   `access_remote_vm`。
+7. `pkey`/POE、shared `remap_file_pages`、`execve`/进程退出仍保守；root
+   仍可用 `kpm list`/`ctl0 status` 看到模块。
+
+完整数据见 [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md)
+的 2.16.0 节与 [ELIMINATION_2_16_DESIGN.md](ELIMINATION_2_16_DESIGN.md)。
 
 ## 2.15.0 写入吸收与 XZR 桥接（2026-11-08）
 
