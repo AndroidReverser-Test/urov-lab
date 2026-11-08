@@ -182,6 +182,151 @@ static void check_sysreg_fpsr(const char *name, uint32_t insn, uint32_t want)
     printf("ok   %-30s\n", name);
 }
 
+/* Native reference stubs for the integer SIMD cases.  Each stub loads its
+ * input vectors, executes the exact instruction and stores the destination, so
+ * the architecture computes the expected bytes; a modeling mistake cannot
+ * agree with a second hand-written formula.  Two-input forms put Vn/Vm in
+ * v1/v2 and write v0; the accumulating BSL/BIT/BIF/MLA/MLS forms also read v0,
+ * which is loaded from the third pointer. */
+#define VEC2_STUB(name, ...) \
+    __asm__(".text\n" \
+            ".global " #name "\n" \
+            ".type " #name ",%function\n" \
+            #name ":\n" \
+            "ldr q1, [x0]\n" \
+            "ldr q2, [x1]\n" \
+            __VA_ARGS__ "\n" \
+            "str q0, [x2]\n" \
+            "ret\n");
+
+#define VEC3_STUB(name, ...) \
+    __asm__(".text\n" \
+            ".global " #name "\n" \
+            ".type " #name ",%function\n" \
+            #name ":\n" \
+            "ldr q0, [x0]\n" \
+            "ldr q1, [x1]\n" \
+            "ldr q2, [x2]\n" \
+            __VA_ARGS__ "\n" \
+            "str q0, [x3]\n" \
+            "ret\n");
+
+VEC2_STUB(vec_and16, "and v0.16b, v1.16b, v2.16b")
+VEC2_STUB(vec_orr16, "orr v0.16b, v1.16b, v2.16b")
+VEC2_STUB(vec_eor16, "eor v0.16b, v1.16b, v2.16b")
+VEC2_STUB(vec_bic16, "bic v0.16b, v1.16b, v2.16b")
+VEC2_STUB(vec_orn16, "orn v0.16b, v1.16b, v2.16b")
+VEC2_STUB(vec_and8, "and v0.8b, v1.8b, v2.8b")
+VEC2_STUB(vec_eor8, "eor v0.8b, v1.8b, v2.8b")
+VEC2_STUB(vec_add16b, "add v0.16b, v1.16b, v2.16b")
+VEC2_STUB(vec_sub8h, "sub v0.8h, v1.8h, v2.8h")
+VEC2_STUB(vec_add4s, "add v0.4s, v1.4s, v2.4s")
+VEC2_STUB(vec_sub2d, "sub v0.2d, v1.2d, v2.2d")
+VEC2_STUB(vec_cmeq16, "cmeq v0.16b, v1.16b, v2.16b")
+VEC2_STUB(vec_cmtst16, "cmtst v0.16b, v1.16b, v2.16b")
+VEC2_STUB(vec_cmgt4s, "cmgt v0.4s, v1.4s, v2.4s")
+VEC2_STUB(vec_cmhi4s, "cmhi v0.4s, v1.4s, v2.4s")
+VEC2_STUB(vec_cmge2d, "cmge v0.2d, v1.2d, v2.2d")
+VEC2_STUB(vec_cmhs8h, "cmhs v0.8h, v1.8h, v2.8h")
+VEC2_STUB(vec_smax4s, "smax v0.4s, v1.4s, v2.4s")
+VEC2_STUB(vec_umin8h, "umin v0.8h, v1.8h, v2.8h")
+VEC2_STUB(vec_smin4s, "smin v0.4s, v1.4s, v2.4s")
+VEC2_STUB(vec_mul4s, "mul v0.4s, v1.4s, v2.4s")
+VEC2_STUB(vec_sshl4s, "sshl v0.4s, v1.4s, v2.4s")
+VEC2_STUB(vec_ushl2d, "ushl v0.2d, v1.2d, v2.2d")
+VEC2_STUB(vec_cmeq2d, "cmeq v0.2d, v1.2d, v2.2d")
+VEC3_STUB(vec_bsl16, "bsl v0.16b, v1.16b, v2.16b")
+VEC3_STUB(vec_bit16, "bit v0.16b, v1.16b, v2.16b")
+VEC3_STUB(vec_bif16, "bif v0.16b, v1.16b, v2.16b")
+VEC3_STUB(vec_mla4s, "mla v0.4s, v1.4s, v2.4s")
+VEC3_STUB(vec_mls8h, "mls v0.8h, v1.8h, v2.8h")
+
+#define VEC2_DECL(name) extern void name(const void *, const void *, void *)
+#define VEC3_DECL(name) extern void name(const void *, const void *, const void *, void *)
+VEC2_DECL(vec_and16); VEC2_DECL(vec_orr16); VEC2_DECL(vec_eor16); VEC2_DECL(vec_bic16);
+VEC2_DECL(vec_orn16); VEC2_DECL(vec_and8); VEC2_DECL(vec_eor8); VEC2_DECL(vec_add16b);
+VEC2_DECL(vec_sub8h); VEC2_DECL(vec_add4s); VEC2_DECL(vec_sub2d); VEC2_DECL(vec_cmeq16);
+VEC2_DECL(vec_cmtst16); VEC2_DECL(vec_cmgt4s); VEC2_DECL(vec_cmhi4s); VEC2_DECL(vec_cmge2d);
+VEC2_DECL(vec_cmhs8h); VEC2_DECL(vec_smax4s); VEC2_DECL(vec_umin8h); VEC2_DECL(vec_smin4s);
+VEC2_DECL(vec_mul4s); VEC2_DECL(vec_sshl4s); VEC2_DECL(vec_ushl2d); VEC2_DECL(vec_cmeq2d);
+VEC3_DECL(vec_bsl16); VEC3_DECL(vec_bit16); VEC3_DECL(vec_bif16); VEC3_DECL(vec_mla4s);
+VEC3_DECL(vec_mls8h);
+
+static uint64_t simd_state = UINT64_C(0x9e3779b97f4a7c15);
+
+static uint8_t simd_byte(void)
+{
+    simd_state = simd_state * UINT64_C(6364136223846793005) +
+                 UINT64_C(1442695040888963407);
+    return (uint8_t)(simd_state >> 33);
+}
+
+static void check_simd2(const char *name, uint32_t insn,
+                        void (*native)(const void *, const void *, void *))
+{
+    uint8_t a[16], b[16], want[16];
+    unsigned i;
+
+    for (i = 0; i < 16; ++i) { a[i] = simd_byte(); b[i] = simd_byte(); }
+    native(a, b, want);
+    fp_reset();
+    for (i = 0; i < 16; ++i) { fp.vregs[1][i] = a[i]; fp.vregs[2][i] = b[i]; }
+    memset(&model, 0, sizeof(model));
+    ++cases;
+    if (!uy_win_simd(&model, &fp, insn) || memcmp(fp.vregs[0], want, 16)) {
+        printf("FAIL %-30s model/arch mismatch insn=%08x\n", name, insn);
+        ++failures;
+        return;
+    }
+    printf("ok   %-30s\n", name);
+}
+
+static void check_simd3(const char *name, uint32_t insn,
+                        void (*native)(const void *, const void *, const void *, void *))
+{
+    uint8_t a[16], b[16], d[16], want[16];
+    unsigned i;
+
+    for (i = 0; i < 16; ++i) { a[i] = simd_byte(); b[i] = simd_byte(); d[i] = simd_byte(); }
+    native(d, a, b, want);
+    fp_reset();
+    for (i = 0; i < 16; ++i) { fp.vregs[0][i] = d[i]; fp.vregs[1][i] = a[i]; fp.vregs[2][i] = b[i]; }
+    memset(&model, 0, sizeof(model));
+    ++cases;
+    if (!uy_win_simd(&model, &fp, insn) || memcmp(fp.vregs[0], want, 16)) {
+        printf("FAIL %-30s model/arch mismatch insn=%08x\n", name, insn);
+        ++failures;
+        return;
+    }
+    printf("ok   %-30s\n", name);
+}
+
+static void check_simd_declined(const char *name, uint32_t insn)
+{
+    ++cases;
+    fp_reset();
+    memset(&model, 0, sizeof(model));
+    if (uy_win_simd(&model, &fp, insn)) {
+        printf("FAIL %-30s accepted\n", name);
+        ++failures;
+        return;
+    }
+    printf("ok   %-30s declined\n", name);
+}
+
+static void check_srcs(const char *name, uint32_t insn, uint32_t want)
+{
+    uint32_t got = uy_win_srcs(insn);
+
+    ++cases;
+    if (got != want) {
+        printf("FAIL %-30s srcs=%08x want=%08x\n", name, got, want);
+        ++failures;
+        return;
+    }
+    printf("ok   %-30s %08x\n", name, got);
+}
+
 int main(void)
 {
     const uint64_t A = UINT64_C(0x1122334455667788);
@@ -410,6 +555,52 @@ int main(void)
     check_dst("adds xzr,x1,#1", 0xb100043fU, 32);
     check_dst("nop", UY_NOP, 32);
     check_dst("mrs x0,nzcv", 0xd53b4200U, 34);
+
+    /* Pre-load source masks: MOVK/BFM read their destination, XZR is not a
+     * register, and a class outside the enumerable set declines. */
+    check_srcs("nop", UY_NOP, 0);
+    check_srcs("mov x9,x0", 0xaa0003e9U, 1U << 0);
+    check_srcs("mov w1,w0", 0x2a0003e1U, 1U << 0);
+    check_srcs("movk x0,#0x1234,lsl#16", 0xf2a24680U, 1U << 0);
+    check_srcs("add x0,x1,x2", 0x8b020020U, (1U << 1) | (1U << 2));
+    check_srcs("csel x0,x1,x2,eq", 0x9a820020U, (1U << 1) | (1U << 2));
+    check_srcs("madd x0,x1,x2,x3", 0x9b020c20U, (1U << 1) | (1U << 2) | (1U << 3));
+    check_srcs("svc #0", 0xd4000001U, 0xffffffffU);
+
+    /* Integer SIMD three-same families.  The expected bytes are produced by
+     * the architecture through the stubs above, not by a second formula. */
+    check_simd2("and v0.16b,v1.16b,v2.16b", 0x4e221c20U, vec_and16);
+    check_simd2("orr v0.16b,v1.16b,v2.16b", 0x4ea21c20U, vec_orr16);
+    check_simd2("eor v0.16b,v1.16b,v2.16b", 0x6e221c20U, vec_eor16);
+    check_simd2("bic v0.16b,v1.16b,v2.16b", 0x4e621c20U, vec_bic16);
+    check_simd2("orn v0.16b,v1.16b,v2.16b", 0x4ee21c20U, vec_orn16);
+    check_simd3("bsl v0.16b,v1.16b,v2.16b", 0x6e621c20U, vec_bsl16);
+    check_simd3("bit v0.16b,v1.16b,v2.16b", 0x6ea21c20U, vec_bit16);
+    check_simd3("bif v0.16b,v1.16b,v2.16b", 0x6ee21c20U, vec_bif16);
+    check_simd2("and v0.8b,v1.8b,v2.8b", 0x0e221c20U, vec_and8);
+    check_simd2("eor v0.8b,v1.8b,v2.8b", 0x2e221c20U, vec_eor8);
+    check_simd2("add v0.16b,v1.16b,v2.16b", 0x4e228420U, vec_add16b);
+    check_simd2("sub v0.8h,v1.8h,v2.8h", 0x6e628420U, vec_sub8h);
+    check_simd2("add v0.4s,v1.4s,v2.4s", 0x4ea28420U, vec_add4s);
+    check_simd2("sub v0.2d,v1.2d,v2.2d", 0x6ee28420U, vec_sub2d);
+    check_simd2("cmeq v0.16b,v1.16b,v2.16b", 0x6e228c20U, vec_cmeq16);
+    check_simd2("cmtst v0.16b,v1.16b,v2.16b", 0x4e228c20U, vec_cmtst16);
+    check_simd2("cmgt v0.4s,v1.4s,v2.4s", 0x4ea23420U, vec_cmgt4s);
+    check_simd2("cmhi v0.4s,v1.4s,v2.4s", 0x6ea23420U, vec_cmhi4s);
+    check_simd2("cmge v0.2d,v1.2d,v2.2d", 0x4ee23c20U, vec_cmge2d);
+    check_simd2("cmhs v0.8h,v1.8h,v2.8h", 0x6e623c20U, vec_cmhs8h);
+    check_simd2("smax v0.4s,v1.4s,v2.4s", 0x4ea26420U, vec_smax4s);
+    check_simd2("umin v0.8h,v1.8h,v2.8h", 0x6e626c20U, vec_umin8h);
+    check_simd2("smin v0.4s,v1.4s,v2.4s", 0x4ea26c20U, vec_smin4s);
+    check_simd2("mul v0.4s,v1.4s,v2.4s", 0x4ea29c20U, vec_mul4s);
+    check_simd3("mla v0.4s,v1.4s,v2.4s", 0x4ea29420U, vec_mla4s);
+    check_simd3("mls v0.8h,v1.8h,v2.8h", 0x6e629420U, vec_mls8h);
+    check_simd2("sshl v0.4s,v1.4s,v2.4s", 0x4ea24420U, vec_sshl4s);
+    check_simd2("ushl v0.2d,v1.2d,v2.2d", 0x6ee24420U, vec_ushl2d);
+    check_simd2("cmeq v0.2d,v1.2d,v2.2d", 0x6ee28c20U, vec_cmeq2d);
+    check_simd_declined("fadd v0.4s,v1.4s,v2.4s", 0x4e22d420U);
+    check_simd_declined("ldr q0,[x1]", 0x3dc00020U);
+    check_simd_declined("tbl v0.16b,{v1.16b},v2.16b", 0x4e020020U);
 
     printf("cases=%u failures=%u\n", cases, failures);
     return failures ? 1 : 0;

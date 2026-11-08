@@ -306,6 +306,46 @@ static unsigned post_load_fp_once(const void *address, uint64_t *scratch, unsign
 }
 
 __attribute__((noinline))
+static unsigned pre_load_gpr_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                  uint64_t *aux)
+{
+    (void)aux;
+    uint64_t old;
+    unsigned sample, failed;
+    /* The 2.21 lookback rejects writes to GPRs other than the LDXR destination. */
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     "mov x9, %0\n"
+                     "ldrb %w1, [%4]\n"
+                     "stxr %w2, %0, [%3]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "x9", "memory");
+    *byte = sample;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned post_load_simd_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                    uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed, v0_low;
+    /* SIMD EOR is outside the 2.21 window model.  V0 starts at 0xff so the
+     * post-sequence lane read also proves that a model completing the STXR
+     * commits the same architectural FPSIMD result as the native instruction. */
+    __asm__ volatile("movi v0.16b, #0xff\n"
+                     "ldxr %0, [%4]\n"
+                     "ldrb %w1, [%5]\n"
+                     "eor v0.16b, v0.16b, v0.16b\n"
+                     "stxr %w2, %0, [%4]\n"
+                     "umov %w3, v0.b[0]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed), "=&r"(v0_low)
+                     : "r"(scratch), "r"(address) : "v0", "memory");
+    *byte = sample;
+    *aux = v0_low;
+    return failed;
+}
+
+__attribute__((noinline))
 static unsigned post_load_csel_once(const void *address, uint64_t *scratch, unsigned *byte,
                                     uint64_t *aux)
 {
@@ -687,8 +727,9 @@ static unsigned execution_once(const void *address, uint64_t *scratch, unsigned 
 
 enum reservation_probe {
     READ_ADJACENT, READ_SPACED, READ_POST_LOAD_NOP, READ_POST_LOAD_ALU, READ_PRE_LOAD_ALU,
-    READ_POST_LOAD_FP, READ_POST_LOAD_CSEL, READ_POST_LOAD_LOAD, READ_POST_LOAD_STORE,
-    READ_POST_LOAD_BRANCH, READ_POST_LOAD_XLOAD, READ_ZERO, READ_NONZERO, EXECUTE_CANARY
+    READ_POST_LOAD_FP, READ_PRE_LOAD_GPR, READ_POST_LOAD_SIMD, READ_POST_LOAD_CSEL,
+    READ_POST_LOAD_LOAD, READ_POST_LOAD_STORE, READ_POST_LOAD_BRANCH, READ_POST_LOAD_XLOAD,
+    READ_ZERO, READ_NONZERO, EXECUTE_CANARY
 };
 
 typedef unsigned (*probe_fn)(const void *, uint64_t *, unsigned *, uint64_t *);
@@ -701,13 +742,15 @@ static void observe_reservation(const void *address, const void *reference,
     int execute = probe == EXECUTE_CANARY;
     bool ap_probe = probe == READ_POST_LOAD_NOP || probe == READ_POST_LOAD_ALU ||
                     probe == READ_PRE_LOAD_ALU || probe == READ_POST_LOAD_FP ||
+                    probe == READ_PRE_LOAD_GPR || probe == READ_POST_LOAD_SIMD ||
                     probe == READ_POST_LOAD_CSEL || probe == READ_POST_LOAD_LOAD ||
                     probe == READ_POST_LOAD_STORE || probe == READ_POST_LOAD_BRANCH ||
                     probe == READ_POST_LOAD_XLOAD;
     /* The value-producing probes store an input-derived word through the STXR;
      * comparing it with the control run proves the modeled window computed the
      * same registers and memory as the native instructions. */
-    bool valued = probe == READ_POST_LOAD_CSEL || probe == READ_POST_LOAD_LOAD ||
+    bool valued = probe == READ_POST_LOAD_SIMD ||
+                  probe == READ_POST_LOAD_CSEL || probe == READ_POST_LOAD_LOAD ||
                   probe == READ_POST_LOAD_STORE || probe == READ_POST_LOAD_BRANCH ||
                   probe == READ_POST_LOAD_XLOAD;
     size_t size = execute ? sizeof(uint64_t) : 1U;
@@ -718,6 +761,8 @@ static void observe_reservation(const void *address, const void *reference,
     if (probe == READ_POST_LOAD_ALU) sample = post_load_alu_once;
     if (probe == READ_PRE_LOAD_ALU) sample = pre_load_alu_once;
     if (probe == READ_POST_LOAD_FP) sample = post_load_fp_once;
+    if (probe == READ_PRE_LOAD_GPR) sample = pre_load_gpr_once;
+    if (probe == READ_POST_LOAD_SIMD) sample = post_load_simd_once;
     if (probe == READ_POST_LOAD_CSEL) sample = post_load_csel_once;
     if (probe == READ_POST_LOAD_LOAD) sample = post_load_load_once;
     if (probe == READ_POST_LOAD_STORE) sample = post_load_store_once;
@@ -775,7 +820,8 @@ static void observe_reservation(const void *address, const void *reference,
             unsigned after_control = sample(reference, scratch, &c, aux);
             if (valued && !out->value_seen && !before && !tested && !after_control) {
                 /* The store probe keeps its result in the private aux word. */
-                bool aux_value = probe == READ_POST_LOAD_STORE;
+                bool aux_value = probe == READ_POST_LOAD_STORE ||
+                                 probe == READ_POST_LOAD_SIMD;
 
                 out->value_seen = 1;
                 out->control_value = aux_value ? control_aux : control_value;
@@ -854,6 +900,18 @@ void ud_observe_ap_fp(const void *address, const void *reference, int backing_fd
                       off_t offset, struct ud_exclusive_observation *out)
 {
     observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_FP, out);
+}
+
+void ud_observe_ap_v221(const void *address, const void *reference, int backing_fd,
+                        off_t offset, struct ud_ap_v221_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_NOP, &out->baseline);
+    observe_reservation(address, reference, backing_fd, offset, READ_PRE_LOAD_GPR, &out->pre_gpr);
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_SIMD, &out->simd);
+    out->verdict = UD_UNKNOWN;
+    if (out->baseline.reservation_loss == UD_NO_MATCH &&
+        out->pre_gpr.reservation_loss == out->simd.reservation_loss)
+        out->verdict = out->pre_gpr.reservation_loss;
 }
 
 void ud_observe_ap_csel(const void *address, const void *reference, int backing_fd,

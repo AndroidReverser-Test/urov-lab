@@ -2,6 +2,23 @@
 
 更新于 2026-11-08（Asia/Shanghai）。
 
+> 2026-11-08 补充：`urov-y` 2.22.0 消掉 2.21.0 `--read-defense-v221-guarded` 仍能稳定
+> 复现的两条无密钥 AP 读侧特征：`LDXR` 与故障 load 之间写第二个 GPR 的
+> `MOV X9,X0` 链，以及 load 之后的整数 SIMD `EOR V0.16B`。后向窗口改为私有影子
+> GPR 文件上的整段重放（早前定义用影子值、整段不写用故障现场值、只在更晚写则拒绝；
+> 两次不同输入的 `LDXR` 终值必须不同且与故障现场逐位一致）；前向窗口新增 Advanced
+> SIMD 三同整数族（逻辑/加减/比较/最值/乘加/寄存器移位，`Q=0` 按架构清零高 64 位），
+> 在 FPSIMD 镜像上逐 lane 重放并在提交时写回；AP 陷阱路径上的未特权 `LDTR` 形态按等价 `LDUR` 解码，不再以合成信号暴露。`simd` 探针另加
+> `MOVI V0.16B,#0xff` + `STXR` 后 `UMOV` 回读，配对验证 FPSIMD 结果与原生一致。
+> ABI 仍为 v8、`hooks=0xff`。v222 6 模式 ×32 PASS（AP-all `pre_gpr=simd=ap=0`、
+> `simd_value=32/32`、`evidence=0`、`accepted=32/32`；AP 窗口 `split=32`）、生产
+> CRC 7 模式 ×3（`crc-ap-all` EL0/`process_vm_readv`/pipe/fork 读均等于文件摘要
+> `f50bcaf6`、执行仍是 Dobby 的 `1235`）、Dobby 8×1（`ap=0/8`、
+> `accepted_crc_with_ap=8/8`）、消除 3×1、多页 3×1 均 PASS；窗口模型
+> `cases=113 failures=0`。构建 `urov-y.kpm ab90dab4...`、
+> `urovdetect.apk 3181b98c...`。见
+> [ELIMINATION_2_22_DESIGN.md](ELIMINATION_2_22_DESIGN.md)。
+
 > 2026-11-08 补充：`urov-y` 2.21.0 消掉 2.20.0 仍成立的两条无密钥 AP 读侧特征：
 > `LDXR` 与故障 load 之间的整数链（`LDXR; EOR; LDRB; EOR; STXR`）和 load 之后的
 > `FMOV` 传送（`LDXR; LDRB; FMOV d0,x0; FMOV x0,d0; STXR`）。后向窗口从

@@ -169,5 +169,7 @@ python ./kpms/urov-lab/tools/run_elimination_device.py --serial $Serial --key $K
 python ./kpms/urov-lab/tools/run_multipage_device.py --serial $Serial --key $KpKey --repeats 3 --cycles 1
 ```
 
-`--read-defense-v220` 仍保留给 2.20.0 模块；它断言 AP 阶段的 `pre_alu/fp=n`，在
-2.21.0 上会按设计失败。2.21.0 的普通 App 检测入口是 `--read-defense-v221`。
+`--read-defense-v220` 保留给 2.20.0 模块。它断言 AP 阶段的 `pre_alu/fp=n`，在
+2.21.0 上会按设计失败。`--read-defense-v221` 复现本文的原始矩阵。
+普通 App 的新探针通过 `--read-defense-v221-guarded` 复跑，接入条件、可选诊断和
+实测结果见[读取完整性复核](APP_READ_INTEGRITY_RESULTS.md#普通-app-接入)。

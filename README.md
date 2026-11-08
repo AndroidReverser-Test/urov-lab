@@ -1,5 +1,24 @@
 # UROV-LAB
 
+`urov-y` 2.22.0 清掉 2.21.0 `--read-defense-v221-guarded` 仍能稳定复现的两条 AP 读侧
+特征：`LDXR` 与故障 load 之间写第二个 GPR 的 `MOV X9,X0` 链，以及 load 之后的整数
+SIMD `EOR V0.16B`。后向窗口从 `LDXR` 起在私有影子 GPR 文件上重放最多 12 条整数
+指令，允许值经旁路寄存器传递；两次不同输入的 `LDXR` 终值必须不同且与故障现场逐位
+一致。前向窗口在 2.21 的 64 条指令、`FMOV`、`MRS/MSR` 之外新增 Advanced SIMD 三同
+整数族（`AND/BIC/ORR/ORN/EOR/BSL/BIT/BIF`、`ADD/SUB`、`CMEQ/CMTST`、`CMGT/CMHI/
+CMGE/CMHS`、`SMAX/SMIN/UMAX/UMIN`、`MUL/MLA/MLS`、`SSHL/USHL`），在 FPSIMD 镜像上
+逐 lane 重放，`Q=0` 按架构清零高 64 位，提交时写回；AP 陷阱路径上的未特权 `LDTR` 形态按等价 `LDUR` 解码，不再变成可观测的合成 `SIGSEGV`。没有新增 hook、线程、定时器、
+PTE/VMA/代码字，ABI 仍为 v8、`hooks=0xff`。普通 App 的 `--read-defense-v222` 在
+AP-all 覆盖阶段给出 `pre_gpr=simd=ap=0`、`baseline_ok=32/32`、`simd_value=32/32`、
+`evidence=0`、`accepted=32/32`；AP 调用窗口仍是 `split=32`（设计保留的
+caller-window 语义）。CRC 的 `.text` 在 EL0/`process_vm_readv`/pipe/fork 上仍等于
+文件摘要，执行仍是 Dobby 的 `1235`。v222 6 模式 ×32、CRC 7 模式 ×3、Dobby 8×1
+（`ap=0/8`、`accepted_crc_old=8/8`、`accepted_crc_with_ap=8/8`）、消除 3×1、多页
+3×1 均 PASS；`out/urov_window_test` 的 113 条独立期望值差分校验通过（新 SIMD 用例
+的期望值由设备原生指令产生）。设计与残余见
+[ELIMINATION_2_22_DESIGN.md](ELIMINATION_2_22_DESIGN.md)。构建
+`urov-y.kpm ab90dab4...`、`urovdetect.apk 3181b98c...`。
+
 `urov-y` 2.21.0 清掉 2.20.0 测试面仍稳定的两条 AP 读侧特征：`LDXR` 与故障 load
 之间的整数链（`LDXR; EOR; LDRB; EOR; STXR`）和 load 之后的 `FMOV` 传送
 （`LDXR; LDRB; FMOV d0,x0; FMOV x0,d0; STXR`）。后向窗口从 `LDXR` 重放最多 12 条

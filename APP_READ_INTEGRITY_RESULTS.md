@@ -2,6 +2,264 @@
 
 本文按最新复核在前排列。
 
+## 2.22.0 影子 GPR 预链与整数 SIMD 窗口
+
+### 实现与旧探针的盲区
+
+`urov-y` 从 `TCR_EL1` 取得页表几何，按内核符号和 BTF 或兼容布局绑定异常、内存读和
+映射生命周期入口。ABI v8 的 `REGISTER` 经 `prctl` 的选项、magic、布局和 MAC 校验，
+把单个会话绑定到当前进程的 `mm`。登记时保存目标页当时的 `snapshot`，把调用者提交的
+`SRC_USER` 字节覆盖进 `image`；窗口内读 `image`，窗口外读 `snapshot`，空窗口列表覆盖
+全调用者。夹具先改活页再登记，因此 `snapshot` 已含补丁，而 `image` 可与原文件相同。
+[初始化](urov_y_backend.c#L6089) · [控制入口](urov_y_backend.c#L4664) ·
+[建页与登记](urov_y_backend.c#L4251) · [调用窗口](urov_y_backend.c#L1710)
+
+| 模式 | 接管位置 | App 可用的证据 |
+| --- | --- | --- |
+| `SITE_BRK` | COW 读点所在的私有页，把指定 load 改成 `BRK`。异常处理器模拟原 load | 将已知读点的指令字与发布 ELF 对照，同时比较业务读者与独立读点 |
+| `PAGE_UXN` | 设置读点页叶 PTE 的 UXN。取指异常时模拟已登记的 load 及有限的 BTI、NOP、RET | 比较两个读点。自有读点页可预置 `BTI C; RET` canary，配合同文件 RX 别名观察取指异常的独占副作用 |
+| `PAGE_AP` | 清目标页叶 PTE 的 `AP[1]`。EL0 数据读经异常模拟，CPU 仍从活页取指 | 有调用窗口时可出现读者分歧；全调用者覆盖下只剩 LL/SC 配对探针 |
+
+异常入口解码 load 并提交目标寄存器和 PC，覆盖范围可跨页。模块还在 GUP pin 或兼容
+后置路径覆盖 `process_vm_readv`，在 `__access_remote_vm` 路径覆盖 `/proc/*/mem` 和
+ptrace 读取，并替换 `vmsplice` 等 GUP 读者拿到的页。缺页和部分映射保护变更可重装
+AP 陷阱，fork 子进程可继承覆盖。对活动的 BRK/UXN 会话，fork 会先撤销会话。
+[异常入口](urov_y_backend.c#L3812) · [缺页重装](urov_y_backend.c#L4038) ·
+[内核读路径](urov_y_backend.c#L4812) · [fork](urov_y_backend.c#L5218)
+
+[2.22 设计](ELIMINATION_2_22_DESIGN.md) 补齐 2.21 的两处窗口盲区。后向窗口在私有
+影子 GPR 文件上重放整段 pre-window：早前定义的源用影子值，整段都不写的源用故障现场
+值，只在更晚指令里写的源视为不可重建并拒绝；从 `loaded` 与 `loaded ^ 1` 各重放一次，
+两次的 `LDXR` 目标终值必须不同且与故障现场逐位一致。因此 `MOV X9,X0` 这类经旁路
+寄存器的链也能证明 `LDXR` 的执行。前向窗口新增 Advanced SIMD 三同整数族：逻辑
+`AND/BIC/ORR/ORN/EOR/BSL/BIT/BIF`、`ADD/SUB`、`CMEQ/CMTST`、`CMGT/CMHI/CMGE/CMHS`、
+`SMAX/SMIN/UMAX/UMIN`、`MUL/MLA/MLS`、`SSHL/USHL`，在 FPSIMD 镜像上逐 lane 重放，
+`Q=0` 按架构清零目的寄存器高 64 位。整数 SIMD 不写 FPSR、不访问内存，不需要 FP
+数据通路；快照与提交沿用 2.21 的懒加载路径。另外，`LDTR/LDTRB/LDTRH/LDTRSW` 在
+EL0 与对应的 `LDUR` 形态等价，2.22 在共享解码器拒绝后按普通 unscaled load 重解码，
+避免被 AP 陷阱拦下的读变成可观测的合成 `SIGSEGV`。
+[前向窗口](urov_y_backend.c#L2532) · [读前校验](urov_y_backend.c#L2741) ·
+[未特权别名](urov_y_backend.c#L3704) · [源位图](urov_y_window.h#L706) ·
+[SIMD 族](urov_y_window.h#L966)
+
+### 已验证的无信号 AP 探针
+
+2.21 的 guard 用基线、读前写第二个 GPR、读后整数 SIMD 三条配对 LL/SC 序列验证
+`PAGE_AP`。2.22 之后三条全部保住预约：`LDXR; MOV X9,X0; LDRB; STXR` 的影子链与
+`LDXR; LDRB; EOR V0.16B,V0.16B,V0.16B; STXR` 的 SIMD 重放都由窗口模型完成，
+`STXR` 由内核代写 `Ws=0`，原生 `STXR` 不再执行。
+`simd` 序列现在还在 `LDXR` 前执行 `MOVI V0.16B,#0xff`，并在 `STXR` 后 `UMOV` 回读
+lane0，与参考页上的原生结果对照；这条对照同时证明窗口完成了 `STXR` 和 FPSIMD 状态
+写回，而不只是把状态位改成成功。
+[配对对照](native/urov_observe.c#L327) ·
+[合并判定](native/urov_observe.c#L905)
+
+### 普通 App 接入
+
+接入方式与 2.21 相同：业务线程保持原调用上下文，后台线程用同文件同偏移的只读非执行
+别名做配对控制，采样自有 RX 页；`ud_observe_ap_v221()` 的三条序列全部阴性、
+`ud_check_reader_views()` 无分歧、BRK/UXN 读点无证据时，才采信本次活页校验。
+2.22 的 AP-all 阶段满足这三项，旧的 BRK/UXN 模式仍会留下各自的代码字/取指证据。
+[读取对照](native/urov_detect.c#L187) · [测试 App 判定](apps/urov-detect/read_defense_fixture.inc#L287)
+
+### 真机结果
+
+Pixel 6、Android 16、ARM64、4 KiB、`6.1.186-android14-11`、KernelPatch `c00`。
+App 为 `untrusted_app`，`CapEff=0`、`Seccomp=2`，SELinux Enforcing。KPM SHA-256
+`ab90dab425c54b009784b7471258119ba151c99197bf8a653ec3e9b3eac4d064`，APK SHA-256
+`3181b98c5a56ee05306f736aa6344111554ba54812878e7bd5c00cde0cfb8820`，窗口模型测试
+SHA-256 `c7b65f694402707c99a4151c23c92074faff920eaea47c0d64bab1afc7bb2184`。
+[矩阵汇总](results/read-defense-v222-20261109-001128/summary.json)
+
+| 活动覆盖阶段 | 业务/独立读分歧 | AP 探针命中 | 综合检出 | 采信活页校验 |
+| --- | ---: | ---: | ---: | ---: |
+| BRK 调用窗口、BRK 全调用者 | 各 96/96 | 各 0/96 | 各 96/96 | 各 0/96 |
+| UXN 调用窗口、UXN 全调用者 | 各 96/96 | 各 0/96 | 各 96/96 | 各 0/96 |
+| AP 调用窗口 | 96/96 | 0/96 | 96/96 | 0/96 |
+| AP 全调用者 | 0/96 | 0/96 | 0/96 | 96/96 |
+
+2.21 的 identity（image 与文件等值）阶段仍被 AP 探针检出；2.22 的同一阶段没有分歧、
+没有 AP 信号，按设计采信。全矩阵 21 次 App 启动、18 个覆盖配置 × 5 阶段 × 32 样本：
+干净阶段 576/576 通过校验，identity 阶段 AP 模式 192/192 通过、BRK/UXN 仍留读点
+证据，仅改码与撤销阶段 1,152/1,152 归类为内容变化；`unknown=0`。AP 全调用者覆盖
+阶段的 `pre_gpr`、`simd`、`ap` 全为 0，`baseline_ok=96/96`，`simd_value=96/96`，
+`accepted=96/96`；`LDTRB` 探针在 AP-all 覆盖页读到 image 字节（`byte=24 want=24`），
+不再以合成信号暴露陷阱；每样本平均约 16.7–19.1 ms、最大约 20.0 ms（含三条配对
+AP 探针与三路读值核对）。
+生产 CRC 7 模式 3×1 PASS；`crc-ap-all` 的 EL0、`process_vm_readv`、pipe 与 fork
+子进程读均等于文件摘要 `f50bcaf6`，执行仍是 Dobby 的 `1235`。Dobby 检测 8×1 PASS
+（`ap=0/8`、`accepted_crc_old=8/8`、`accepted_crc_with_ap=8/8`）；消除矩阵 3×1
+全部 `ELIM_CASE` 通过（`exclusive_match=0`、`ap_match=0`）；多页 3×1 PASS；窗口
+模型差分测试 `cases=113 failures=0`（新增 40 条 SIMD/源位图用例，期望值由设备上的
+原生指令产生）。会话结束后 `kpm list` 为空，前后 boot ID 一致，增量内核日志未见
+BUG/WARNING。
+[CRC](results/crc-20261109-000422/summary.json) ·
+[Dobby](results/dobby-detect-20261109-000455/summary.json) ·
+[消除](results/eliminate-20261109-000616/summary.json) ·
+[多页](results/multipage-20261109-000848/summary.json)
+
+`SITE_BRK`/`PAGE_UXN` 的代码字与 UXN 语义本身可被普通 App 观察，它们是诊断模式；
+生产覆盖只使用 `PAGE_AP` 全调用者。残余与 2.21 相同，除 pre-load 影子链、整数 SIMD
+三同族与未特权 `LDTR` 解码已消除；`BL/BLR/RET`、`SVE/SME`、FP 算术、SIMD
+permute/立即数/内存形式、gap 内 LSE/成对独占、计数器/随机数 `MRS` 和超过 64 条的
+形状仍 fail-closed，详见
+[设计 §5](ELIMINATION_2_22_DESIGN.md#5-残余2220)。
+
+```powershell
+./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --read-defense-v222 --repeats 32 --cycles 3
+```
+
+## 2.21.0 无密钥检测与读值防护
+
+### 实现与旧探针的盲区
+
+`urov-y` 从 `TCR_EL1` 得到页表几何，用内核符号和 BTF 或兼容布局绑定异常、内存读和
+映射生命周期入口。ABI v8 的 `REGISTER` 经 `prctl` 的选项、magic、布局和 MAC 校验，
+将单个会话绑定到当前进程的 `mm`。登记时保存各目标页的 `snapshot`，将调用者提交的
+`SRC_USER` 字节覆盖到 `image`。命中调用窗口的读取得到 `image`，窗口外得到
+`snapshot`，空窗口列表覆盖全调用者。窗口可以匹配 LR 或有界帧链。夹具先改活页再登记，
+因此 `snapshot` 已含补丁，而 `image` 可与原文件相同。
+[初始化](urov_y_backend.c#L6089) · [控制入口](urov_y_backend.c#L4664) ·
+[建页与登记](urov_y_backend.c#L4251) · [调用窗口](urov_y_backend.c#L1710)
+
+| 模式 | 接管位置 | App 可用的证据 |
+| --- | --- | --- |
+| `SITE_BRK` | COW 读点所在的私有页，把指定 load 改成 `BRK`。异常处理器模拟原 load | 将已知读点的指令字与发布 ELF 对照，同时比较业务读者与独立读点 |
+| `PAGE_UXN` | 设置读点页叶 PTE 的 UXN。取指异常时模拟已登记的 load 及有限的 BTI、NOP、RET | 比较两个读点。自有读点页可预置 `BTI C; RET` canary，配合同文件 RX 别名观察取指异常的独占副作用 |
+| `PAGE_AP` | 清目标页叶 PTE 的 `AP[1]`。EL0 数据读经异常模拟，CPU 仍从活页取指 | 有调用窗口时可出现读者分歧。全调用者覆盖及等值覆盖由下文两条探针检测 |
+
+异常入口解码 load 并提交目标寄存器和 PC，覆盖范围可跨页。模块还在 GUP pin 或兼容
+后置路径覆盖 `process_vm_readv`，在 `__access_remote_vm` 路径覆盖 `/proc/*/mem`
+和 ptrace 读取，并替换 `vmsplice` 等 GUP 读者拿到的页。缺页和部分映射保护变更可
+重装 AP 陷阱，fork 子进程可继承覆盖。对活动的 BRK/UXN 会话，fork 会先撤销会话。
+[异常入口](urov_y_backend.c#L3812) · [缺页重装](urov_y_backend.c#L4038) ·
+[内核读路径](urov_y_backend.c#L4812) · [fork](urov_y_backend.c#L5218)
+
+[2.21 设计](ELIMINATION_2_21_DESIGN.md) 在 `LDXR` 与故障 load 之间最多重放 12 条
+指令，限制写入的寄存器并验证故障现场的值。故障 load 后最多模拟 64 条指令，覆盖整数
+链、有限控制流、FPSIMD 位传送和指定系统寄存器。通过检查的窗口由内核代写
+`STXR` 结果。原有读前原地 ALU 和读后 `FMOV` 探针因此都为阴性。用原 APK 重跑
+时，全调用者 AP 覆盖的 48/48 个样本通过旧策略。
+[前向窗口](urov_y_backend.c#L2532) · [读前校验](urov_y_backend.c#L2729) ·
+[基线复跑](results/read-defense-v221-20261108-230605/summary.json)
+
+### 已验证的无信号 AP 探针
+
+在稳定的自有文件 RX 页上抽样一个字节，以同 fd、同偏移的独立只读非执行映射为对照。
+两条序列各只执行一次目标 `LDRB`，`STXR` 只向线程私有暂存字写回原值。
+
+```text
+LDXR Xold,[scratch] → MOV X9,Xold → LDRB Wbyte,[target] → STXR Wstatus,Xold,[scratch]
+LDXR Xold,[scratch] → LDRB Wbyte,[target] → EOR V0.16B,V0.16B,V0.16B → STXR Wstatus,Xold,[scratch]
+```
+
+`MOV` 写到与 `LDXR` 目标不同的寄存器，读前重放拒绝它。NEON `EOR` 超出读后模型
+支持的位传送范围，窗口在代写前退出。两条路径都能完成 `LDRB`，但 AP 异常返回清除
+独占监视器，随后的原生 `STXR` 失败。已建模的 `LDXR; LDRB; NOP; STXR` 是同一
+目标字节的第三条对照。
+[汇编](native/urov_observe.c#L309) · [合并判定](native/urov_observe.c#L899)
+
+预热后，每条序列取三轮，每轮接纳 32 个“前对照成功、目标采样、后对照成功”的三元组。
+映射或文件身份变化、字节不稳定、对照失败过多或结果混合均归入 `UNKNOWN`。两条新序列
+的目标全部失败、且已建模序列的目标全部成功时才报 AP 命中。检测无密钥，在后台线程
+运行，维持现有映射和信号处理。Arm 对夹有显式读的独占序列无进度保证，部署需按机型
+确认对照稳定性。单次失败只作为观测。
+[配对对照](native/urov_observe.c#L732) ·
+[Arm 独占访问约束](https://community.arm.com/forums/f/architectures-and-processors-forum/5452/does-load-store-exclusive-violate-hypervisor-transparency/12878)
+
+### 普通 App 接入
+
+1. 在运行受检代码的进程中选取按设计保持稳定的自有文件 RX 页。按设备页大小定位，
+   用发布 ELF 的 fd 和偏移核对映射身份，保留同文件、同偏移的 `PROT_READ` 对照。
+   采样期间持有目标和对照映射及 fd，避开 `dlclose`、权限变更和并发改码。
+2. 在后台线程按关键页抽样。通过 `ud_check_reader_views()` 比较实际业务读者、
+   独立读点与 `pread` 的文件字节。保持业务读者原来的调用上下文，以覆盖按调用窗口
+   生效的伪造。BRK 检查已知读取指令的字节，UXN 使用预置在该读点同页的 canary。
+   `ud_observe_ap_v221()` 对每个受检页读取一个稳定字节，覆盖该页的 AP 权限异常。
+   [读取对照](native/urov_detect.c#L187) · [读点检查](apps/urov-detect/read_defense_fixture.inc#L227) ·
+   [AP 探针](native/urov_observe.c#L899)
+3. 稳定的异常证据使本次活页校验失去采信资格。对照失败、缺少必要的探针或结果混合
+   记为 `UNKNOWN`，稳定的内容差异另记为 `changed`。所需证据齐全且本次字节一致时，
+   才采信该次校验。判定只约束完整性结果，业务继续。
+   [测试 App 判定](apps/urov-detect/read_defense_fixture.inc#L287)
+
+阴性结果只对应已采样的页、读点、调用上下文和时段。未激活或仅作用于其他读点的会话可能
+漏检。原版 `PAGE_AP` 的调用窗口只决定返回哪份字节，目标页仍会发生权限异常。若改版
+模块仅补齐两种新序列中的一条，AP 合并结果为 `UNKNOWN`。若两条都补齐且其他观测均
+正常，则可能给出阴性。跨机型应先确认独占对照稳定性。
+[AP 异常入口](urov_y_backend.c#L3932) · [合并判定](native/urov_observe.c#L899)
+
+### 可选诊断与设备信任
+
+- **`LDRB` / `LDTRB` 权限对照，源码推导。** 普通可读页上两种指令均可读取。
+  2.21.0 的 `PAGE_AP` 陷阱会模拟 `LDRB`，而解码器拒绝 `LDTRB`，随后发出
+  `SIGSEGV/SEGV_ACCERR`。这个观测独立于 LL/SC。实验应把自有载荷和检测放在同一
+  隔离测试进程，先验证同文件对照的两种读取均成功，再确认目标的 `LDRB` 成功且
+  `LDTRB` 在预期指令 PC 和目标 `si_addr` 处稳定出现权限异常。信号处理仅恢复这次
+  已识别的探针异常，其余故障沿原处理流程。探针仍依赖内核交付信号。下方真机矩阵
+  验证的是无信号方案。
+  [解码拒绝](decode.c#L227) · [异常回退](urov_y_backend.c#L3764) ·
+  [信号生成](urov_y_backend.c#L1763)
+- **页来源辅证。** App 可在系统允许时读取自己的 `pagemap`，将已核对的私有文件 VMA
+  中驻留页的来源标志与干净基线比较，辅助观察私有 COW。该接口只暴露部分页表信息，
+  无法读取 `AP[1]` 或 `UXN`。
+  合法改码也可能产生 COW，等值 AP 覆盖可保留原文件页来源。
+  [Linux pagemap 文档](https://docs.kernel.org/admin-guide/mm/pagemap.html)
+- **硬件密钥证明。** 对依赖设备信任的请求，App 可申请带服务端新鲜挑战的硬件证明。
+  服务端验证证书链、撤销状态、硬件证明级别和挑战，并核对 `deviceLocked`、
+  `verifiedBootState` 和预期启动密钥。
+  这条证据验证启动链，运行时活页校验仍按上面的探针单独判定。
+  [Android 密钥证明](https://developer.android.com/privacy-and-security/security-key-attestation) ·
+  [启动状态字段](https://source.android.com/docs/security/features/keystore/attestation#rootoftrust-fields)
+
+### 阻止伪造影响校验
+
+- **现有 ELF 代码页**。校验策略拒绝采信有覆盖证据或未知的活页 CRC。用可信 fd 的
+  `pread` 或从开始即为 `PROT_READ` 的独立别名计算发布制品基准。该基准只证明制品内容。
+- **可独立部署的自有 PIC 代码**。用同一可信制品 fd 建立独立 `PROT_EXEC` 执行映射及
+  `PROT_READ` 读映射，保留现有业务映射。当前 `validate_target_vma()` 要求目标同时有
+  `VM_READ | VM_EXEC` 且有 `vm_file`，所以分别拒绝两种映射，也拒绝私有匿名 RX。
+  测试仅在自有无重定位载荷验证这三种形状。普通 App 可以隔离校验读和自有载荷，
+  模块的全局停用需要管理权限。
+  [目标校验](urov_y_backend.c#L1279) ·
+  [独立映射夹具](apps/urov-detect/read_defense_fixture.inc#L571)
+
+### 真机结果
+
+Pixel 6、Android 16、ARM64、4 KiB、`6.1.134-android14-11`、KernelPatch `0xc00`。
+App 为 `untrusted_app`，`CapEff=0`、`Seccomp=2`，SELinux Enforcing。宿主使用
+KernelPatch 权限装卸模块、采集内核日志，夹具单独使用会话密钥设置测试真值。
+KPM SHA-256 为 `0bc084fdf7ef964ba96aff76ae819829ea78a094d1e290ed30ca616fcbfe2ffa`，
+APK SHA-256 为 `3b1695cd8476e445a903a6ef6438b419207f43f0defe7df35ca6d19c2eb55217`。
+[矩阵汇总](results/read-defense-v221-guarded-20261108-231429/summary.json)
+
+| 活动覆盖阶段 | 业务/独立读分歧 | AP 探针命中 | 综合检出 | 采信活页校验 |
+| --- | ---: | ---: | ---: | ---: |
+| BRK 调用窗口、BRK 全调用者 | 各 96/96 | 各 0/96 | 各 96/96 | 各 0/96 |
+| UXN 调用窗口、UXN 全调用者 | 各 96/96 | 各 0/96 | 各 96/96 | 各 0/96 |
+| AP 调用窗口 | 96/96 | 96/96 | 96/96 | 0/96 |
+| AP 全调用者 | 0/96 | 96/96 | 96/96 | 0/96 |
+
+等值覆盖阶段另有 576/576 个样本检出。未覆盖对照为 0/1,920 误报，672/672 个干净
+样本通过校验，1,248 个仅改码或撤销后样本归类为内容变化。3,072 个样本均有判定。
+活动会话中的独立执行映射均返回 `0x1234`，18/18 次仍确认原会话活动。三种受保护
+映射分别 18/18 次返回 `EINVAL`。AP 全调用者阶段，目标代码继续返回 `0x1235`。
+并行业务操作 27,043,072 次、0 错误，UI 心跳最大间隔 20 ms。含旧探针的判定每阶段
+平均每次约 15.0–17.5 ms，单样本最大约 57.4 ms。结果来自一台 4 KiB 真机。
+[AP 全调用者日志](results/read-defense-v221-guarded-20261108-231429/read-defense-v221-guarded-ap-all-1-23716.log)
+
+同一新 APK 的原有 v221 入口和生产 CRC 七模式回归均通过。生产夹具的 AP 全调用者
+阶段仍以 `0x1235` 执行，EL0 和内核辅助样本却等于原文件 CRC `f50bcaf6`。各次
+复跑前后 boot ID 一致，测试模块已卸载，增量内核日志未见异常。
+[原有入口回归](results/read-defense-v221-20261108-231759/summary.json) ·
+[CRC 回归](results/crc-20261108-231824/summary.json)
+
+```powershell
+./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --read-defense-v221-guarded --repeats 32 --cycles 3
+```
+
 ## 2.21.0 预加载整数链与 FPSIMD 传送
 
 2.21.0 清掉 2.20.0 测试面上仍稳定的两条 AP 读侧特征：一是在 `LDXR` 与故障 load

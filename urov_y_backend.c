@@ -2618,6 +2618,15 @@ static void uy_llsc_walk(struct pt_regs *regs, uint64_t fault_pc, struct uy_llsc
             at += 4U;
             continue;
         }
+        if (uy_win_simd_insn(insn)) {
+            if (!plan->fp_valid) {
+                if (uy_fp_snapshot(&plan->fp)) return;
+                plan->fp_valid = 1;
+            }
+            if (!uy_win_simd(&model, &plan->fp, insn)) return;
+            at += 4U;
+            continue;
+        }
         if (uy_win_alu(&model, insn)) {
             at += 4U;
             continue;
@@ -2718,20 +2727,25 @@ static void uy_llsc_prepare_pair(const struct uro_regs *regs, uint64_t pc,
 
 /* Verify the short pre-load window between LDXR and the sampled load.  The
  * native instructions have already run, so only the values they left in the
- * GPR file are available.  The accepted shape is deliberately narrow: every
- * pre-load instruction must be a pure integer ALU operation that writes only
- * the LDXR destination (or discards), the chain must actually depend on the
- * value the LDXR read, and the base register may not be rewritten.  This
- * proves the LDXR executed and its result reached the faulting load, while
- * still allowing the in-place EOR/ADD/... forms compilers emit.  Any write to
- * another register, SP, memory, control flow or a flag-reading select is
- * declined and the native sequence runs instead. */
+ * GPR file are available.  Every accepted instruction must be a pure integer
+ * ALU operation with no memory, control-flow or flag-reading effect.  The
+ * verifier replays the window from the value the LDXR read and tracks a
+ * shadow GPR file, so a copied or partly recomputed value still proves its
+ * origin: a source register is known when an earlier instruction defined it,
+ * and a register no pre instruction writes still holds its fault-time value
+ * (which is also its value before the LDXR).  A source defined later in the
+ * window is unpovenable there and declines.  Two replays, from `loaded` and
+ * from `loaded ^ 1`, must end in different LDXR destinations, which keeps the
+ * rule that the chain really consumes the exclusive read.  SP, memory and a
+ * rewrite of the load base never change. */
 static int uy_llsc_pre_chain(const struct uro_regs *regs,
                              const uint32_t *insn, const uint64_t *pcs,
                              unsigned count, unsigned lrt, uint64_t loaded,
                              uint64_t *out)
 {
+    uint64_t shadow[31];
     uint64_t chain = loaded;
+    uint32_t written = 0, defined = 0;
     unsigned i;
 
     if (lrt == 31U) {
@@ -2744,16 +2758,23 @@ static int uy_llsc_pre_chain(const struct uro_regs *regs,
         *out = 0;
         return 1;
     }
-    /* pcs[] is newest-first; walk it from the LDXR side (oldest) to the load. */
-    for (i = count; i-- > 0U; ) {
-        struct uro_regs model, other;
+    /* First pass: reject classes this verifier cannot track.  `written` is
+     * every GPR the pre-window rewrites anywhere in the chain. */
+    for (i = 0; i < count; ++i) {
         unsigned dst = uy_win_dst(insn[i]);
-        unsigned j;
 
         if (dst == 33U || dst == 34U) return 0;
         if (uy_win_reads_flags(insn[i])) return 0;
-        if (dst != 31U && dst != 32U && dst != lrt) return 0;
-        if (dst != lrt) continue;
+        if (dst < 31U) written |= 1U << dst;
+    }
+    /* pcs[] is newest-first; walk it from the LDXR side (oldest) to the load. */
+    for (i = count; i-- > 0U; ) {
+        struct uro_regs model, other;
+        uint32_t srcs = uy_win_srcs(insn[i]);
+        unsigned dst = uy_win_dst(insn[i]);
+        unsigned j;
+
+        if (srcs == 0xffffffffU) return 0;
         for (j = 0; j < 31U; ++j) {
             model.x[j] = regs->x[j];
             other.x[j] = regs->x[j];
@@ -2761,13 +2782,27 @@ static int uy_llsc_pre_chain(const struct uro_regs *regs,
         model.sp = other.sp = regs->sp;
         model.pc = other.pc = pcs[i];
         model.pstate = other.pstate = regs->pstate;
+        for (j = 0; j < 31U; ++j) {
+            if (!(srcs & (1U << j)) || j == lrt) continue;
+            if (defined & (1U << j)) {
+                model.x[j] = shadow[j];
+                other.x[j] = shadow[j];
+            } else if (written & (1U << j)) {
+                return 0;
+            }
+        }
         model.x[lrt] = chain;
         other.x[lrt] = chain ^ UINT64_C(1);
         if (!uy_win_alu(&model, insn[i]) || !uy_win_alu(&other, insn[i])) return 0;
-        /* A write that produces the same result for two different inputs did
-         * not consume the LDXR value (MOVZ/AND #0/...), so it is no evidence. */
-        if (model.x[lrt] == other.x[lrt]) return 0;
-        chain = model.x[lrt];
+        if (dst == lrt) {
+            /* A result that does not depend on the LDXR value (MOVZ/AND #0)
+             * would make the two replays coincide; it is no evidence. */
+            if (model.x[lrt] == other.x[lrt]) return 0;
+            chain = model.x[lrt];
+        } else if (dst != 31U && dst != 32U) {
+            shadow[dst] = model.x[dst];
+            defined |= 1U << dst;
+        }
     }
     *out = chain;
     return 1;
@@ -3660,6 +3695,21 @@ static void uy_copy_mm_after(hook_fargs2_t *args, void *udata)
  * whose access would have raised the original fault.  When `llsc` is not NULL
  * the function also records, before committing any register, whether a
  * bounded exclusive sequence can be completed by the caller. */
+/* LDTR/LDTRB/LDTRH/LDTRSW are the unprivileged forms of the unscaled load.
+ * At EL0 they perform exactly the same access as LDUR/LDURB/LDURH/LDURSW, so
+ * a trapped read can be completed through the ordinary encoding instead of
+ * becoming a synthetic SIGSEGV that an app could use as a read-trap signal.
+ * Only the mode bits 11:10 differ; the address and writeback rules are the
+ * same and the decoder already rejects every other unprivileged combination. */
+static uint32_t uy_unprivileged_alias(uint32_t insn)
+{
+    unsigned cls = insn & 0x3f000000U;
+
+    if (cls != 0x38000000U && cls != 0x3c000000U) return 0;
+    if ((insn & (1U << 21)) || ((insn >> 10) & 3U) != 2U) return 0;
+    return insn & ~0x00000c00U;
+}
+
 static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
                            uint64_t far, int check_far, uint64_t *bad,
                            struct uy_llsc *llsc)
@@ -3680,7 +3730,11 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
     if ((model.pstate & (UINT64_C(31) | (UINT64_C(1) << 20) | (UINT64_C(1) << 21))) ||
         (pc & 3U) || !uy_user_range(pc, 4))
         return -1;
-    if (uro_decode(opcode, &model, &load)) return -2;
+    if (uro_decode(opcode, &model, &load)) {
+        uint32_t alias = uy_unprivileged_alias(opcode);
+
+        if (!alias || uro_decode(alias, &model, &load)) return -2;
+    }
     /* A vector load has no GPR destination to fall back on, so without the
      * native FPSIMD helpers the honest answer is the old fail-closed signal. */
     if (load.vector && !g_fp_ready) return -6;

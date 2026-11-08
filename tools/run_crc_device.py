@@ -45,14 +45,23 @@ def main():
                         help="test modeled and unmodeled LL/SC windows and keyless defense against 2.20.0")
     matrix.add_argument("--read-defense-v221", action="store_true",
                         help="test pre-load ALU and FPSIMD window modeling against 2.21.0")
+    matrix.add_argument("--read-defense-v221-guarded", action="store_true",
+                        help="verify the keyless guard against all six urov-y 2.21.0 modes")
+    matrix.add_argument("--read-defense-v222", action="store_true",
+                        help="verify the keyless guard against all six urov-y 2.22.0 modes")
     parser.add_argument("--repeats", type=int, default=15)
     parser.add_argument("--cycles", type=int, default=3)
     args = parser.parse_args()
     if not 3 <= args.repeats <= 200 or not 1 <= args.cycles <= 10:
         parser.error("repeats 3..200, cycles 1..10")
 
-    if args.read_defense_v221:
+    if args.read_defense_v221 or args.read_defense_v221_guarded:
         prefix = "read-defense-v221"
+        if args.read_defense_v221_guarded:
+            prefix += "-guarded"
+        modes = tuple(f"{prefix}-{shape}" for shape in ("brk", "brk-all", "uxn", "uxn-all", "ap", "ap-all"))
+    elif args.read_defense_v222:
+        prefix = "read-defense-v222"
         modes = tuple(f"{prefix}-{shape}" for shape in ("brk", "brk-all", "uxn", "uxn-all", "ap", "ap-all"))
     elif args.read_defense_v220:
         prefix = "read-defense-v220"
@@ -111,9 +120,10 @@ def main():
         v219 = mode.startswith("read-defense-v219-")
         v220 = mode.startswith("read-defense-v220-")
         v221 = mode.startswith("read-defense-v221-")
-        window_mode = v220 or v221
+        v222 = mode.startswith("read-defense-v222-")
+        window_mode = v220 or v221 or v222
         modern_defense = v218 or v219 or window_mode or mode.startswith("read-defense-v216-")
-        defense_tag = "V221" if v221 else "V220" if v220 else "V219" if v219 else "V218" if v218 else "V216"
+        defense_tag = "V222" if v222 else "V221" if v221 else "V220" if v220 else "V219" if v219 else "V218" if v218 else "V216"
         active = mode != f"{prefix}-clean"
         shell("am", "force-stop", PACKAGE)
         argv = ["am", "start", "-W", "-n", ACTIVITY, "--es", "mode", mode,
@@ -208,6 +218,37 @@ def main():
                           re.findall(rf"READ_DEFENSE_{defense_tag}_POLICY [^\n]+", logs)]
                 if [s["stage"] for s in policy] != expected:
                     raise IncompleteLog(f"{label}: missing policy records in {log_path.name}")
+                if args.read_defense_v221_guarded or v222:
+                    ap_mode = mode.endswith(("-ap", "-ap-all"))
+                    ap_all = mode.endswith("-ap-all")
+                    for s in policy:
+                        n = s["n"]
+                        covered = s["stage"] in ("identity", "overlay")
+                        if v222:
+                            evidence = n if covered and (
+                                not ap_mode or (s["stage"] == "overlay" and not ap_all)) else "0"
+                            accepted = n if (s["stage"] == "clean" or
+                                             (s["stage"] == "identity" and ap_mode) or
+                                             (s["stage"] == "overlay" and ap_mode and ap_all)) else "0"
+                            split = n if (s["stage"] == "overlay" and not (ap_mode and ap_all)) else "0"
+                            changed = n if s["stage"] in ("patch_only", "deactivated") else "0"
+                            if (s["baseline_ok"] != n or s["pre_alu"] != "0" or s["fp"] != "0" or
+                                    s["pre_gpr"] != "0" or s["simd"] != "0" or s["ap"] != "0" or
+                                    s["simd_value"] != n or
+                                    s["ap_unknown"] != "0" or s["unknown"] != "0" or
+                                    s["evidence"] != evidence or s["accepted"] != accepted or
+                                    s["split"] != split or s["changed"] != changed):
+                                raise RuntimeError(f"{label}: v222 policy mismatch at {s['stage']}")
+                        else:
+                            ap = n if covered and ap_mode else "0"
+                            if (s["baseline_ok"] != n or s["pre_gpr"] != ap or s["simd"] != ap or
+                                    s["ap"] != ap or s["ap_unknown"] != "0" or s["unknown"] != "0" or
+                                    s["evidence"] != (n if covered else "0") or
+                                    s["accepted"] != (n if s["stage"] == "clean" else "0")):
+                                raise RuntimeError(f"{label}: guarded policy mismatch at {s['stage']}")
+                    if v222 and ap_all and not re.search(
+                            r"READ_DEFENSE_V222_LDTR byte=([0-9a-f]{2}) want=\1", logs):
+                        raise IncompleteLog(f"{label}: missing v222 unprivileged-load result")
                 if active and (f"READ_DEFENSE_{defense_tag}_FALLBACK shape=1 reference=1 "
                                "execute=1234" not in logs):
                     raise IncompleteLog(f"{label}: missing independent read and execution result")

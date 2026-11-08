@@ -21,6 +21,11 @@ struct ud_exclusive_observation {
     uint64_t elapsed_ns;
 };
 
+struct ud_ap_v221_observation {
+    enum ud_verdict verdict;
+    struct ud_exclusive_observation baseline, pre_gpr, simd;
+};
+
 struct ud_reader_observation {
     enum ud_verdict reader_diff;
     int error;
@@ -134,6 +139,18 @@ void ud_observe_ap_pre_alu(const void *address, const void *reference, int backi
                            off_t offset, struct ud_exclusive_observation *out);
 void ud_observe_ap_fp(const void *address, const void *reference, int backing_fd,
                       off_t offset, struct ud_exclusive_observation *out);
+
+/* Same mapping and worker contract as ud_observe_ap_reservation. The 2.21
+ * model bridges the NOP baseline but declines a write to a second GPR before
+ * LDRB and a SIMD EOR after LDRB. 2.22.0 models both, and the SIMD sequence
+ * preloads V0 with 0xff and reads lane0 back after the STXR so a modeled
+ * window must also commit the architectural FPSIMD result. MATCH requires all
+ * target reservations lost for both declined shapes and none lost for the
+ * baseline; the SIMD observation's value_match compares the post-sequence V0
+ * lane with the native control run. Mixed results, invalid
+ * mappings and unstable controls yield UNKNOWN. */
+void ud_observe_ap_v221(const void *address, const void *reference, int backing_fd,
+                        off_t offset, struct ud_ap_v221_observation *out);
 
 /* Same contract as ud_observe_ap_reservation. CSEL reads NZCV and preserves
  * the scratch value. The UROV-Y 2.19.0 single LL/SC bridge declines this gap. */

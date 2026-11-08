@@ -1,0 +1,16 @@
+--------- beginning of main
+10-05 13:49:04.073 22575 22602 I urovdetect: CONTEXT pid=22575 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 13:49:04.073 22575 22602 I urovdetect: BEGIN mode=read-defense-v221-guarded-clean repeats=32
+10-05 13:49:05.415 22575 22602 I urovdetect: READ_DEFENSE_V221 stage=clean n=32 split=0 trap=0 unknown=0 changed=0 accept=32 business_file=32 scalar_file=32 kernel_file=32 execute=1234 triplets=3072 target_failed=0 control_failed=1 retries=0 mean_ns=41361999 max_ns=91900797
+10-05 13:49:05.416 22575 22602 I urovdetect: READ_DEFENSE_KEYLESS stage=clean n=32 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=3072 csel_retries=0 site_code=0 site_fetch=0 guarded=32
+10-05 13:49:05.416 22575 22602 I urovdetect: READ_DEFENSE_KEYLESS2 stage=clean n=32 load=0 store=0 branch=0 xload=0 unknown=0 value=128 value_ok=128 clrex_bad=0 clrex_done=32 svc_bad=0 svc_done=32
+10-05 13:49:05.416 22575 22602 I urovdetect: READ_DEFENSE_V221_POLICY stage=clean n=32 pre_alu=0 fp=0 ap=0 ap_unknown=0 triplets=6144 target_failed=0 control_failed=0 split=0 evidence=0 changed=0 unknown=0 accepted=32 mean_ns=16318692 max_ns=49321818 baseline_ok=32 pre_gpr=0 simd=0
+10-05 13:49:05.416 22575 22602 I urovdetect: DOBBY_HOOK address=0x763251f000 original=1234 hooked=1235
+10-05 13:49:06.691 22575 22602 I urovdetect: READ_DEFENSE_V221 stage=patch_only n=32 split=0 trap=0 unknown=0 changed=32 accept=0 business_file=0 scalar_file=0 kernel_file=0 execute=1235 triplets=3072 target_failed=0 control_failed=1 retries=0 mean_ns=39731364 max_ns=42952108
+10-05 13:49:06.691 22575 22602 I urovdetect: READ_DEFENSE_KEYLESS stage=patch_only n=32 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=3072 csel_retries=0 site_code=0 site_fetch=0 guarded=0
+10-05 13:49:06.691 22575 22602 I urovdetect: READ_DEFENSE_KEYLESS2 stage=patch_only n=32 load=0 store=0 branch=0 xload=0 unknown=0 value=128 value_ok=128 clrex_bad=0 clrex_done=32 svc_bad=0 svc_done=32
+10-05 13:49:06.691 22575 22602 I urovdetect: READ_DEFENSE_V221_POLICY stage=patch_only n=32 pre_alu=0 fp=0 ap=0 ap_unknown=0 triplets=6144 target_failed=0 control_failed=0 split=0 evidence=0 changed=32 unknown=0 accepted=0 mean_ns=15365165 max_ns=18322754 baseline_ok=32 pre_gpr=0 simd=0
+10-05 13:49:06.691 22575 22602 I urovdetect: READ_DEFENSE_BUSINESS ops=533248 errors=0
+10-05 13:49:06.691 22575 22602 I urovdetect: CONTEXT pid=22575 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 13:49:06.691 22575 22602 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=140 failures=0 mode=read-defense-v221-guarded-clean
+10-05 13:49:06.693 22575 22575 I urovdetect: DETECT_RESULT PASS mode=read-defense-v221-guarded-clean worker_ms=2618 ui_ticks=348 ui_max_gap_ms=20 native=PASS cases=2 assertions=140 failures=0

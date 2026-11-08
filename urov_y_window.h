@@ -48,12 +48,16 @@ struct uy_fpstate {
  * base is still the monitored address.  2.21.0 adds the FPSIMD FMOV transfers
  * (D/S/H and the .D[1] lane), MRS/MSR of NZCV/FPCR/FPSR, the read-only
  * TPIDR_EL0/TPIDRRO_EL0/CNTFRQ_EL0/CTR_EL0/DCZID_EL0 values, and the pre-load
- * destination-chain verifier.
+ * destination-chain verifier.  2.22.0 generalizes that verifier to a shadow GPR
+ * file (a copied value may feed the chain through another register) and adds
+ * the three-same integer SIMD families, so one vector instruction between the
+ * sampled load and its STXR no longer collapses the window.
  *
  * Everything the model cannot reproduce makes the walk decline, and the native
  * instructions then run: CLREX, a second exclusive, a monitor-clobbering store,
  * an exception, a call, an unmodeled system register, SIMD/FP data processing
- * outside FMOV, SVE/SME, or a transfer out of the bounded window.  For CLREX, a
+ * outside FMOV and the integer three-same families, SVE/SME, or a transfer out
+ * of the bounded window.  For CLREX, a
  * second exclusive and an exception the native outcome is the failure the
  * unmodified hardware would also report, so declining there reproduces the
  * architecture rather than hiding it.
@@ -694,6 +698,84 @@ static inline int uy_win_reads_flags(uint32_t insn)
     return 0;
 }
 
+/* GPR operands read by one uy_win_alu() instruction.  Bit r means x[r] is
+ * read (XZR is never a register); 0xffffffff marks a class this helper cannot
+ * enumerate, which the pre-load verifier declines.  SP is not bit-mapped: an
+ * accepted pre-window never rewrites SP, so the fault-time SP is also the value
+ * the original instruction read. */
+static inline uint32_t uy_win_srcs(uint32_t insn)
+{
+    unsigned opc = (insn >> 29) & 3U;
+    unsigned rn = (insn >> 5) & 31U;
+    unsigned rm = (insn >> 16) & 31U;
+    unsigned ra = (insn >> 10) & 31U;
+    unsigned rd = insn & 31U;
+    uint32_t mask = 0;
+
+    if (insn == UY_NOP || insn == UY_BTI_C || insn == UY_BTI_J || insn == UY_BTI_JC)
+        return 0;
+    if ((insn & 0xfffff01fU) == 0xd503201fU) return 0;   /* HINT #imm */
+    if ((insn & 0xfffff0ffU) == 0xd503309fU) return 0;   /* DMB */
+    if ((insn & 0xfffff0ffU) == 0xd50330bfU) return 0;   /* DSB */
+    if ((insn & 0xfffff0ffU) == 0xd50330dfU) return 0;   /* ISB */
+
+    if ((insn & 0x1f000000U) == 0x11000000U) {           /* add/sub immediate */
+        if (rn != 31U) mask |= 1U << rn;
+        return mask;
+    }
+    if ((insn & 0x1f200000U) == 0x0b000000U) {           /* add/sub shifted */
+        if (rn != 31U) mask |= 1U << rn;
+        if (rm != 31U) mask |= 1U << rm;
+        return mask;
+    }
+    if ((insn & 0x1f000000U) == 0x0a000000U) {           /* logical shifted */
+        if (rn != 31U) mask |= 1U << rn;
+        if (rm != 31U) mask |= 1U << rm;
+        return mask;
+    }
+    if ((insn & 0x1f800000U) == 0x12000000U)             /* logical immediate */
+        return rn == 31U ? 0 : 1U << rn;
+    if ((insn & 0x1f800000U) == 0x12800000U) {           /* move wide */
+        if (opc == 3U && rd != 31U) mask |= 1U << rd;     /* MOVK keeps Rd */
+        return mask;
+    }
+    if ((insn & 0x1f800000U) == 0x13000000U) {           /* bitfield */
+        if (rn != 31U) mask |= 1U << rn;
+        if (opc == 1U && rd != 31U) mask |= 1U << rd;     /* BFM keeps Rd */
+        return mask;
+    }
+    if ((insn & 0x1f800000U) == 0x13800000U) {           /* extract */
+        if (rn != 31U) mask |= 1U << rn;
+        if (rm != 31U) mask |= 1U << rm;
+        return mask;
+    }
+    if ((insn & 0x1fe00000U) == 0x1a800000U) {           /* cond select */
+        if (rn != 31U) mask |= 1U << rn;
+        if (rm != 31U) mask |= 1U << rm;
+        return mask;
+    }
+    if ((insn & 0x3fe00010U) == 0x3a400000U) {           /* ccmp/ccmn */
+        if (rn != 31U) mask |= 1U << rn;
+        if (!((insn >> 11) & 1U) && rm != 31U) mask |= 1U << rm;
+        return mask;
+    }
+    if ((insn & 0x5fe00000U) == 0x5ac00000U)             /* 1 source */
+        return rn == 31U ? 0 : 1U << rn;
+    if ((insn & 0x5fe00000U) == 0x1ac00000U) {           /* 2 source */
+        if (rn != 31U) mask |= 1U << rn;
+        if (rm != 31U) mask |= 1U << rm;
+        return mask;
+    }
+    if ((insn & 0x1f000000U) == 0x1b000000U) {           /* 3 source */
+        if (rn != 31U) mask |= 1U << rn;
+        if (rm != 31U) mask |= 1U << rm;
+        if (ra != 31U) mask |= 1U << ra;
+        return mask;
+    }
+    if ((insn & 0x1f000000U) == 0x10000000U) return 0;   /* ADR/ADRP */
+    return 0xffffffffU;
+}
+
 static inline uint64_t uy_win_fp_get(const struct uy_fpstate *fp, unsigned reg,
                               unsigned off, unsigned bytes)
 {
@@ -798,6 +880,225 @@ static inline int uy_win_fp_insn(uint32_t insn, int have_fp16)
     default:
         return 0;
     }
+}
+
+/* ------------------------------- Advanced SIMD integer data processing
+ *
+ * 2.21.0 stopped the whole window at the first SIMD/FP data-processing
+ * instruction.  A detector could therefore put a single vector instruction
+ * between its sampled load and the STXR and read the reservation loss even
+ * though the module modeled every scalar instruction.  The three-same integer
+ * families below are pure register operations on the FPSIMD file, so they can
+ * be replayed bit-exactly: logical (AND/BIC/ORR/ORN/EOR/BSL/BIT/BIF), integer
+ * add/sub, the compare family, min/max, multiply/accumulate and the register
+ * shifts.  Everything else (FP arithmetic and conversion, permutes, immediate
+ * forms, memory) still declines, which leaves the native instructions in
+ * charge.
+ *
+ * Only the low 8 bytes of a Q=0 destination are written; the architecture
+ * clears the upper 64 bits of the register, which the model does as well. */
+
+static inline uint64_t uy_win_vec_lane(const uint8_t *v, unsigned lane, unsigned bytes)
+{
+    uint64_t value = 0;
+    unsigned i;
+
+    for (i = 0; i < bytes; ++i)
+        value |= (uint64_t)v[lane * bytes + i] << (8U * i);
+    return value;
+}
+
+static inline void uy_win_vec_put(uint8_t *v, unsigned lane, unsigned bytes, uint64_t value)
+{
+    unsigned i;
+
+    for (i = 0; i < bytes; ++i)
+        v[lane * bytes + i] = (uint8_t)(value >> (8U * i));
+}
+
+/* Bitmask of an element of `bytes` bytes; bytes == 8 yields all ones. */
+static inline uint64_t uy_win_vec_mask(unsigned bytes)
+{
+    return bytes >= 8U ? ~UINT64_C(0) : (UINT64_C(1) << (8U * bytes)) - 1U;
+}
+
+static inline int64_t uy_win_vec_sx(uint64_t value, unsigned bytes)
+{
+    return (int64_t)((value ^ (UINT64_C(1) << (8U * bytes - 1U))) -
+                     (UINT64_C(1) << (8U * bytes - 1U)));
+}
+
+/* True for the encodings uy_win_simd() handles.  Derived from the assembler
+ * output for every accepted mnemonic; see tests/urov_window_test.c. */
+static inline int uy_win_simd_insn(uint32_t insn)
+{
+    unsigned opcode;
+    unsigned size;
+    unsigned u;
+
+    if ((insn & 0x9f200000U) != 0x0e200000U) return 0;   /* three same */
+    opcode = (insn >> 11) & 0x1fU;
+    size = (insn >> 22) & 3U;
+    u = (insn >> 29) & 1U;
+
+    switch (opcode) {
+    case 3:                                              /* logical */
+    case 6:                                              /* CMGT/CMHI */
+    case 7:                                              /* CMGE/CMHS */
+    case 8:                                              /* SSHL/USHL */
+    case 16:                                             /* ADD/SUB */
+    case 17:                                             /* CMEQ/CMTST */
+        return 1;
+    case 12:                                             /* SMAX/UMAX */
+    case 13:                                             /* SMIN/UMIN */
+    case 18:                                             /* MLA/MLS */
+        return size < 3U;                                /* no 64-bit lanes */
+    case 19:                                             /* MUL */
+        return !u && size < 3U;
+    default:
+        return 0;
+    }
+}
+
+/* Replay one three-same integer instruction on the FPSIMD mirror.  Returns 0
+ * for every encoding outside the accepted set; the caller then declines the
+ * whole window and the native instructions run unchanged. */
+static inline int uy_win_simd(struct uro_regs *model, struct uy_fpstate *fp, uint32_t insn)
+{
+    unsigned q = (insn >> 30) & 1U;
+    unsigned u = (insn >> 29) & 1U;
+    unsigned size = (insn >> 22) & 3U;
+    unsigned opcode = (insn >> 11) & 0x1fU;
+    unsigned rm = (insn >> 16) & 31U;
+    unsigned rn = (insn >> 5) & 31U;
+    unsigned rd = insn & 31U;
+    unsigned bytes = q ? 16U : 8U;
+    unsigned esize = 1U << size;
+    unsigned lanes = bytes / esize;
+    uint8_t *d = fp->vregs[rd];
+    const uint8_t *n = fp->vregs[rn];
+    const uint8_t *m = fp->vregs[rm];
+    uint64_t mask = uy_win_vec_mask(esize);
+    unsigned i, b;
+
+    (void)model;
+    if (!uy_win_simd_insn(insn)) return 0;
+
+    if (opcode == 3U) {                                  /* logical */
+        for (b = 0; b < bytes; ++b) {
+            uint8_t dn = n[b], dm = m[b], dd = d[b];
+
+            if (!u) {
+                if (size == 0U) d[b] = dn & dm;
+                else if (size == 1U) d[b] = dn & (uint8_t)~dm;
+                else if (size == 2U) d[b] = dn | dm;
+                else d[b] = dn | (uint8_t)~dm;
+            } else if (size == 0U) {
+                d[b] = dn ^ dm;
+            } else if (size == 1U) {                     /* BSL: Vd selects */
+                d[b] = (uint8_t)((dd & dn) | (~dd & dm));
+            } else if (size == 2U) {                     /* BIT: 1 -> Vn */
+                d[b] = (uint8_t)((dn & dm) | (dd & ~dm));
+            } else {                                     /* BIF: 0 -> Vn */
+                d[b] = (uint8_t)((dn & ~dm) | (dd & dm));
+            }
+        }
+        goto done;
+    }
+
+    if (opcode == 16U) {                                 /* add/sub */
+        for (i = 0; i < lanes; ++i) {
+            uint64_t a = uy_win_vec_lane(n, i, esize);
+            uint64_t c = uy_win_vec_lane(m, i, esize);
+
+            uy_win_vec_put(d, i, esize, (u ? a - c : a + c) & mask);
+        }
+        goto done;
+    }
+    if (opcode == 17U) {                                 /* CMEQ/CMTST */
+        for (i = 0; i < lanes; ++i) {
+            uint64_t a = uy_win_vec_lane(n, i, esize);
+            uint64_t c = uy_win_vec_lane(m, i, esize);
+            uint64_t hit = u ? (a == c) : ((a & c) != 0U);
+
+            uy_win_vec_put(d, i, esize, hit ? mask : 0);
+        }
+        goto done;
+    }
+    if (opcode == 6U || opcode == 7U) {                  /* compare */
+        for (i = 0; i < lanes; ++i) {
+            uint64_t a = uy_win_vec_lane(n, i, esize);
+            uint64_t c = uy_win_vec_lane(m, i, esize);
+            int hit;
+
+            if (opcode == 6U)
+                hit = u ? (a > c) : (uy_win_vec_sx(a, esize) > uy_win_vec_sx(c, esize));
+            else
+                hit = u ? (a >= c) : (uy_win_vec_sx(a, esize) >= uy_win_vec_sx(c, esize));
+            uy_win_vec_put(d, i, esize, hit ? mask : 0);
+        }
+        goto done;
+    }
+    if (opcode == 12U || opcode == 13U) {                /* max/min */
+        for (i = 0; i < lanes; ++i) {
+            uint64_t a = uy_win_vec_lane(n, i, esize);
+            uint64_t c = uy_win_vec_lane(m, i, esize);
+            int take_n;
+
+            if (opcode == 12U)
+                take_n = u ? (a > c) : (uy_win_vec_sx(a, esize) > uy_win_vec_sx(c, esize));
+            else
+                take_n = u ? (a < c) : (uy_win_vec_sx(a, esize) < uy_win_vec_sx(c, esize));
+            uy_win_vec_put(d, i, esize, take_n ? a : c);
+        }
+        goto done;
+    }
+    if (opcode == 19U) {                                 /* MUL */
+        for (i = 0; i < lanes; ++i) {
+            uint64_t a = uy_win_vec_lane(n, i, esize);
+            uint64_t c = uy_win_vec_lane(m, i, esize);
+
+            uy_win_vec_put(d, i, esize, (a * c) & mask);
+        }
+        goto done;
+    }
+    if (opcode == 18U) {                                 /* MLA/MLS */
+        for (i = 0; i < lanes; ++i) {
+            uint64_t a = uy_win_vec_lane(n, i, esize);
+            uint64_t c = uy_win_vec_lane(m, i, esize);
+            uint64_t acc = uy_win_vec_lane(d, i, esize);
+
+            uy_win_vec_put(d, i, esize, (u ? acc - a * c : acc + a * c) & mask);
+        }
+        goto done;
+    }
+    if (opcode == 8U) {                                  /* SSHL/USHL */
+        for (i = 0; i < lanes; ++i) {
+            uint64_t a = uy_win_vec_lane(n, i, esize);
+            int shift = (int)(int8_t)uy_win_vec_lane(m, i, esize);
+            unsigned bits = esize * 8U;
+            uint64_t result;
+
+            if (shift >= 0) {
+                result = (unsigned)shift >= bits ? 0 : (a << (unsigned)shift) & mask;
+            } else if (u) {
+                result = (unsigned)(-shift) >= bits ? 0 : a >> (unsigned)(-shift);
+            } else if ((unsigned)(-shift) >= bits) {
+                result = (uint64_t)(uy_win_vec_sx(a, esize) < 0 ? -1 : 0);
+            } else {
+                result = (uint64_t)(uy_win_vec_sx(a, esize) >> (unsigned)(-shift));
+            }
+            uy_win_vec_put(d, i, esize, result & mask);
+        }
+        goto done;
+    }
+    return 0;
+
+done:
+    if (!q) {
+        for (b = 8U; b < 16U; ++b) d[b] = 0;
+    }
+    return 1;
 }
 
 /* MRS/MSR of the user-visible state the window can carry exactly.  NZCV is

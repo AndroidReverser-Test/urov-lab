@@ -19,6 +19,18 @@ static int read_defense_pipe(const uint8_t *source, uint8_t out[DOBBY_CRC_BYTES]
     return error;
 }
 
+/* The unprivileged load form: at EL0 it performs the same access as LDURB, so
+ * a read trap that decodes it should return the same image byte.  If a module
+ * leaves it to fail-closed, the synthetic SIGSEGV terminates the fixture and
+ * the matrix reports the missing result instead of a silent value mismatch. */
+static uint8_t read_defense_ldtrb(const uint8_t *address)
+{
+    uint32_t value;
+
+    __asm__ volatile("ldtrb %w0, [%1]" : "=r"(value) : "r"(address) : "memory");
+    return (uint8_t)value;
+}
+
 /* Ground truth only: keyless observation and recovery take no context/key. */
 static int read_defense_arm(const struct uy_ctx *ctx, const uint8_t *text, const uint8_t *image,
                             unsigned mode, bool all_callers)
@@ -222,6 +234,8 @@ static void read_defense_v216_stage(const char *name, const uint8_t *text,
 static bool g_read_defense_fixed;
 static bool g_read_defense_window;
 static bool g_read_defense_221;
+static bool g_read_defense_221_guarded;
+static bool g_read_defense_222;
 
 static void read_defense_observe_sites(enum ud_verdict *code, enum ud_verdict *fetch)
 {
@@ -275,6 +289,7 @@ static void window_store_probe(window_store_probe_fn fn, const uint8_t *text,
 
 struct read_defense_v220_stats {
     unsigned pre_alu, fp, ap, ap_unknown, triplets, target_failed, control_failed;
+    unsigned baseline_ok, pre_gpr, simd, simd_value;
     unsigned split, evidence, unknown, changed, accepted;
     uint64_t elapsed_ns, max_ns;
 };
@@ -296,6 +311,21 @@ static void read_defense_v220_sample(const uint8_t *text, const struct page *ref
     window_probe(ud_observe_ap_fp, text, control, reference, offset, &fp);
     enum ud_verdict ap = pre_alu.reservation_loss == fp.reservation_loss ?
                         pre_alu.reservation_loss : UD_UNKNOWN;
+    if (g_read_defense_221_guarded) {
+        struct ud_ap_v221_observation residual;
+        for (unsigned attempt = 0; attempt < 3; ++attempt) {
+            ud_observe_ap_v221(text + DOBBY_CRC_BYTES, control + DOBBY_CRC_BYTES,
+                               reference->fd, offset + DOBBY_CRC_BYTES, &residual);
+            if (residual.baseline.error != EAGAIN && residual.pre_gpr.error != EAGAIN &&
+                residual.simd.error != EAGAIN)
+                break;
+        }
+        stats->baseline_ok += residual.baseline.reservation_loss == UD_NO_MATCH;
+        stats->pre_gpr += residual.pre_gpr.reservation_loss == UD_MATCH;
+        stats->simd += residual.simd.reservation_loss == UD_MATCH;
+        stats->simd_value += residual.simd.value_seen && residual.simd.value_match;
+        ap = residual.verdict;
+    }
     stats->pre_alu += pre_alu.reservation_loss == UD_MATCH;
     stats->fp += fp.reservation_loss == UD_MATCH;
     stats->ap += ap == UD_MATCH;
@@ -454,9 +484,10 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
             kernel_file == (original || (mode && all_callers) ? n : 0U),
             "v218 %s split=%u trap=%u unknown=%u changed=%u accept=%u views=%u/%u/%u",
             name, split, traps, unknown, changed, accepted, business_file, scalar_file, kernel_file);
-    LOG("READ_DEFENSE_%s stage=%s n=%u split=%u trap=%u unknown=%u changed=%u accept=%u "
+        LOG("READ_DEFENSE_%s stage=%s n=%u split=%u trap=%u unknown=%u changed=%u accept=%u "
         "business_file=%u scalar_file=%u kernel_file=%u execute=%04x "
         "triplets=%u target_failed=%u control_failed=%u retries=%u mean_ns=%llu max_ns=%llu",
+        g_read_defense_222 ? "V222" :
         g_read_defense_221 ? "V221" : g_read_defense_window ? "V220" :
         g_read_defense_fixed ? "V219" : "V218",
         name, n, split, traps, unknown, changed, accepted, business_file, scalar_file, kernel_file,
@@ -466,8 +497,12 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
         unsigned want_csel = ap && !window ? n : 0U;
         /* For 2.21.0 `guarded` is the policy's accepted count: the original
          * view is accepted everywhere, and the overlaid AP view is accepted
-         * only when every caller is in session (no split signal). */
-        unsigned want_guarded = g_read_defense_221 && ap ?
+         * only when every caller is in session (no split signal).  2.22.0
+         * accepts the overlaid AP view in both caller shapes because the
+         * shadow-GPR pre-chain and the integer-SIMD window model leave no
+         * reservation-loss signal. */
+        unsigned want_guarded = g_read_defense_222 && ap && (original || all_callers) ? n :
+            g_read_defense_221 && !g_read_defense_221_guarded && ap ?
             (original || all_callers ? n : 0U) : (!mode && original ? n : 0U);
         if (window) guarded = policy.accepted;
 
@@ -499,30 +534,46 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
                 xload_traps, window_unknown, window_value_ok, window_value, clrex_bad,
                 clrex_done, svc_bad, svc_done);
 
-        /* 2.21.0 models the pre-load ALU chain and the post-load FPSIMD moves,
-         * so the two AP policy probes no longer lose the reservation.  The
-         * remaining signal in a caller-window session is the deliberate
-         * split view; an all-callers session has no evidence at all. */
-        unsigned want_ap = g_read_defense_221 ? 0U : (ap ? n : 0U);
-        unsigned want_evidence = g_read_defense_221 && ap ? policy.split : (mode ? n : 0U);
+        unsigned want_old_ap = ap && !g_read_defense_221 && !g_read_defense_222 ? n : 0U;
+        unsigned want_residual = ap && g_read_defense_221_guarded && !g_read_defense_222 ? n : 0U;
+        unsigned want_evidence = ((g_read_defense_221 && !g_read_defense_221_guarded) ||
+                                  g_read_defense_222) && ap ?
+                                 policy.split : (mode ? n : 0U);
         unsigned want_changed = !mode && !original ? n : 0U;
         unsigned want_split = mode && !original && !(ap && all_callers) ? n : 0U;
         unsigned paired_trials = 2U * UD_OBSERVE_EPOCHS * UD_OBSERVE_TRIALS;
         LOG("READ_DEFENSE_%s_POLICY stage=%s n=%u pre_alu=%u fp=%u ap=%u ap_unknown=%u "
             "triplets=%u target_failed=%u control_failed=%u split=%u evidence=%u changed=%u "
-            "unknown=%u accepted=%u mean_ns=%llu max_ns=%llu",
-            g_read_defense_221 ? "V221" : "V220",
+            "unknown=%u accepted=%u mean_ns=%llu max_ns=%llu baseline_ok=%u pre_gpr=%u simd=%u "
+            "simd_value=%u",
+            g_read_defense_222 ? "V222" : g_read_defense_221 ? "V221" : "V220",
             name, n, policy.pre_alu, policy.fp, policy.ap, policy.ap_unknown,
             policy.triplets, policy.target_failed, policy.control_failed, policy.split,
             policy.evidence, policy.changed, policy.unknown, policy.accepted,
-            (unsigned long long)(policy.elapsed_ns / n), (unsigned long long)policy.max_ns);
-        REQUIRE(policy.pre_alu == want_ap && policy.fp == want_ap && policy.ap == want_ap &&
+            (unsigned long long)(policy.elapsed_ns / n), (unsigned long long)policy.max_ns,
+            policy.baseline_ok, policy.pre_gpr, policy.simd, policy.simd_value);
+        REQUIRE(policy.pre_alu == want_old_ap && policy.fp == want_old_ap &&
+                policy.ap == want_old_ap + want_residual && policy.pre_gpr == want_residual &&
+                policy.simd == want_residual &&
+                policy.simd_value == (g_read_defense_222 ? n : 0U) &&
+                policy.baseline_ok == (g_read_defense_221_guarded ? n : 0U) &&
                 !policy.ap_unknown && policy.triplets == n * paired_trials &&
-                policy.target_failed == want_ap * paired_trials && policy.split == want_split &&
+                policy.target_failed == want_old_ap * paired_trials && policy.split == want_split &&
                 policy.evidence == want_evidence && policy.changed == want_changed && !policy.unknown,
-                "v220 policy %s pre_alu=%u fp=%u ap=%u split=%u unknown=%u evidence=%u changed=%u",
-                name, policy.pre_alu, policy.fp, policy.ap, policy.split, policy.unknown,
-                policy.evidence, policy.changed);
+                "window policy %s pre_alu=%u fp=%u baseline=%u pre_gpr=%u simd=%u ap=%u "
+                "split=%u unknown=%u evidence=%u changed=%u",
+                name, policy.pre_alu, policy.fp, policy.baseline_ok, policy.pre_gpr, policy.simd,
+                policy.ap, policy.split, policy.unknown, policy.evidence, policy.changed);
+    }
+    /* The unprivileged LDTRB form is outside the ordinary decoder set; 2.22.0
+     * completes it through the equivalent LDUR encoding.  Run it on the live
+     * overlay page so a fail-closed SIGSEGV shows up as a crash rather than a
+     * silent value difference. */
+    if (g_read_defense_222 && ap && all_callers && !strcmp(name, "overlay")) {
+        uint8_t byte = read_defense_ldtrb(text + 1);
+
+        REQUIRE(byte == file[1], "v222 ldtrb byte=%02x want=%02x", byte, file[1]);
+        LOG("READ_DEFENSE_V222_LDTR byte=%02x want=%02x", byte, file[1]);
     }
 }
 
@@ -604,7 +655,7 @@ static void read_defense_exec_guard(const struct uy_ctx *ctx, const struct page 
         REQUIRE(error == EINVAL && inactive && bytes && executed == DOBBY_ORIGINAL,
                 "v218 execute-only guard errno=%d", error);
         LOG("READ_DEFENSE_%s_GUARD shape=%d errno=%d inactive=%d reference=%d execute=%04x",
-            g_read_defense_221 ? "V221" : g_read_defense_window ? "V220" :
+            g_read_defense_222 ? "V222" : g_read_defense_221 ? "V221" : g_read_defense_window ? "V220" :
         g_read_defense_fixed ? "V219" : "V218",
             shape, error, inactive, bytes, executed);
     } else if (shape) {
@@ -616,7 +667,7 @@ static void read_defense_exec_guard(const struct uy_ctx *ctx, const struct page 
         uint32_t executed = intact ? crc_execute(alias + reference->entry) : 0;
         REQUIRE(intact && executed == DOBBY_ORIGINAL, "v220 independent reference or code changed");
         LOG("READ_DEFENSE_%s_FALLBACK shape=%d reference=%d execute=%04x",
-        g_read_defense_221 ? "V221" : "V220", shape, intact, executed);
+        g_read_defense_222 ? "V222" : g_read_defense_221 ? "V221" : "V220", shape, intact, executed);
     }
     REQUIRE(!munmap(alias, page_size), "v218 execute-only guard unmap errno=%d", errno);
 }
@@ -648,18 +699,24 @@ static void read_defense_fixture(const char *name, const char *key, int repeats)
     bool v219 = !strncmp(shape, "v219-", sizeof("v219-") - 1);
     bool v220 = !strncmp(shape, "v220-", sizeof("v220-") - 1);
     bool v221 = !strncmp(shape, "v221-", sizeof("v221-") - 1);
-    bool modern = v216 || v218 || v219 || v220 || v221;
+    bool v222 = !strncmp(shape, "v222-", sizeof("v222-") - 1);
+    bool modern = v216 || v218 || v219 || v220 || v221 || v222;
     if (modern) shape += sizeof("v216-") - 1;
-    g_read_defense_fixed = v219 || v220 || v221;
-    g_read_defense_window = v220 || v221;
+    g_read_defense_fixed = v219 || v220 || v221 || v222;
+    g_read_defense_window = v220 || v221 || v222;
     g_read_defense_221 = v221;
+    g_read_defense_221_guarded = (v221 &&
+        !strncmp(shape, "guarded-", sizeof("guarded-") - 1)) || v222;
+    g_read_defense_222 = v222;
+    if (v221 && !strncmp(shape, "guarded-", sizeof("guarded-") - 1))
+        shape += sizeof("guarded-") - 1;
     void (*stage)(const char *, const uint8_t *, const struct page *, const uint8_t *,
                   const uint8_t *, unsigned, bool, int) =
-        (v218 || v219 || v220 || v221) ? read_defense_v218_stage : read_defense_v216_stage;
+        (v218 || v219 || v220 || v221 || v222) ? read_defense_v218_stage : read_defense_v216_stage;
     bool hardened = strstr(shape, "-hard") != NULL;
     bool ap_all = !strcmp(shape, "ap-all") || !strcmp(shape, "ap-all-hard");
-    bool brk_all = (v218 || v219 || v220 || v221) && !strcmp(shape, "brk-all");
-    bool uxn_all = (v218 || v219 || v220 || v221) && !strcmp(shape, "uxn-all");
+    bool brk_all = (v218 || v219 || v220 || v221 || v222) && !strcmp(shape, "brk-all");
+    bool uxn_all = (v218 || v219 || v220 || v221 || v222) && !strcmp(shape, "uxn-all");
     bool all_callers = ap_all || brk_all || uxn_all;
     if (ap_all || !strcmp(shape, "ap") || !strcmp(shape, "ap-hard")) mode = UROV_Y_MODE_PAGE_AP;
     else if (brk_all || !strcmp(shape, "brk")) mode = UROV_Y_MODE_SITE_BRK;
@@ -728,19 +785,19 @@ static void read_defense_fixture(const char *name, const char *key, int repeats)
     if (error) goto close_reference;
     if (modern) {
         stage("overlay", text, &reference, file, patched, mode, all_callers, repeats);
-        if (v220 || v221)
+        if (v220 || v221 || v222)
             read_defense_exec_guard(NULL, &reference, file, (size_t)page_size, mode, all_callers);
         bool still_active = !uy_status(&ctx, &status) && status.state == UROV_Y_ACTIVE && !status.failures;
         REQUIRE(still_active, "read-defense parent session was changed by the probes");
         LOG("READ_DEFENSE_%s_STATUS parent_active=%d callers=%u",
-            v221 ? "V221" : v220 ? "V220" : v219 ? "V219" : v218 ? "V218" : "V216",
+            v222 ? "V222" : v221 ? "V221" : v220 ? "V220" : v219 ? "V219" : v218 ? "V218" : "V216",
             still_active, all_callers ? 0U : 1U);
         REQUIRE(!uy_deactivate(&ctx), "read-defense deactivate errno=%d", errno);
         stage("deactivated", text, &reference, file, patched, 0, false, repeats);
         read_defense_anonymous_guard(&ctx, file, (size_t)page_size, mode, all_callers);
-        if (v218 || v219 || v220 || v221)
+        if (v218 || v219 || v220 || v221 || v222)
             read_defense_exec_guard(&ctx, &reference, file, (size_t)page_size, mode, all_callers);
-        if (v219 || v220 || v221)
+        if (v219 || v220 || v221 || v222)
             read_defense_reference_guard(&ctx, &reference, file, patched, mode, all_callers);
         goto close_reference;
     }

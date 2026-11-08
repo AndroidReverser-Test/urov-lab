@@ -1,0 +1,33 @@
+--------- beginning of main
+10-05 13:52:35.787 26525 26550 I urovdetect: CONTEXT pid=26525 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 13:52:35.787 26525 26550 I urovdetect: BEGIN mode=read-defense-v221-uxn-all repeats=8
+10-05 13:52:36.111 26525 26550 I urovdetect: READ_DEFENSE_V221 stage=clean n=8 split=0 trap=0 unknown=0 changed=0 accept=8 business_file=8 scalar_file=8 kernel_file=8 execute=1234 triplets=768 target_failed=0 control_failed=0 retries=0 mean_ns=36606226 max_ns=74639729
+10-05 13:52:36.111 26525 26550 I urovdetect: READ_DEFENSE_KEYLESS stage=clean n=8 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=768 csel_retries=0 site_code=0 site_fetch=0 guarded=8
+10-05 13:52:36.111 26525 26550 I urovdetect: READ_DEFENSE_KEYLESS2 stage=clean n=8 load=0 store=0 branch=0 xload=0 unknown=0 value=32 value_ok=32 clrex_bad=0 clrex_done=8 svc_bad=0 svc_done=8
+10-05 13:52:36.111 26525 26550 I urovdetect: READ_DEFENSE_V221_POLICY stage=clean n=8 pre_alu=0 fp=0 ap=0 ap_unknown=0 triplets=1536 target_failed=0 control_failed=0 split=0 evidence=0 changed=0 unknown=0 accepted=8 mean_ns=7947886 max_ns=17446493 baseline_ok=0 pre_gpr=0 simd=0
+10-05 13:52:36.356 26525 26550 I urovdetect: READ_DEFENSE_V221 stage=identity n=8 split=0 trap=0 unknown=0 changed=0 accept=8 business_file=8 scalar_file=8 kernel_file=8 execute=1234 triplets=768 target_failed=0 control_failed=0 retries=0 mean_ns=30156494 max_ns=30609986
+10-05 13:52:36.356 26525 26550 I urovdetect: READ_DEFENSE_KEYLESS stage=identity n=8 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=768 csel_retries=0 site_code=0 site_fetch=1 guarded=0
+10-05 13:52:36.356 26525 26550 I urovdetect: READ_DEFENSE_KEYLESS2 stage=identity n=8 load=0 store=0 branch=0 xload=0 unknown=0 value=32 value_ok=32 clrex_bad=0 clrex_done=8 svc_bad=0 svc_done=8
+10-05 13:52:36.356 26525 26550 I urovdetect: READ_DEFENSE_V221_POLICY stage=identity n=8 pre_alu=0 fp=0 ap=0 ap_unknown=0 triplets=1536 target_failed=0 control_failed=0 split=0 evidence=8 changed=0 unknown=0 accepted=0 mean_ns=6212733 max_ns=6477417 baseline_ok=0 pre_gpr=0 simd=0
+10-05 13:52:36.356 26525 26550 I urovdetect: DOBBY_HOOK address=0x76332fa000 original=1234 hooked=1235
+10-05 13:52:36.605 26525 26550 I urovdetect: READ_DEFENSE_V221 stage=patch_only n=8 split=0 trap=0 unknown=0 changed=8 accept=0 business_file=0 scalar_file=0 kernel_file=0 execute=1235 triplets=768 target_failed=0 control_failed=0 retries=0 mean_ns=30564748 max_ns=30861206
+10-05 13:52:36.605 26525 26550 I urovdetect: READ_DEFENSE_KEYLESS stage=patch_only n=8 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=768 csel_retries=0 site_code=0 site_fetch=0 guarded=0
+10-05 13:52:36.605 26525 26550 I urovdetect: READ_DEFENSE_KEYLESS2 stage=patch_only n=8 load=0 store=0 branch=0 xload=0 unknown=0 value=32 value_ok=32 clrex_bad=0 clrex_done=8 svc_bad=0 svc_done=8
+10-05 13:52:36.605 26525 26550 I urovdetect: READ_DEFENSE_V221_POLICY stage=patch_only n=8 pre_alu=0 fp=0 ap=0 ap_unknown=0 triplets=1536 target_failed=0 control_failed=0 split=0 evidence=0 changed=8 unknown=0 accepted=0 mean_ns=6273696 max_ns=6469848 baseline_ok=0 pre_gpr=0 simd=0
+10-05 13:52:36.855 26525 26550 I urovdetect: READ_DEFENSE_V221 stage=overlay n=8 split=8 trap=0 unknown=0 changed=0 accept=0 business_file=8 scalar_file=0 kernel_file=8 execute=1235 triplets=768 target_failed=0 control_failed=0 retries=0 mean_ns=30861465 max_ns=30960815
+10-05 13:52:36.855 26525 26550 I urovdetect: READ_DEFENSE_KEYLESS stage=overlay n=8 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=768 csel_retries=0 site_code=0 site_fetch=1 guarded=0
+10-05 13:52:36.855 26525 26550 I urovdetect: READ_DEFENSE_KEYLESS2 stage=overlay n=8 load=0 store=0 branch=0 xload=0 unknown=0 value=32 value_ok=32 clrex_bad=0 clrex_done=8 svc_bad=0 svc_done=8
+10-05 13:52:36.855 26525 26550 I urovdetect: READ_DEFENSE_V221_POLICY stage=overlay n=8 pre_alu=0 fp=0 ap=0 ap_unknown=0 triplets=1536 target_failed=0 control_failed=0 split=8 evidence=8 changed=0 unknown=0 accepted=0 mean_ns=6326044 max_ns=6364420 baseline_ok=0 pre_gpr=0 simd=0
+10-05 13:52:36.857 26525 26550 I urovdetect: READ_DEFENSE_V221_FALLBACK shape=1 reference=1 execute=1234
+10-05 13:52:36.857 26525 26550 I urovdetect: READ_DEFENSE_V221_STATUS parent_active=1 callers=0
+10-05 13:52:37.107 26525 26550 I urovdetect: READ_DEFENSE_V221 stage=deactivated n=8 split=0 trap=0 unknown=0 changed=8 accept=0 business_file=0 scalar_file=0 kernel_file=0 execute=1235 triplets=768 target_failed=0 control_failed=0 retries=0 mean_ns=30800262 max_ns=30897298
+10-05 13:52:37.107 26525 26550 I urovdetect: READ_DEFENSE_KEYLESS stage=deactivated n=8 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=768 csel_retries=0 site_code=0 site_fetch=0 guarded=0
+10-05 13:52:37.107 26525 26550 I urovdetect: READ_DEFENSE_KEYLESS2 stage=deactivated n=8 load=0 store=0 branch=0 xload=0 unknown=0 value=32 value_ok=32 clrex_bad=0 clrex_done=8 svc_bad=0 svc_done=8
+10-05 13:52:37.107 26525 26550 I urovdetect: READ_DEFENSE_V221_POLICY stage=deactivated n=8 pre_alu=0 fp=0 ap=0 ap_unknown=0 triplets=1536 target_failed=0 control_failed=0 split=0 evidence=0 changed=8 unknown=0 accepted=0 mean_ns=6279856 max_ns=6369018 baseline_ok=0 pre_gpr=0 simd=0
+10-05 13:52:37.108 26525 26550 I urovdetect: READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1
+10-05 13:52:37.110 26525 26550 I urovdetect: READ_DEFENSE_V221_GUARD shape=1 errno=22 inactive=1 reference=1 execute=1234
+10-05 13:52:37.111 26525 26550 I urovdetect: READ_DEFENSE_KEYLESS_GUARD shape=1 errno=22 inactive=1 intact=1
+10-05 13:52:37.112 26525 26550 I urovdetect: READ_DEFENSE_BUSINESS ops=267648 errors=0
+10-05 13:52:37.112 26525 26550 I urovdetect: CONTEXT pid=26525 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 13:52:37.112 26525 26550 I urovdetect: NATIVE_RESULT PASS cases=5 assertions=123 failures=0 mode=read-defense-v221-uxn-all
+10-05 13:52:37.115 26525 26525 I urovdetect: DETECT_RESULT PASS mode=read-defense-v221-uxn-all worker_ms=1326 ui_ticks=225 ui_max_gap_ms=16 native=PASS cases=5 assertions=123 failures=0
