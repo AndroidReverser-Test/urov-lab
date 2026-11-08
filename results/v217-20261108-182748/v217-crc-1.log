@@ -1,0 +1,11 @@
+--------- beginning of main
+10-05 09:02:29.560 29402 29425 I urovdetect: CONTEXT pid=29402 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 09:02:29.560 29402 29425 I urovdetect: BEGIN mode=v217-crc repeats=16
+10-05 09:02:29.562 29402 29425 I urovdetect: DOBBY_HOOK address=0x714d8b8000 original=1234 hooked=1235
+10-05 09:02:29.699 29402 29425 I urovdetect: V217_CRC mem skipped errno=13
+10-05 09:02:29.699 29402 29425 I urovdetect: V217_CRC stage=readers
+10-05 09:02:29.718 29402 29425 I urovdetect: V217_CRC stage=child
+10-05 09:02:29.718 29402 29425 I urovdetect: V217_CRC file=96964c4f user=96964c4f mem=96964c4f pipe=96964c4f iov=96964c4f child=0 active=1 execute=1235 samples=16
+10-05 09:02:29.719 29402 29425 I urovdetect: CONTEXT pid=29402 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 09:02:29.719 29402 29425 I urovdetect: NATIVE_RESULT PASS cases=1 assertions=9 failures=0 mode=v217-crc
+10-05 09:02:29.916 29402 29402 I urovdetect: DETECT_RESULT PASS mode=v217-crc worker_ms=351 ui_ticks=129 ui_max_gap_ms=13 native=PASS cases=1 assertions=9 failures=0

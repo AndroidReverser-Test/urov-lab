@@ -1,8 +1,8 @@
-﻿# UROV-Y 2.18.0：读回目的页替换与外部写合并
+﻿# UROV-Y 2.18.0 读回源页替换与外部写合并
 
-本文是 `urov-y` 2.18.0 的设计说明。目标是消掉
-[ELIMINATION_2_17_DESIGN.md](ELIMINATION_2_17_DESIGN.md) §6/§8 里除“读取计时”
-之外仍存在的、普通 App 无密钥即可复现的特征点，同时不引入新的 App 可观察特征。
+本文记录 `urov-y` 2.18.0 针对双 iovec 写回和外部写导致页退役的变更。
+普通 App 当前可复现的读值分歧与独占探针见
+[§7 普通 App 无密钥检测与防护](#7-普通-app-无密钥检测与防护)。
 只改 `urov-y`、测试 App/夹具与文档；`urov-lab`、`urov-x` 不动；ABI 仍为 v8，
 `hooks=0xff`、请求布局、`ctl0` 文本、计数器与返回码不变。
 
@@ -18,9 +18,7 @@
 | H6 | `execve`/进程退出结束会话 | 新地址空间里的代码是真实的，读值与执行一致 | 2.17 设计 §6.6 |
 | H7 | PAGE_AP 下 `LDXR; LDRB; ADD; STXR` 仍可观察到“读关联的独占丢失” | 在 LDXR 与 STXR 之间放一条寄存器 ALU 指令，读一次注册页，统计 STXR 失败 | 2.17 设计 §8.2；`read-defense-v216-ap-* alu=1` |
 
-本轮处理 H1、H2；H3–H7 的处置见 §4。H1 是本轮唯一“普通 App、无密钥、稳定、
-可脚本化”的读值伪造证据，H2 是唯一能让覆盖在一条普通 `read()`/`O_DIRECT` 之后
-整页退役的稳定路径，因此两者都必须真正消除，不能只换检测方式。
+2.18.0 针对 H1 和 H2 修改读写路径。H3–H7 的处置见 §3.3。
 
 ## 2. 威胁模型（不变）
 
@@ -104,12 +102,10 @@
   的 CRC 输入集合内；隐藏它要改 KernelPatch 核心，超出“只改 `urov-y`”。
 - **H6 execve/退出**：不改。地址空间被替换，新代码是真实的，读值与执行一致，
   不构成读值不一致特征。
-- **H7 独占丢失**：不改判定，保留 2.17 的相邻/`NOP` 桥接。它是“每次读一次同步
-  异常”的直接结果：异常返回清本地独占监视器，插件只能在该异常里补完可证明的
-  LL/SC 结果；要把任意中间指令都补完，需要在 EL0 单步执行中间指令再拦截 STXR，
-  那会为每条指令增加一次 Software Step 异常——属于新的可观察特征。真实业务
-  不会把注册页的读放进 LL/SC 临界区，夹具把它记为“辅助证据”。本轮把它归入
-  “读取异常（计时）”这一类，而不是读值伪造。
+- **H7 独占丢失**。2.18 保留相邻或 `NOP`、`BTI` 间隔的 LL/SC 桥接。
+  夹具在读取与 `STXR` 之间插入寄存器 `ADD`，使 `STXR` 原生执行，
+  并按 §7 的配对判定观察目标读关联的独占丢失。该信号识别读陷阱，
+  等值覆盖也可命中。耗时只用于记录开销。
 
 ## 4. 不引入新特征的论证
 
@@ -121,7 +117,7 @@
 | 新的返回码/ABI | `process_vm_readv` 的返回值仍来自 Linux（源页替换不改变长度/错误）；ABI v8、请求布局、`ctl0` 文本、计数器、`hooks=0xff` 不变 |
 | 新的线程/定时器/文件 | 没有；新增的 `pin_user_pages_remote`、`__get_user_pages` 都是函数钩子，不新增 syscall 入口 |
 | 新的写语义 | 写者仍写活页（O_DIRECT/`read()`/`process_vm_writev` 的字节真的到达映射）；镜像只多一次“把已发生的写合并进来” |
-| 新的读视图 | EL0 读仍返回 image/snapshot；`process_vm_readv` 对同一 caller 返回与 EL0 相同的视图（window 外 snapshot，all-caller 下 image），只是不再多写一个用户态目的地址 |
+| 新的读视图 | 被拦截的 EL0 读和 `process_vm_readv` 均按各自入口的调用窗口选择 image 或 snapshot。BRK 和 UXN 下，未受陷阱影响的 EL0 读仍可见活页 |
 | 新的计时台阶 | 外部写后第一次读多一次 4 KiB 比较（写侧事件，不是每次读）；H1 的源页替换把一次 4 KiB 内核复制留在同一次 syscall 内，没有额外异常 |
 
 ## 5. 真机验证（本轮）
@@ -140,20 +136,21 @@ SELinux Enforcing。模块 verbose 加载确认
 | 消除 3×1 | PASS | [eliminate-20261108-180150](results/eliminate-20261108-180150/summary.json) |
 | 多页 3×1 | PASS | [multipage-20261108-180243](results/multipage-20261108-180243/summary.json) |
 | CRC 5×1 | PASS | [crc-20261108-180132](results/crc-20261108-180132/summary.json) |
+| 普通 App 三路读与独占探针，六种配置各 32×3 | PASS，576/576 个活动覆盖样本均被拒绝采信 | [read-defense-v218-20261108-182541](results/read-defense-v218-20261108-182541/summary.json) |
 
 详细数字见 [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的
 2.18.0 节。
 
 ## 6. 残余（2.18.0）
 
-1. **计时**：每次 EL0 数据读仍一次同步异常；未解码 store 多一次 Software Step
+1. **计时**：已装陷阱的 PAGE_AP 页每次 EL0 数据读仍有一次同步异常；未解码 store 多一次 Software Step
    与整页 diff。按题目允许保留。
 2. **重放窗口**：未解码 store 重试期间本 CPU 可读、其他 CPU 只在本地失效后仍
    保留陷阱项；跨 CPU TLB miss 的亚指令级竞态。见 §3.3 H3。
 3. **pkey/POE**：本机无 POE，只验证拒绝/透传。
 4. **root 可见性**：`kpm list`/`ctl0 status` 仍可见，需要改核心。
 5. **独占丢失（H7）**：PAGE_AP 下读异常仍会清本地独占监视器；只对相邻/
-   `NOP` 间隔的可证明 LL/SC 形状补完。属于读取异常路径的架构后果。
+   `NOP`、`BTI` 间隔的可证明 LL/SC 形状补完。普通 App 的实测判定见 §7。
 6. **子进程的外部写**：子进程 mm 的外部写仍保持 2.17 的“原生可写、不合并”
    处理；owner 的外部写已合并。子进程覆盖本身由 `copy_mm` 快照与文件身份
    解析维持，不构成 owner 的读值特征。
@@ -167,11 +164,82 @@ SELinux Enforcing。模块 verbose 加载确认
    仍会快照。这一条只会让“写回不可见”，读视图仍是镜像，不会泄漏活页字节，
    因此不构成 CRC 完整性检测。
 
-## 7. 复跑
+## 7. 普通 App 无密钥检测与防护
+
+### 7.1 采样与判定
+
+`--read-defense-v218` 在工作线程上复核 App 自有的稳定文件 RX 页。夹具每次
+比较页内 32 字节，以文件描述符、设备号、inode 和文件偏移验证映射身份，并保留
+同文件同偏移的非执行 `PROT_READ` 别名。检测输入仅包含地址、读取函数、参考
+文件和偏移。主机负责模块装卸与内核日志，测试夹具使用独立的模块密钥建立覆盖真值。
+[App 实现](apps/urov-detect/read_defense_fixture.inc#L225)
+
+1. **三路字节对照**。分别用业务读取 `crc_copy_window` 和不同指令地址的
+   `copy_scalar` 调用 `ud_observe_live()`，各自与同进程 `process_vm_readv`
+   的结果逐字节比较。每次调用检查映射前后身份与重复读取的稳定性。两次调用的
+   内核读结果也必须一致，任意两路稳定分歧记为 `split`。在全调用者 SITE_BRK
+   和 PAGE_UXN 下，业务读与内核读均可返回原文件字节，独立 `LDRB` 仍可看到
+   活页补丁。调用 `process_vm_readv` 适用于已验证允许该系统调用的部署配置。
+   [字节观测实现](native/urov_observe.c#L80)
+2. **PAGE_AP 独占探针**。`ud_observe_ap_alu()` 执行
+   `LDXR → LDRB → ADD → STXR`。独占操作只访问线程私有栈字，成功时原样写回。
+   `LDRB` 是对被测页的唯一访问。每个有效三元组由只读别名上的两次成功夹住
+   一次目标读取。三组各 32 个有效三元组中，目标全部失败记为 `trap`，全部成功
+   记为阴性。混合结果、对照不稳或映射失配记为 `unknown`，夹具对探针的
+   `EAGAIN` 重试一次。PAGE_AP 全调用者配置能使三路字节一致，因此仍需独占探针。
+   等值 PAGE_AP 也可触发该信号，执行与读取的差异由测试专用 Dobby 载荷取证。
+   [独占序列](native/urov_observe.c#L248) · [配对实现](native/urov_observe.c#L489)
+3. **完整性结果**。三路稳定一致、匹配可信文件参考且独占探针阴性时计为
+   `accept`。三路一致但偏离参考时计为 `changed`。读失败、短读或视图不稳时
+   保留未知结论。校验结果只作用于被测范围的完整性决策，普通业务继续执行。
+
+H1 的双 iovec 在本机复跑时 `post` 始终保留填充值。带目的地址回写的兼容路径
+见 §3.1。proc mem、ptrace 与 fast GUP 路径均有覆盖钩子，因此单个内核读的
+结果只代表该读路径的视图。
+[双 iovec 复跑](results/read-defense-v216-20261108-182627/summary.json) ·
+[内核读钩子](urov_y_backend.c#L4729) · [fast GUP 钩子](urov_y_backend.c#L4791)
+
+### 7.2 注册防护
+
+可单独装载的可信 PIC 代码可放在新建的文件 `PROT_EXEC` 映射中，另用
+`PROT_READ` 别名校验文件。部署允许匿名执行映射时，也可由可信字节建立私有
+匿名 RX 页。两类 VMA 分别缺少 `VM_READ` 和 `vm_file`，因此
+`validate_target_vma()` 拒绝将它们注册为读取目标。该限制作用于新建的目标
+映射，BRK 和 UXN 的读取点按各自的站点规则校验。已有普通 `.text` 上的活动
+PAGE_AP 会话应在完整性决策处处理，无损撤销需要模块控制权限或 root。
+[目标页校验](urov_y_backend.c#L1243) · [匿名 RX 夹具](apps/urov-detect/read_defense_fixture.inc#L328) ·
+[文件执行映射夹具](apps/urov-detect/read_defense_fixture.inc#L358)
+
+### 7.3 真机结果
+
+设备与权限同 §5。六种配置分别启动三次，每次每阶段采样 32 次。活动覆盖时，
+业务读返回原文件字节，Dobby 载荷实际执行返回 `0x1235`，原文件对应 `0x1234`。
+[正式矩阵](results/read-defense-v218-20261108-182541/summary.json)
+
+| 活动覆盖配置 | 字节分歧 | 独占陷阱 | 采信结果 |
+| --- | ---: | ---: | ---: |
+| SITE_BRK 调用窗口 | 96/96 | 0/96 | 0/96 |
+| SITE_BRK 全调用者 | 96/96 | 0/96 | 0/96 |
+| PAGE_UXN 调用窗口 | 96/96 | 0/96 | 0/96 |
+| PAGE_UXN 全调用者 | 96/96 | 0/96 | 0/96 |
+| PAGE_AP 调用窗口 | 96/96 | 96/96 | 0/96 |
+| PAGE_AP 全调用者 | 0/96 | 96/96 | 0/96 |
+
+1,920 个阴性对照均未误报读值分歧或陷阱。其中 672 个干净样本全部通过，
+1,248 个仅改码或已撤销覆盖的样本均归为内容变化。192 个等值 PAGE_AP 样本
+均报陷阱。全部 3,072 个样本共重试 5 次，最终未知 0 次。
+
+文件执行映射和匿名 RX 映射各 18/18 次注册尝试均返回 `EINVAL`，测试函数
+执行结果均为 `0x1234`。并行业务夹具完成 2,812,672 次迭代，错误为 0。
+UI 心跳最大间隔 22 ms，单次工作线程复核最大耗时 53.18 ms。测试结束后 KPM
+列表为空，设备 boot ID 一致。结果适用于本机、测试二进制与采样页。
+
+## 8. 复跑
 
 ```powershell
 ./kpms/urov-lab/build.ps1
 ./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --read-defense-v218 --repeats 32 --cycles 3
 python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --read-defense-v216 --repeats 8 --cycles 1
 python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --read-defense --repeats 8 --cycles 1
 python ./kpms/urov-lab/tools/run_v217_device.py --serial $Serial --key $KpKey --repeats 16 --cycles 1

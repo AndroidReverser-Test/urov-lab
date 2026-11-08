@@ -1,0 +1,16 @@
+--------- beginning of main
+10-05 09:00:29.505 27643 27667 I urovdetect: CONTEXT pid=27643 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 09:00:29.505 27643 27667 I urovdetect: BEGIN mode=read-defense-v218-uxn-all repeats=32
+10-05 09:00:29.687 27643 27667 I urovdetect: READ_DEFENSE_V218 stage=clean n=32 split=0 trap=0 unknown=0 changed=0 accept=32 business_file=32 scalar_file=32 kernel_file=32 execute=1234 triplets=3072 target_failed=0 control_failed=0 retries=0 mean_ns=5616209 max_ns=23060954
+10-05 09:00:29.804 27643 27667 I urovdetect: READ_DEFENSE_V218 stage=identity n=32 split=0 trap=0 unknown=0 changed=0 accept=32 business_file=32 scalar_file=32 kernel_file=32 execute=1234 triplets=3072 target_failed=0 control_failed=0 retries=0 mean_ns=3665251 max_ns=3722250
+10-05 09:00:29.804 27643 27667 I urovdetect: DOBBY_HOOK address=0x714d590000 original=1234 hooked=1235
+10-05 09:00:29.921 27643 27667 I urovdetect: READ_DEFENSE_V218 stage=patch_only n=32 split=0 trap=0 unknown=0 changed=32 accept=0 business_file=0 scalar_file=0 kernel_file=0 execute=1235 triplets=3072 target_failed=0 control_failed=0 retries=0 mean_ns=3650539 max_ns=3696329
+10-05 09:00:30.039 27643 27667 I urovdetect: READ_DEFENSE_V218 stage=overlay n=32 split=32 trap=0 unknown=0 changed=0 accept=0 business_file=32 scalar_file=0 kernel_file=32 execute=1235 triplets=3072 target_failed=0 control_failed=0 retries=0 mean_ns=3676483 max_ns=3727092
+10-05 09:00:30.039 27643 27667 I urovdetect: READ_DEFENSE_V218_STATUS parent_active=1 callers=0
+10-05 09:00:30.156 27643 27667 I urovdetect: READ_DEFENSE_V218 stage=deactivated n=32 split=0 trap=0 unknown=0 changed=32 accept=0 business_file=0 scalar_file=0 kernel_file=0 execute=1235 triplets=3072 target_failed=0 control_failed=0 retries=0 mean_ns=3659951 max_ns=3726114
+10-05 09:00:30.157 27643 27667 I urovdetect: READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1
+10-05 09:00:30.159 27643 27667 I urovdetect: READ_DEFENSE_V218_GUARD shape=1 errno=22 inactive=1 reference=1 execute=1234
+10-05 09:00:30.160 27643 27667 I urovdetect: READ_DEFENSE_BUSINESS ops=133504 errors=0
+10-05 09:00:30.160 27643 27667 I urovdetect: CONTEXT pid=27643 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 09:00:30.160 27643 27667 I urovdetect: NATIVE_RESULT PASS cases=5 assertions=343 failures=0 mode=read-defense-v218-uxn-all
+10-05 09:00:30.164 27643 27643 I urovdetect: DETECT_RESULT PASS mode=read-defense-v218-uxn-all worker_ms=656 ui_ticks=158 ui_max_gap_ms=17 native=PASS cases=5 assertions=343 failures=0

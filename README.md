@@ -1,4 +1,20 @@
-﻿# UROV-LAB
+# UROV-LAB
+
+`urov-y` 2.19.0 消掉 2.18.0 残余里唯一稳定的普通 App、无密钥读侧特征：
+`PAGE_AP` 的读异常清掉本地独占监视器后，`LDXR; LDRB; ADD; STXR` 仍能观察到
+`STXR` 失败。2.19.0 保留 2.18.0 的 `LDXR` 执行证据、直接/间接分支门控和
+fail-closed 路径，只把 STXR 前向窗口从 NOP/BTI 扩到寄存器-only 整数数据加工
+（`ADD/SUB` imm/reg、`AND/ORR/EOR/ANDS` 及反码形式、`MOVN/MOVZ/MOVK`）。handler
+在私有寄存器副本上按序重放 gap，读取 STXR 当前的 `Rn/Rt/Rs`，只有 `Rn` 仍等于
+监视地址且 store 成功后才写回寄存器/NZCV、置 `Ws=0` 并跳过 STXR；其余形状仍走
+原生失败。没有新增 hook、线程、定时器、PTE/VMA/代码字，ABI 仍为 v8、
+`hooks=0xff`、请求布局、`ctl0` 字段与返回码不变。普通 App 的 ALU 探针从
+`trap=n/accept=0` 变为 `trap=0/accept=n`（AP-all；本轮 16×1）；CRC 的 `.text`
+在 EL0/crc32/pipe/process_vm_readv/fork 上仍等于文件摘要，执行仍是 Dobby 的
+`1235`。v219 6 模式 ×16、CRC 3×1、Dobby 8×1（`accepted_crc_with_ap=8/8`、
+`ap=0/8`）均 PASS。设计与残余见
+[ELIMINATION_2_19_DESIGN.md](ELIMINATION_2_19_DESIGN.md)。构建
+`urov-y.kpm b173a91a...`、`urovdetect.apk b7c82bde...`。
 
 `urov-y` 2.18.0 消掉 2.17.0 “残余”里两条普通 App、无密钥、稳定特征：
 `process_vm_readv()` 不再按用户内存里的 iovec 目的地址回写，而是在

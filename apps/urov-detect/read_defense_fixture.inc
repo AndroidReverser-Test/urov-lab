@@ -219,6 +219,95 @@ static void read_defense_v216_stage(const char *name, const uint8_t *text,
         (unsigned long long)(read_ns / n), (unsigned long long)(alu.elapsed_ns));
 }
 
+static bool g_read_defense_fixed;
+
+/* These observations have no module key or state. Keep both mappings and the
+ * file stable. The scalar reader runs outside the business caller window and
+ * at a different instruction from the business load. */
+static void read_defense_v218_stage(const char *name, const uint8_t *text,
+                                    const struct page *reference, const uint8_t *file,
+                                    const uint8_t *expected_live, unsigned mode,
+                                    bool all_callers, int repeats)
+{
+    const uint8_t *control = reference->address + reference->entry;
+    off_t offset = reference->file_offset + reference->entry;
+    bool ap = mode == UROV_Y_MODE_PAGE_AP;
+    bool original = expected_live == file;
+    bool fixed = g_read_defense_fixed;
+    unsigned n = (unsigned)repeats;
+    unsigned split = 0, traps = 0, unknown = 0, changed = 0, accepted = 0;
+    unsigned business_file = 0, scalar_file = 0, kernel_file = 0;
+    unsigned target_failed = 0, control_failed = 0, triplets = 0, retries = 0;
+    uint64_t elapsed = 0, max_ns = 0;
+    uint32_t executed = 0;
+    ++g_cases;
+
+    for (unsigned i = 0; i < n; ++i) {
+        struct ud_live_observation business, scalar;
+        struct ud_exclusive_observation alu;
+        uint64_t begin = now_ns();
+        ud_observe_live(text, DOBBY_CRC_BYTES, reference->fd, offset, crc_copy_window, &business);
+        ud_observe_live(text, DOBBY_CRC_BYTES, reference->fd, offset, copy_scalar, &scalar);
+        ud_observe_ap_alu(text, control, reference->fd, offset, &alu);
+        if (alu.reservation_loss == UD_UNKNOWN && alu.error == EAGAIN) {
+            ++retries;
+            ud_observe_ap_alu(text, control, reference->fd, offset, &alu);
+        }
+        uint64_t ns = now_ns() - begin;
+        elapsed += ns;
+        if (ns > max_ns) max_ns = ns;
+
+        target_failed += alu.target_failed;
+        control_failed += alu.control_failed;
+        triplets += alu.accepted;
+        traps += alu.reservation_loss == UD_MATCH;
+        if (business.verdict == UD_UNKNOWN || scalar.verdict == UD_UNKNOWN ||
+            memcmp(business.kernel_bytes, scalar.kernel_bytes, DOBBY_CRC_BYTES)) {
+            ++unknown;
+            continue;
+        }
+        bool diverged = business.verdict == UD_MATCH || scalar.verdict == UD_MATCH;
+        bool matches_file = !memcmp(business.user_bytes, file, DOBBY_CRC_BYTES);
+        split += diverged;
+        business_file += matches_file;
+        scalar_file += !memcmp(scalar.user_bytes, file, DOBBY_CRC_BYTES);
+        kernel_file += !memcmp(business.kernel_bytes, file, DOBBY_CRC_BYTES);
+        unknown += alu.reservation_loss == UD_UNKNOWN;
+        changed += !diverged && !matches_file;
+        accepted += !diverged && matches_file && alu.reservation_loss == UD_NO_MATCH;
+
+        /* Execution is ground truth for this side-effect-free payload only. */
+        const uint8_t *want_business = mode ? file : expected_live;
+        const uint8_t *want_scalar = ap && all_callers ? file : expected_live;
+        const uint8_t *want_kernel = mode && all_callers ? file : expected_live;
+        REQUIRE(!memcmp(business.user_bytes, want_business, DOBBY_CRC_BYTES) &&
+                !memcmp(scalar.user_bytes, want_scalar, DOBBY_CRC_BYTES) &&
+                !memcmp(business.kernel_bytes, want_kernel, DOBBY_CRC_BYTES),
+                "v218 %s unexpected sample bytes", name);
+        executed = dobby_crc_payload();
+        REQUIRE(executed == (original ? DOBBY_ORIGINAL : DOBBY_HOOKED),
+                "v218 %s execute=%04x", name, executed);
+    }
+    unsigned want_traps = fixed ? 0U : (ap ? n : 0U);
+    unsigned want_accept = fixed ? (original || (ap && all_callers) ? n : 0U) :
+                                   (original && !ap ? n : 0U);
+    REQUIRE(!unknown && split == (mode && !original && !(ap && all_callers) ? n : 0U) &&
+            traps == want_traps && changed == (!mode && !original ? n : 0U) &&
+            accepted == want_accept &&
+            business_file == (original || mode ? n : 0U) &&
+            scalar_file == (original || (ap && all_callers) ? n : 0U) &&
+            kernel_file == (original || (mode && all_callers) ? n : 0U),
+            "v218 %s split=%u trap=%u unknown=%u changed=%u accept=%u views=%u/%u/%u",
+            name, split, traps, unknown, changed, accepted, business_file, scalar_file, kernel_file);
+    LOG("READ_DEFENSE_%s stage=%s n=%u split=%u trap=%u unknown=%u changed=%u accept=%u "
+        "business_file=%u scalar_file=%u kernel_file=%u execute=%04x "
+        "triplets=%u target_failed=%u control_failed=%u retries=%u mean_ns=%llu max_ns=%llu",
+        fixed ? "V219" : "V218",
+        name, n, split, traps, unknown, changed, accepted, business_file, scalar_file, kernel_file,
+        executed, triplets, target_failed, control_failed, retries,
+        (unsigned long long)(elapsed / n), (unsigned long long)max_ns);
+}
+
 /* Equal lengths and flags=0 keep the same VMA. Older range gates and
  * 2.16.0's BRK/UXN modes release an overlapping session. */
 static void read_defense_same_remap(const char *name, const uint8_t *page, size_t page_size)
@@ -270,17 +359,58 @@ static void read_defense_anonymous_guard(const struct uy_ctx *ctx, const uint8_t
     REQUIRE(!munmap(alias, page_size), "read-defense anonymous alias cleanup");
 }
 
+/* No W-to-X transition and no change to an existing business mapping.
+ * A fresh executable VMA without VM_READ cannot be a UROV-Y target.
+ * The existing PROT_READ reference remains available for file verification. */
+static void read_defense_exec_guard(const struct uy_ctx *ctx, const struct page *reference,
+                                    const uint8_t *file, size_t page_size, unsigned mode,
+                                    bool all_callers)
+{
+    uint8_t *alias = mmap(NULL, page_size, PROT_EXEC, MAP_PRIVATE,
+                          reference->fd, reference->file_offset);
+    REQUIRE(alias != MAP_FAILED, "v218 execute-only guard mmap errno=%d", errno);
+    if (alias == MAP_FAILED) return;
+    struct ud_mapping map;
+    bool shape = !ud_mapping_at("/proc/self/maps", alias, &map) &&
+                 map.executable && !map.readable && !map.writable;
+    REQUIRE(shape, "v218 execute-only guard mapping shape");
+    if (shape) {
+        int error = read_defense_arm(ctx, alias, file, mode, all_callers);
+        if (!error) REQUIRE(!uy_deactivate(ctx), "v218 execute-only guard cleanup");
+        struct urov_y_request status;
+        bool inactive = !uy_status(ctx, &status) && status.state == UROV_Y_INACTIVE;
+        bool bytes = !memcmp(reference->address + reference->entry, file, DOBBY_CRC_BYTES);
+        uint32_t executed = bytes ? crc_execute(alias + reference->entry) : 0;
+        REQUIRE(error == EINVAL && inactive && bytes && executed == DOBBY_ORIGINAL,
+                "v218 execute-only guard errno=%d", error);
+        LOG("READ_DEFENSE_%s_GUARD shape=%d errno=%d inactive=%d reference=%d execute=%04x",
+            g_read_defense_fixed ? "V219" : "V218",
+            shape, error, inactive, bytes, executed);
+    }
+    REQUIRE(!munmap(alias, page_size), "v218 execute-only guard unmap errno=%d", errno);
+}
+
 static void read_defense_fixture(const char *name, const char *key, int repeats)
 {
     unsigned mode = 0;
     const char *shape = name + sizeof("read-defense-") - 1;
     bool v216 = !strncmp(shape, "v216-", sizeof("v216-") - 1);
-    if (v216) shape += sizeof("v216-") - 1;
+    bool v218 = !strncmp(shape, "v218-", sizeof("v218-") - 1);
+    bool v219 = !strncmp(shape, "v219-", sizeof("v219-") - 1);
+    bool modern = v216 || v218 || v219;
+    if (modern) shape += sizeof("v216-") - 1;
+    g_read_defense_fixed = v219;
+    void (*stage)(const char *, const uint8_t *, const struct page *, const uint8_t *,
+                  const uint8_t *, unsigned, bool, int) =
+        (v218 || v219) ? read_defense_v218_stage : read_defense_v216_stage;
     bool hardened = strstr(shape, "-hard") != NULL;
-    bool all_callers = !strcmp(shape, "ap-all") || !strcmp(shape, "ap-all-hard");
-    if (all_callers || !strcmp(shape, "ap") || !strcmp(shape, "ap-hard")) mode = UROV_Y_MODE_PAGE_AP;
-    else if (!strcmp(shape, "brk")) mode = UROV_Y_MODE_SITE_BRK;
-    else if (!strcmp(shape, "uxn")) mode = UROV_Y_MODE_PAGE_UXN;
+    bool ap_all = !strcmp(shape, "ap-all") || !strcmp(shape, "ap-all-hard");
+    bool brk_all = (v218 || v219) && !strcmp(shape, "brk-all");
+    bool uxn_all = (v218 || v219) && !strcmp(shape, "uxn-all");
+    bool all_callers = ap_all || brk_all || uxn_all;
+    if (ap_all || !strcmp(shape, "ap") || !strcmp(shape, "ap-hard")) mode = UROV_Y_MODE_PAGE_AP;
+    else if (brk_all || !strcmp(shape, "brk")) mode = UROV_Y_MODE_SITE_BRK;
+    else if (uxn_all || !strcmp(shape, "uxn")) mode = UROV_Y_MODE_PAGE_UXN;
     else if (strcmp(shape, "clean")) {
         REQUIRE(0, "unknown read-defense mode");
         return;
@@ -305,14 +435,14 @@ static void read_defense_fixture(const char *name, const char *key, int repeats)
     int error = app_pread(reference.fd, reference.file_offset + reference.entry, file, sizeof(file));
     REQUIRE(!error, "read-defense file read errno=%d", error);
     if (error) goto close_reference;
-    if (v216 && mprotect(reference.address, (size_t)page_size, PROT_READ)) {
-        REQUIRE(0, "v216 read-only control errno=%d", errno);
+    if (modern && mprotect(reference.address, (size_t)page_size, PROT_READ)) {
+        REQUIRE(0, "read-defense read-only control errno=%d", errno);
         goto close_reference;
     }
 
     have_thread = pthread_create(&thread, NULL, business_main, &business) == 0;
     REQUIRE(have_thread, "read-defense business thread");
-    if (v216) read_defense_v216_stage("clean", text, &reference, file, file, 0, false, repeats);
+    if (modern) stage("clean", text, &reference, file, file, 0, false, repeats);
     else read_defense_stage("clean", text, control, file, file, false, false, DOBBY_ORIGINAL,
                             repeats, hardened);
     if (mode) {
@@ -320,21 +450,21 @@ static void read_defense_fixture(const char *name, const char *key, int repeats)
         REQUIRE(!error, "read-defense fixture key invalid");
         if (error) goto close_reference;
     }
-    if (v216 && mode) {
+    if (modern && mode) {
         error = read_defense_arm(&ctx, text, file, mode, all_callers);
         may_have_session = error != EBUSY;
-        REQUIRE(!error, "v216 identity register mode=%u errno=%d", mode, error);
+        REQUIRE(!error, "read-defense identity register mode=%u errno=%d", mode, error);
         if (error) goto close_reference;
-        read_defense_v216_stage("identity", text, &reference, file, file, mode, all_callers, repeats);
+        stage("identity", text, &reference, file, file, mode, all_callers, repeats);
         error = uy_deactivate(&ctx);
-        REQUIRE(!error, "v216 identity deactivate errno=%d", error ? errno : 0);
+        REQUIRE(!error, "read-defense identity deactivate errno=%d", error ? errno : 0);
         if (error) goto close_reference;
     }
     dobby_setup_error = dobby_crc_setup((void *)text, (size_t)page_size);
     REQUIRE(!dobby_setup_error, "read-defense Dobby setup errno=%d", dobby_setup_error);
     if (dobby_setup_error) goto close_reference;
     copy_scalar(patched, text, sizeof(patched));
-    if (v216) read_defense_v216_stage("patch_only", text, &reference, file, patched, 0, false, repeats);
+    if (modern) stage("patch_only", text, &reference, file, patched, 0, false, repeats);
     else {
         read_defense_same_remap("unarmed", text, (size_t)page_size);
         read_defense_stage("patch_only", text, control, file, patched, false, false, DOBBY_HOOKED,
@@ -346,14 +476,18 @@ static void read_defense_fixture(const char *name, const char *key, int repeats)
     may_have_session = error != EBUSY;
     REQUIRE(!error, "read-defense register mode=%u errno=%d", mode, error);
     if (error) goto close_reference;
-    if (v216) {
-        read_defense_v216_stage("overlay", text, &reference, file, patched, mode, all_callers, repeats);
+    if (modern) {
+        stage("overlay", text, &reference, file, patched, mode, all_callers, repeats);
         bool still_active = !uy_status(&ctx, &status) && status.state == UROV_Y_ACTIVE && !status.failures;
-        REQUIRE(still_active, "v216 parent session was changed by the probes");
-        LOG("READ_DEFENSE_V216_STATUS parent_active=%d callers=%u", still_active, all_callers ? 0U : 1U);
-        REQUIRE(!uy_deactivate(&ctx), "v216 deactivate errno=%d", errno);
-        read_defense_v216_stage("deactivated", text, &reference, file, patched, 0, false, repeats);
+        REQUIRE(still_active, "read-defense parent session was changed by the probes");
+        LOG("READ_DEFENSE_%s_STATUS parent_active=%d callers=%u",
+            v219 ? "V219" : v218 ? "V218" : "V216",
+            still_active, all_callers ? 0U : 1U);
+        REQUIRE(!uy_deactivate(&ctx), "read-defense deactivate errno=%d", errno);
+        stage("deactivated", text, &reference, file, patched, 0, false, repeats);
         read_defense_anonymous_guard(&ctx, file, (size_t)page_size, mode, all_callers);
+        if (v218 || v219)
+            read_defense_exec_guard(&ctx, &reference, file, (size_t)page_size, mode, all_callers);
         goto close_reference;
     }
     read_defense_same_remap("outside", reference.address, (size_t)page_size);

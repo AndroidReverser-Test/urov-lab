@@ -1,7 +1,19 @@
-﻿# UROV-LAB 当前进度
+# UROV-LAB 当前进度
 
 更新于 2026-11-08（Asia/Shanghai）。
 
+> 2026-11-08 补充：`urov-y` 2.19.0 消掉 2.18.0 残余 §6.5 的唯一稳定普通 App、
+> 无密钥读侧特征。`PAGE_AP` 的读异常仍会清本地独占监视器，但 handler 现在把
+> STXR 前向窗口从 NOP/BTI 扩到寄存器-only 整数数据加工（`ADD/SUB` imm/reg、
+> `AND/ORR/EOR/ANDS` 及反码、`MOVN/MOVZ/MOVK`）：在私有寄存器副本上重放 gap，
+> 读取 STXR 当前的 `Rn/Rt/Rs`，仅当 `Rn` 仍等于监视地址且 store 成功时写回
+> 寄存器/NZCV、置 `Ws=0` 并跳过 STXR；其余形状保持原生失败。没有新增 hook、
+> 线程、定时器、PTE/VMA/代码字，ABI 仍为 v8、`hooks=0xff`。v219 6 模式 ×16、
+> CRC 3×1、Dobby 8×1（`accepted_crc_with_ap=8/8`、`ap=0/8`）均 PASS；ALU 探针
+> 在 AP-all 下 `trap=0 accept=16/16`。构建 `urov-y.kpm b173a91a...`、
+> `urovdetect.apk b7c82bde...`。见
+> [ELIMINATION_2_19_DESIGN.md](ELIMINATION_2_19_DESIGN.md)。
+>
 > 2026-11-08 补充：`urov-y` 2.18.0 消掉 2.17.0 仍成立的两条普通 App、无密钥、
 > 稳定特征。`process_vm_readv()` 不再按用户内存里的 iovec 目的地址回写：入口
 > 钩子只记录 caller-window 判定，`pin_user_pages_remote()` 后置钩子把注册页的

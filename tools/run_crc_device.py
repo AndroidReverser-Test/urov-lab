@@ -37,13 +37,23 @@ def main():
                         help="compare live and overlaid bytes, then test recovery and registration refusal")
     matrix.add_argument("--read-defense-v216", action="store_true",
                         help="test keyless iovec readback and LL/SC against urov-y 2.16.0")
+    matrix.add_argument("--read-defense-v218", action="store_true",
+                        help="test independent reads, LL/SC and protected mappings against urov-y 2.18.0")
+    matrix.add_argument("--read-defense-v219", action="store_true",
+                        help="test the 2.19.0 ALU-gap LL/SC bridge against urov-y")
     parser.add_argument("--repeats", type=int, default=15)
     parser.add_argument("--cycles", type=int, default=3)
     args = parser.parse_args()
     if not 3 <= args.repeats <= 200 or not 1 <= args.cycles <= 10:
         parser.error("repeats 3..200, cycles 1..10")
 
-    if args.read_defense_v216:
+    if args.read_defense_v219:
+        prefix = "read-defense-v219"
+        modes = tuple(f"{prefix}-{shape}" for shape in ("brk", "brk-all", "uxn", "uxn-all", "ap", "ap-all"))
+    elif args.read_defense_v218:
+        prefix = "read-defense-v218"
+        modes = tuple(f"{prefix}-{shape}" for shape in ("brk", "brk-all", "uxn", "uxn-all", "ap", "ap-all"))
+    elif args.read_defense_v216:
         prefix = "read-defense-v216"
         modes = tuple(f"{prefix}-{shape}" for shape in ("brk", "uxn", "ap", "ap-all"))
     elif args.read_defense:
@@ -87,9 +97,11 @@ def main():
     def run_once(label, mode):
         dobby = mode.startswith("dobby-detect-")
         defense = mode.startswith("read-defense-")
-        v216 = mode.startswith("read-defense-v216-")
-        active = mode not in ("crc-clean", "dobby-detect-clean", "read-defense-clean",
-                              "read-defense-v216-clean")
+        v218 = mode.startswith("read-defense-v218-")
+        v219 = mode.startswith("read-defense-v219-")
+        modern_defense = v218 or v219 or mode.startswith("read-defense-v216-")
+        defense_tag = "V219" if v219 else "V218" if v218 else "V216"
+        active = mode != f"{prefix}-clean"
         shell("am", "force-stop", PACKAGE)
         argv = ["am", "start", "-W", "-n", ACTIVITY, "--es", "mode", mode,
                 "--ei", "repeats", str(args.repeats)]
@@ -115,8 +127,8 @@ def main():
         if not uid or int(uid[1]) < 10000 or not re.search(r"CapEff:\s*0{16}\b", logs) or not re.search(
                 r"Seccomp:\s*2\b", logs):
             raise RuntimeError(f"{label}: invalid app credentials")
-        if v216:
-            stages = [dict(KV.findall(line)) for line in re.findall(r"READ_DEFENSE_V216 [^\n]+", logs)]
+        if modern_defense:
+            stages = [dict(KV.findall(line)) for line in re.findall(rf"READ_DEFENSE_{defense_tag} [^\n]+", logs)]
             stage_key = "stage"
         elif defense:
             stages = [dict(KV.findall(line)) for line in re.findall(r"READ_DEFENSE [^\n]+", logs)]
@@ -131,7 +143,7 @@ def main():
         else:
             stages = [dict(KV.findall(line)) for line in re.findall(r"CRC_STAGE [^\n]+", logs)]
             stage_key = "name"
-        if v216:
+        if modern_defense:
             expected = ["clean", "identity", "patch_only", "overlay", "deactivated"] if active else \
                        ["clean", "patch_only"]
         elif defense:
@@ -151,13 +163,16 @@ def main():
         marker = "DOBBY_HOOK address=" if dobby or defense else "CRC_FIXTURE dlopen=1"
         if names != expected or marker not in logs:
             raise IncompleteLog(f"{label}: missing CRC records in {log_path.name}")
-        if v216:
+        if modern_defense:
             if not re.search(r"READ_DEFENSE_BUSINESS ops=[1-9]\d* errors=0\b", logs):
                 raise IncompleteLog(f"{label}: missing business worker result in {log_path.name}")
-            callers = 0 if mode.endswith("-ap-all") else 1
-            if active and (f"READ_DEFENSE_V216_STATUS parent_active=1 callers={callers}" not in logs or
+            callers = 0 if mode.endswith("-all") else 1
+            if active and (f"READ_DEFENSE_{defense_tag}_STATUS parent_active=1 callers={callers}" not in logs or
                            "READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1" not in logs):
                 raise IncompleteLog(f"{label}: missing parent-session or registration guard result")
+            if (v218 or v219) and active and (f"READ_DEFENSE_{defense_tag}_GUARD shape=1 errno=22 "
+                                              "inactive=1 reference=1 execute=1234" not in logs):
+                raise IncompleteLog(f"{label}: missing execute-only registration guard result")
         elif defense:
             remaps = [dict(KV.findall(line)) for line in re.findall(r"READ_DEFENSE_REMAP [^\n]+", logs)]
             if [step["stage"] for step in remaps] != (["unarmed", "outside", "overlap"] if active else ["unarmed"]):
@@ -225,11 +240,15 @@ def main():
                                                      r"CHANGED_BYTE|TEXT|VMA|PAGE|LIBC|BIG|BIG_OVERLAY|BIG_VMA|MIXED|"
                                                      r"SET|RESTORE|REREGISTER|LOCK_GUARD)"
                                                      r"|ELIM_EXEC|DOBBY_DETECT_(?:STATUS|RESTORE|LOCK|GUARD|BUSINESS|ACCESS|KMEM|FORK_KMEM|MANY|SIBLING|SPLIT)) [^\n]+", logs)})
-        if v216:
+        if modern_defense:
             report["runs"][-1]["details"] = re.findall(
-                r"READ_DEFENSE_(?:V216_STATUS|GUARD|BUSINESS) [^\n]+", logs)
+                rf"READ_DEFENSE_(?:{defense_tag}_(?:STATUS|GUARD)|GUARD|BUSINESS) [^\n]+", logs)
             report["runs"][-1]["ui"] = dict(KV.findall(result[0]))
-            matches = ", ".join(f"{s['stage']}={s['split']}/{s['n']}" for s in stages)
+            if v218 or v219:
+                matches = ", ".join(f"{s['stage']}=split:{s['split']}/trap:{s['trap']}/accept:{s['accept']}"
+                                    f" of {s['n']}" for s in stages)
+            else:
+                matches = ", ".join(f"{s['stage']}={s['split']}/{s['n']}" for s in stages)
             print(f"{label}: {matches}", flush=True)
             return
         if defense:
@@ -310,7 +329,7 @@ def main():
         for i in range(1, args.cycles + 1):
             for mode in modes:
                 run_app(f"{mode}-{i}", mode)
-        if args.dobby_detection or args.read_defense or args.read_defense_v216:
+        if prefix != "crc":
             kp("kpm", "unload", MODULE)
             loaded = False
             run_app("post-unload", clean_mode)

@@ -1,8 +1,63 @@
-﻿# UROV-Y 读取完整性复核结果
+# UROV-Y 读取完整性复核结果
 
 本文按最新复核在前排列。
 
+## 2.19.0 LL/SC 寄存器 gap 补完
+
+本节消掉 2.18.0 残余 §6.5 的唯一稳定普通 App、无密钥读侧特征：
+`PAGE_AP` 的读异常清掉本地独占监视器后，`LDXR; LDRB; ADD; STXR` 仍能观察到
+`STXR` 失败。2.19.0 保留 2.18.0 的 `LDXR` 执行证据、直接/间接分支门控和
+fail-closed 路径，只把 STXR 前向窗口从 NOP/BTI 扩到寄存器-only 整数数据加工。
+handler 在私有寄存器副本上重放 gap，读取 STXR 当前的 `Rn/Rt/Rs`，只有 `Rn`
+仍等于监视地址且 `copy_to_user` 成功后才写回寄存器/NZCV、置 `Ws=0` 并跳过
+STXR；白名单外形状仍走原生失败。没有新增 hook、线程、定时器、PTE/VMA/代码字；
+ABI 仍为 v8、`hooks=0xff`，请求布局、`ctl0` 文本、计数器与返回码不变。方案与
+不引入新特征的论证见 [ELIMINATION_2_19_DESIGN.md](ELIMINATION_2_19_DESIGN.md)。
+
+### 普通 App 无密钥复核
+
+`--read-defense-v219` 在 6 种配置下各启动一次，每次每阶段 16 个样本。
+活动 AP-all 覆盖阶段的三路读均等于文件字节，ALU 探针
+`trap=0`、`target_failed=0`、`accept=16/16`；AP 调用窗口阶段仍按 caller-window
+语义给出 `split=16/16`、`trap=0`、`accept=0/16`。全部阶段 `unknown=0`，
+阴性阶段未误报。会话结束后 `kpm list` 为空，前后 boot ID 一致，增量内核日志
+无 BUG/WARNING/Oops。[正式矩阵](results/read-defense-v219-20261108-191009/summary.json)
+
+| 活动覆盖配置 | 字节分歧 | 独占陷阱 | 采信结果 |
+| --- | ---: | ---: | ---: |
+| SITE_BRK 调用窗口 | 16/16 | 0/16 | 0/16 |
+| SITE_BRK 全调用者 | 16/16 | 0/16 | 0/16 |
+| PAGE_UXN 调用窗口 | 16/16 | 0/16 | 0/16 |
+| PAGE_UXN 全调用者 | 16/16 | 0/16 | 0/16 |
+| PAGE_AP 调用窗口 | 16/16 | 0/16 | 0/16 |
+| PAGE_AP 全调用者 | 0/16 | 0/16 | 16/16 |
+
+### 生产 CRC、Dobby 与旧路径
+
+`--repeats 3 --cycles 1` 的 7 模式 CRC 矩阵全部 PASS；`crc-ap-all` 中
+`execute=1235`（Dobby 载荷执行）、`file=direct=window=f50bcaf6`，即业务 EL0 读、
+独立标量读、`crc32` 窗口都等于文件字节，而执行仍走补丁。`--dobby-detection
+--repeats 8` 的 `accepted_crc_with_ap=8/8`、`ap=0/8`、`views=0/8`，说明
+NOP/BTI 间隔、XZR、pair、1024-iovec、sibling、split 和 fork 路径未被本次
+gap 扩宽破坏。消除 3×1 全部 `ELIM_CASE` PASS（`exclusive_match=0`、
+`ap_match=0`、`ELIM_PROT_STORE shapes=16`），多页 3×1 的 `mp-multi`、
+`mp-ld1`、`mp-cross`、`mp-srcpage`、`mp-audit`、`mp-prod` 全部 PASS。
+构建 `urov-y.kpm b173a91a...`、`urovdetect.apk b7c82bde...`。
+[CRC 矩阵](results/crc-20261108-191038/summary.json) ·
+[Dobby 矩阵](results/dobby-detect-20261108-191106/summary.json) ·
+[消除矩阵](results/eliminate-20261108-191126/summary.json) ·
+[多页矩阵](results/multipage-20261108-191239/summary.json)
+
+### 残余（2.19.0）
+
+计时、未解码 store 重放窗口、pkey/POE、root 可见性、子进程外部写、重放交叠与
+不缺页 uaccess 写与 2.18.0 相同。gap 含 load/store、分支、异常、system
+register、`CLREX` 或读标志指令时仍不补完，走原生失败；这是有意的 fail-closed
+边界，不是本轮新增的行为。见 [2.19.0 设计 §5](ELIMINATION_2_19_DESIGN.md#5-残余2190)。
+
 ## 2.18.0 读回源页替换与外部写合并
+
+[普通 App 无密钥复核与注册防护](#普通-app-无密钥复核与注册防护)覆盖本版三种模式及其全调用者配置。
 
 本节消掉 2.17.0 “残余（2.18.0）”里两条普通 App、无密钥、稳定的特征：
 `process_vm_readv()` 双 iovec 读回（2.17 的后置钩子按用户内存里的目的地址写回，
@@ -13,6 +68,17 @@
 
 ### 实现和取证依据
 
+`REGISTER` 按调用者的 `mm` 建立会话，每页保留注册时的 `snapshot` 与叠加
+`SRC_USER` 字节后的 `image`。注册若发生在 Dobby 改码之后，`snapshot` 已含补丁。
+模块检查 LR 和帧链，调用窗口内返回 `image`，窗口外返回 `snapshot`。
+`caller_count=0` 表示全调用者。SITE_BRK 通过私有 COW 把指定读取指令换成
+BRK。PAGE_UXN 给读取点所在页设置 UXN，接管该页的取指异常。PAGE_AP 清除目标页
+叶 PTE 的 AP[1]，让 EL0 数据读取进入模拟，取指仍使用活页。模块向 GPR 或
+FPSIMD 写回模拟结果并推进 PC。测试中的 Dobby 补丁因此可以在业务 CRC 看到原文件
+字节时继续执行。
+[注册](urov_y_backend.c#L3965) · [调用窗口](urov_y_backend.c#L1674) ·
+[BRK](urov_y_backend.c#L3481) · [权限异常](urov_y_backend.c#L3515)
+
 `process_vm_readv` 现在只让内核复制覆盖页：入口钩子记录 caller-window 判定，
 `pin_user_pages_remote()` 的后置钩子把落在注册页基址上的 pin 页替换成持有
 image/snapshot 的私有内核页，并把 `GUP_PIN_COUNTING_BIAS` 在原活页与替换页之间
@@ -22,7 +88,7 @@ image/snapshot 的私有内核页，并把 `GUP_PIN_COUNTING_BIAS` 在原活页�
 [源页替换实现](urov_y_backend.c#L4512) · [pin 钩子](urov_y_backend.c#L4488)
 
 外部写不再把页标 `dead`。uaccess 写缺页、fast-GUP `FOLL_WRITE` 与
-`__get_user_pages()` 的 `FOLL_WRITE` 在把写权限交给写者时，先用内核 GUP 把活页
+`__get_user_pages()` 的 `FOLL_WRITE` 在把写权限交给写者时，先通过 nofault uaccess 把活页
 快照到 `ext_pre`；uaccess 路径在 COW 后立即重装 AP[1]，GUP 路径在页数组返回后
 在 `__get_user_pages` 后置钩子里重装。下一次任何读路径先做 `uy_ext_drain()`：
 GUP 读回活页，与 `ext_pre` 逐字节比较，只把变化的字节发布进 image/snapshot。
@@ -62,11 +128,92 @@ GUP 读回活页，与 `ext_pre` 逐字节比较，只把变化的字节发布�
 7. **外部写与未解码 store 重放交叠**：`p->replay` 置位时外部写不快照，保持
    2.17 行为。
 
+### 普通 App 无密钥复核与注册防护
+
+测试选取 App 自有的稳定文件 RX 页。以文件描述符、设备号、inode 和文件偏移
+校验映射身份，保留同文件同偏移的 `PROT_READ` 对照页。独立标量读取用固定
+`LDRB`，与实际业务读取使用不同指令地址。检测阶段在普通 App 的工作线程运行。
+主机用 root 装卸模块，夹具用独立的模块密钥建立真值。读值和独占探针只使用
+地址、读取函数、文件和偏移。
+[App 夹具](apps/urov-detect/read_defense_fixture.inc) · [读值观察](native/urov_observe.c#L80)
+
+1. **字节复核**。分别重复采集业务读取、独立标量读取和同进程 `process_vm_readv`
+   的字节。每条路径内部必须稳定，两次观测的内核视图也必须相同。三路有稳定分歧
+   时记录读视图异常。全调用者 SITE_BRK 和 PAGE_UXN 下，业务和内核读可同时
+   返回原文件字节，独立标量读仍能在未登记的读取指令上看到补丁。三路一致但偏离
+   经校验的文件参考时单列为内容变化。
+2. **PAGE_AP 复核**。执行 `LDXR; LDRB; ADD; STXR`。独占操作仅访问线程私有
+   栈上字，且成功时原样写回。中间的 `LDRB` 是对目标页的唯一访问。2.18 的
+   LL/SC 桥接受 load 与 STXR 间的 NOP 或 BTI，遇到这里的 ADD 会交回原生
+   STXR。三组各 32 个有效三元组以只读别名的两次成功夹住目标读。目标 96 次
+   全失败才记读陷阱，全部成功才记阴性，混合样本、对照不稳或映射失配记未知。
+   夹具在 `EAGAIN` 时重试一次。等值 PAGE_AP 会话也呈阳性，因此这一项识别
+   被测页的数据访问陷阱。实际执行值与读取字节的差异由专用 Dobby 载荷取证。
+   [独占序列](native/urov_observe.c#L248) · [对照和判定](native/urov_observe.c#L489)
+3. **完整性决策**。三路稳定一致、匹配已校验的参考且独占探针阴性，才采信
+   被测范围的结果。内容变化、陷阱、读视图分歧和未知分别记录。遇到不确定结果
+   时保留普通业务，完整性结论降为未知。按实际使用的稳定代码页取样，在校验入口
+   运行一次。调用 `process_vm_readv` 前应确认部署配置的 Android seccomp 允许该
+   syscall。这里的计时只用于度量开销。
+
+旧的双 iovec 复测中，`post` 全程保留填充值。主机验证本机的源页替换路径有效。
+其他内核若缺少 pin hook、页引用字段或 `vmalloc_to_page`，仍可能走旧的目的
+缓冲区兼容路径。proc mem、ptrace 和 fast GUP 读也有覆盖钩子。普通 App 应把这些
+路径视作不同观测源，单一路径读出的 CRC 一致只说明该路径返回了预期字节。
+[兼容回写](urov_y_backend.c#L4555) · [内核读](urov_y_backend.c#L4729) ·
+[fast GUP](urov_y_backend.c#L4791) · [双 iovec 复测](results/read-defense-v216-20261108-182627/summary.json)
+
+**防护**。在独立的新映射里部署适合单独装载的 PIC 代码。使用经过校验的 ELF
+文件片段做 `PROT_EXEC` 映射，文件校验从另一个 `PROT_READ` 别名取字节。
+该执行映射没有 `VM_READ`。若部署允许匿名可执行映射，也可从可信字节建私有匿名
+RX 页，其 VMA 没有 `vm_file`。这两类映射都被 `validate_target_vma()` 拒绝。
+这一防护保护所选映射作为读取目标时的注册入口。其他可注册目标的 BRK/UXN
+读取点按各自的站点规则校验。已有 linker `.text` 上的活动会话与这些新映射
+分开处理，校验层可先拒绝采信结果。已经注册的 PAGE_AP 页会在成功的保护切换
+后重装，`mlock` 和等长 `mremap` 都能保留其会话。
+[目标 VMA 校验](urov_y_backend.c#L1243) · [保护更新](urov_y_backend.c#L1446) ·
+[站点校验](urov_y_backend.c#L1195)
+
+#### 真机复核
+
+Pixel 6、Android 16、4 KiB 页、内核 `6.1.134-android14-11`、KernelPatch
+`0xc00`。测试 APK 为 `untrusted_app`、`CapEff=0`、`Seccomp=2`，
+SELinux 为 Enforcing。当前源码重建的 KPM 与真机使用的 KPM 的 SHA-256 一致。
+六种配置各独立启动三次，每次每阶段采 32 样本。
+覆盖阶段实际执行均为 `0x1235`，业务读取均返回 `0x1234` 对应的原文件字节。
+[正式矩阵](results/read-defense-v218-20261108-182541/summary.json)
+
+| Dobby 改码后启用覆盖 | 字节分歧 | 独占陷阱 | 采信结果 |
+| --- | ---: | ---: | ---: |
+| SITE_BRK 窗口 | 96/96 | 0/96 | 0/96 |
+| SITE_BRK 全调用者 | 96/96 | 0/96 | 0/96 |
+| PAGE_UXN 窗口 | 96/96 | 0/96 | 0/96 |
+| PAGE_UXN 全调用者 | 96/96 | 0/96 | 0/96 |
+| PAGE_AP 窗口 | 96/96 | 96/96 | 0/96 |
+| PAGE_AP 全调用者 | 0/96 | 96/96 | 0/96 |
+
+672 个干净样本全部通过，另有 1,248 个仅改码或已撤销覆盖的样本全部归为
+内容变化。上述 1,920 个阴性对照均未报读值分歧或陷阱。等值 PAGE_AP 的
+192 个样本均报读陷阱。活动 PAGE_AP 阶段的 18,432 个有效三元组全部出现目标
+STXR 失败。3,072 个样本共重试 5 次，最终未知 0 次。
+
+新建的文件仅执行映射和匿名 RX 映射各 18/18 次注册尝试均返回 `EINVAL`。
+两者执行结果均为 `0x1234`。21 次 App 启动合计完成 2,812,672 次并行业务夹具
+迭代，错误为 0，UI 心跳最大间隔 22 ms。单次复核的阶段平均耗时 3.38–6.83 ms，
+实测最大 53.18 ms，包含映射检查和重试。设备保持同一 boot ID，测试后 KPM
+列表为空，内核增量日志未报 BUG、Oops 或挂起。结论的实测范围是该设备、该模块
+二进制、测试夹具的读取点与采样页。
+
+另复跑了 v217 普通 App 六项回归。直接 I/O 写目标页后，`live_matches=1` 且
+`overlay_alive=1`。写到达活页，后续 `SET` 仍能发布读视图。
+[普通 App GUP 回归](results/v217-20261108-182748/summary.json)
+
 ### 复跑
 
 ```powershell
 ./kpms/urov-lab/build.ps1
 ./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --read-defense-v218 --repeats 32 --cycles 3
 python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --read-defense-v216 --repeats 8 --cycles 1
 python ./kpms/urov-lab/tools/run_v217_device.py --serial $Serial --key $KpKey --repeats 16 --cycles 1
 python ./kpms/urov-lab/tools/run_elimination_device.py --serial $Serial --key $KpKey --skip-x-control --repeats 3 --cycles 1
