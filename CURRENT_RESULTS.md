@@ -2,6 +2,20 @@
 
 更新于 2026-11-08（Asia/Shanghai）。
 
+> 2026-11-08 补充：`urov-y` 2.14.0 消除 2.13.0 仍成立的两条 **App 可及** 恢复
+> 路径：成功的 `mprotect(PROT_READ/PROT_NONE/PROT_EXEC/PROT_READ|PROT_WRITE)`
+> 不再结束会话（private COW 页仍由 `AP[1]=0` 读陷阱服务；`PROT_NONE` 仍原生
+> `SIGSEGV`），第一次真实 store 才由原 Linux fault 路径完成 COW 并退役该页；
+> 未分配 pkey 的 `pkey_mprotect`、private VMA 的 `remap_file_pages` 和
+> `MAP_FIXED|MAP_FIXED_NOREPLACE` 等 Linux 会拒绝的调用不再先拆会话。
+> Dobby 48×3 活动阶段 `ap=0/144`、`accepted_crc_with_ap=144/144`；
+> CRC 5×2（16 次）、消除 3×1（11 次，`ELIM_PROT ... store_retired=1`）、
+> 多页 5×1 均 PASS；`site_call_ns=288/292`。构建 `urov-y.kpm 51140d21...`、
+> `urovdetect.apk 889cb318...`。见
+> [ELIMINATION_2_14_DESIGN.md](ELIMINATION_2_14_DESIGN.md)、
+> [APP_READ_INTEGRITY_RESULTS.md](APP_READ_INTEGRITY_RESULTS.md) 的 2.14.0 节
+> 与 [APP_READ_INTEGRITY_AUDIT.md](APP_READ_INTEGRITY_AUDIT.md) 的 2.14.0 节。
+
 > 2026-11-08 补充：`urov-y` 2.12.0 消除 2.11.0 仍成立的五条 **App 可及** 特征：
 > `/proc/<pid>/mem`/ptrace/跨进程 `process_vm_readv` 的内核辅助读（新增
 > `__access_remote_vm` after hook，并按目标 `mm` 判定 `process_vm_readv`）、

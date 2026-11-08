@@ -243,18 +243,58 @@ static void *dobby_existing_registrant(void *arg)
     return NULL;
 }
 
-/* 2.12.0 no longer lets an invalid madvise end the session: Linux rejects the
- * advice before changing the VMA, so the gate passes it through.  Only the
- * authenticated DEACTIVATE restores the live bytes. */
+static bool dobby_same_vma(const struct ud_mapping *a, const struct ud_mapping *b)
+{
+    return a->start == b->start && a->end == b->end && a->offset == b->offset &&
+        a->inode == b->inode && a->dev_major == b->dev_major && a->dev_minor == b->dev_minor &&
+        a->readable == b->readable && a->writable == b->writable &&
+        a->executable == b->executable && a->shared == b->shared &&
+        a->dontcopy == b->dontcopy && a->maywrite == b->maywrite &&
+        a->randomread == b->randomread;
+}
+
+/* Test-only probe on the owned payload. Linux rejects page+1 before changing
+ * the VMA; the 2.13.0 gate validates the arguments before it touches the
+ * session, so the invalid call must leave the overlay armed. The errno is
+ * identical on a clean kernel. Verify the bytes and execution. */
+static void dobby_check_unaligned_protect(const char *name, const void *page,
+                                         const uint8_t *text, size_t page_size,
+                                         const uint8_t expected[DOBBY_CRC_BYTES])
+{
+    struct ud_mapping before, after;
+    uint8_t live[DOBBY_CRC_BYTES];
+    int map_error = ud_mapping_at("/proc/self/smaps", text, &before);
+    int error = EPROTO;
+    if (!map_error && before.readable && before.executable && !before.writable &&
+        page && page_size > 1 && (uintptr_t)page % page_size == 0)
+        error = mprotect((void *)((uintptr_t)page + 1U), 1, PROT_READ) ? errno : 0;
+
+    copy_scalar(live, text, sizeof(live));
+    uint32_t executed = dobby_crc_payload();
+    bool expected_bytes = !memcmp(live, expected, sizeof(live));
+    bool preserved = !map_error && !ud_mapping_at("/proc/self/smaps", text, &after) &&
+        dobby_same_vma(&before, &after);
+    REQUIRE(error == EINVAL && expected_bytes && preserved && executed == DOBBY_HOOKED,
+            "Dobby keyless restore %s errno=%d bytes_expected=%d vma_preserved=%d execute=%04x",
+            name, error, expected_bytes, preserved, executed);
+    LOG("DOBBY_DETECT_KEYLESS_RESTORE stage=%s errno=%d bytes_expected=%d vma_preserved=%d execute=%04x",
+        name, error, expected_bytes, preserved, executed);
+}
+
+/* The bad-advice and unaligned-protect calls must leave the overlay in place;
+ * the owner then ends the session with the authenticated DEACTIVATE request.
+ * The unaligned mprotect calls below use no module request or credentials;
+ * STATUS only supplies fixture ground truth before and after the experiment. */
 static bool dobby_restore(const struct uy_ctx *ctx, const uint8_t *text,
-                          const void *reference, size_t page_size)
+                          const void *reference, size_t page_size,
+                          const uint8_t file[DOBBY_CRC_BYTES],
+                          const uint8_t patched[DOBBY_CRC_BYTES])
 {
     struct urov_y_request status = {0};
     struct ud_mapping before, after;
-    uint8_t live[DOBBY_CRC_BYTES], file[DOBBY_CRC_BYTES];
-    int deactivate_error;
+    uint8_t live[DOBBY_CRC_BYTES];
 
-    copy_scalar(file, reference, sizeof(file));
+    (void)patched;
     int outside_error = uy_invalid_advice(reference, page_size);
     bool still_active = !uy_status(ctx, &status) && status.state == UROV_Y_ACTIVE;
 
@@ -263,22 +303,26 @@ static bool dobby_restore(const struct uy_ctx *ctx, const uint8_t *text,
     copy_scalar(live, text, sizeof(live));
     bool image_kept = !memcmp(live, file, sizeof(live));
     bool preserved = !map_error && !ud_mapping_at("/proc/self/smaps", text, &after) &&
-        before.start == after.start && before.end == after.end &&
-        before.readable == after.readable && before.writable == after.writable &&
-        before.executable == after.executable && before.randomread && after.randomread;
-    deactivate_error = uy_deactivate(ctx) ? errno : 0;
-    copy_scalar(live, text, sizeof(live));
-    bool restored = !deactivate_error && memcmp(live, file, sizeof(live)) != 0;
+        before.randomread && dobby_same_vma(&before, &after);
+
+    dobby_check_unaligned_protect("outside", reference, text, page_size, file);
+    dobby_check_unaligned_protect("overlap", text, text, page_size, file);
+    bool active_after_keyless = !uy_status(ctx, &status) && status.state == UROV_Y_ACTIVE;
+    int deactivate_error = uy_deactivate(ctx) ? errno : 0;
+    bool inactive = !uy_status(ctx, &status) && status.state == UROV_Y_INACTIVE;
+
     REQUIRE(outside_error == EINVAL && still_active && restore_error == EINVAL &&
-            image_kept && preserved && restored,
-            "Dobby invalid advice errno=%d state=%u image_kept=%d preserved=%d "
-            "deactivate_errno=%d restored=%d",
-            restore_error, status.state, image_kept, preserved, deactivate_error, restored);
+            image_kept && preserved && active_after_keyless && !deactivate_error && inactive,
+            "Dobby invalid advice errno=%d still_active=%d image_kept=%d preserved=%d "
+            "active_after_keyless=%d deactivate_errno=%d inactive=%d",
+            restore_error, still_active, image_kept, preserved, active_after_keyless,
+            deactivate_error, inactive);
     LOG("DOBBY_DETECT_RESTORE outside_errno=%d still_active=%d madvise_errno=%d "
-        "image_kept=%d vma_preserved=%d deactivate_errno=%d restored=%d",
+        "image_kept=%d vma_preserved=%d active_after_keyless=%d inactive_after_deactivate=%d "
+        "deactivate_errno=%d",
         outside_error, still_active, restore_error, image_kept, preserved,
-        deactivate_error, restored);
-    return restored;
+        active_after_keyless, inactive, deactivate_error);
+    return inactive;
 }
 
 static void dobby_check_registration_guard(const struct uy_ctx *ctx, const uint8_t *text)
@@ -615,7 +659,7 @@ static void dobby_detection_fixture(const char *key, int repeats)
     struct business business = { .fn = ud_payload };
     pthread_t thread;
     bool have_thread = false;
-    uint8_t file[DOBBY_CRC_BYTES];
+    uint8_t file[DOBBY_CRC_BYTES], patched[DOBBY_CRC_BYTES];
     pthread_mutex_lock(&dobby_crc_lock);
     if (dobby_setup_error >= 0 || page_size != UROV_Y_PAGE ||
         page_open_at(&reference, MAP_PRIVATE, text)) {
@@ -655,6 +699,8 @@ static void dobby_detection_fixture(const char *key, int repeats)
             uy_invalid_advice(text, (size_t)page_size) == EINVAL &&
             !ud_mapping_at("/proc/self/smaps", text, &map) && map.randomread,
             "Dobby invalid advice changed an unregistered mapping");
+    copy_scalar(patched, text, sizeof(patched));
+    dobby_check_unaligned_protect("unarmed", text, text, (size_t)page_size, patched);
     if (!key) goto close_reference;
 
     const char *stage = "module key";
@@ -669,7 +715,7 @@ static void dobby_detection_fixture(const char *key, int repeats)
     if (!error) {
         struct urov_y_request status = {0};
         dobby_detection_stage("overlay", text, &reference, ap_reference, sibling, repeats, file, DOBBY_HOOKED,
-                              true, UD_NO_MATCH, true);
+                              true, UD_NO_MATCH, false);
         dobby_check_fork_kmem(text, dobby_file_page, DOBBY_CRC_BYTES);
         REQUIRE(!uy_status(&ctx, &status) && status.state == UROV_Y_ACTIVE && status.reserved == 1 &&
                 status.generation == 1 && status.hits >= (uint64_t)repeats * DOBBY_CRC_BYTES &&
@@ -679,7 +725,7 @@ static void dobby_detection_fixture(const char *key, int repeats)
         LOG("DOBBY_DETECT_STATUS hits=%llu failures=%llu",
             (unsigned long long)status.hits, (unsigned long long)status.failures);
 
-        if (dobby_restore(&ctx, text, reference.address, (size_t)page_size)) cleanup = false;
+        if (dobby_restore(&ctx, text, ap_reference, (size_t)page_size, file, patched)) cleanup = false;
     }
     if (cleanup && uy_deactivate(&ctx)) {
         REQUIRE(0, "Dobby detection DEACTIVATE errno=%d", errno);

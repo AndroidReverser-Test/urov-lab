@@ -1,6 +1,18 @@
 # UROV-LAB
 
-`urov-y` 2.12.0 把读覆盖扩到**内核辅助读**：新增 `__access_remote_vm` after
+`urov-y` 2.14.0 把 2.13.0 仍成立的两类保护切换恢复路径消掉：对已登记页做
+`mprotect(PROT_READ/PROT_NONE/PROT_EXEC/PROT_READ|PROT_WRITE)` 不再结束
+会话，私有文件页在 `mprotect(PROT_WRITE)` 后仍由 `AP[1]=0` 读陷阱服务，
+第一次真实 store 才把该页交给 Linux COW 并退役这一页的覆盖；未分配 pkey
+的 `pkey_mprotect`、private VMA 的 `remap_file_pages` 等 Linux 会拒绝的调用
+不再先拆会话。ABI 仍为 v8，`hooks=0xff`、请求布局、`ctl0` 字段和返回码不变。
+
+2.13.0 消除 2.12.0 仍成立的两个普通 App 无密钥特征：AP 独占探针的
+`LDXR; LDRB; NOP; STXR` 不再因 `ERET` 清监视器而失败（有界前向 LL/SC 窗口），
+非对齐 `mprotect` 等 Linux 本来会拒绝的映射调用不再先撤销会话（门控参数预校验）。
+ABI 仍为 v8，`hooks=0xff`、请求布局、`ctl0` 字段和返回码不变。
+
+2.12.0 把读覆盖扩到**内核辅助读**：新增 `__access_remote_vm` after
 hook，`/proc/<pid>/mem`、`ptrace` 与 `access_process_vm()` 与 EL0 读者看到同一
 镜像；`process_vm_readv` 改按**目标** `mm` 判定。`VM_LOCKED` 不再被拒绝
 （`mlock` 不是门槛），无效 `madvise` 透传给 Linux，同权限 `mprotect(RX)` 与
@@ -14,6 +26,27 @@ no-op store。ABI v8 请求布局、`ctl0` 字段和计数器不变，`hooks` �
 2.4.0 的参数校验、并发镜像发布和陷阱撤销适配继续用于 Android ARM64 的 5.4 起的 5.x 和 6.x 内核，
 支持 4 KiB 及符合条件的 16 KiB 页表。实测、支持边界和复跑命令见
 [UROV-Y 兼容性与审计](COMPATIBILITY_Y.md)。下方日期条目保留各历史版本的行为和证据。
+
+2026-11-08 第十四轮消除：`urov-y` 2.14.0 让保护切换不再结束会话：`mprotect(R)`、
+`PROT_NONE`、`PROT_EXEC`、`mprotect(RW)` 后普通读取仍等于镜像；private COW 页
+上的第一次真实 store 由原 Linux fault 路径完成 COW，只退役这一页。`pkey_mprotect`
+未分配 pkey、private `remap_file_pages`、`MAP_FIXED|MAP_FIXED_NOREPLACE` 等
+Linux 会拒绝的调用不再先拆会话。Dobby 48×3 活动阶段 `ap=0/144`、
+`accepted_crc_with_ap=144/144`；CRC 5×2（16 次，`CRC_PROT state=1`）、消除
+3×1（11 次，`ELIM_PROT ... store_retired=1`）、多页 5×1 均 PASS。构建
+`urov-y.kpm 51140d21...`、`urovdetect.apk 889cb318...`。方案与残余见
+[2.14.0 设计](ELIMINATION_2_14_DESIGN.md)、
+[结果 2.14.0](APP_READ_INTEGRITY_RESULTS.md#2140-保护切换存活与写入移交) 与
+[审计 2.14.0](APP_READ_INTEGRITY_AUDIT.md#2140-保护切换存活与写入移交)。
+
+2026-11-08 第十三轮消除：`urov-y` 2.13.0 让 AP 探针在活动阶段回到
+`NO_MATCH`，并让普通 App 不能用非对齐 `mprotect` 撤销会话。Dobby 48×3 活动
+阶段 `ap=0/144`、`accepted_crc_with_ap=144/144`、`views=0/144`；CRC 5×2（16
+次）、消除 3×1（11 次）、多页 5×1（含 `mp-prod` 24 页/96 KiB 五路径）均 PASS。
+构建 `urov-y.kpm 3395b61b...`、`urovdetect.apk 6c1726f4...`。方案与残余见
+[2.13.0 设计](ELIMINATION_2_13_DESIGN.md)、
+[结果 2.13.0](APP_READ_INTEGRITY_RESULTS.md#2130-普通-app-的-ap-探针与无效映射门控消除) 与
+[审计 2.13.0](APP_READ_INTEGRITY_AUDIT.md#2130-ap-探针与无效映射门控消除)。
 
 2026-11-08 第十二轮消除：`urov-y` 2.12.0 补齐内核辅助读，并让锁页、无效
 `madvise`、同权限 `mprotect(RX)`、`fork`/`vfork` 与 `vfork`+`exec` 不再带走

@@ -1,0 +1,24 @@
+--------- beginning of main
+10-05 01:17:13.948 10055 10087 I urovdetect: CONTEXT pid=10055 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 01:17:13.948 10055 10087 I urovdetect: BEGIN mode=dobby-detect-clean repeats=48
+10-05 01:17:13.984 10055 10087 I urovdetect: DOBBY_DETECT_ACCESS self_mem_open_errno=13 other_mm_read_errno=1
+10-05 01:17:13.985 10055 10087 I urovdetect: DOBBY_DETECT_KMEM stage=clean errno=0 match=1
+10-05 01:17:13.985 10055 10087 I urovdetect: DOBBY_DETECT_MANY stage=clean n=1024 got=32 match=1 errno=0
+10-05 01:17:13.985 10055 10087 I urovdetect: DOBBY_DETECT_SIBLING stage=clean tid=10154 got=32 match=1 errno=0
+10-05 01:17:13.985 10055 10087 I urovdetect: DOBBY_DETECT_SPLIT stage=clean got=32 match=1 errno=0
+10-05 01:17:15.235 10055 10087 I urovdetect: DOBBY_DETECT_AP stage=clean n=48 match=0 clean=48 unknown=0 accepted=4608 failed=0 control_failed=0 bytes_differ=0 accepted_crc=48 mean_ns=3218793 max_ns=6456095
+10-05 01:17:15.235 10055 10087 I urovdetect: DOBBY_DETECT stage=clean n=48 execute=1234 file=96964c4f live=96964c4f crc_pass=48 accepted_crc=48 match=0 clean=48 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=4608 spaced_failed=0 spaced_control_failed=2 bridge_match=0 bridge_unknown=0 bridge_trials=1536 bridge_successes=0 nop_match=0 nop_trials=1536 nop_successes=0 ind_match=0 ind_trials=1536 ind_successes=0 cross_page_trials=1536 cross_page_successes=0 probe_mean_ns=3146847 probe_max_ns=3937297
+10-05 01:17:15.235 10055 10087 I urovdetect: DOBBY_DETECT_LIVE stage=clean n=48 match=0 unknown=0 kernel_file=48 kernel_crc=96964c4f single_crc=96964c4f zero_match=0 zero_clean=47 zero_unknown=1 mean_ns=326288 max_ns=1975260
+10-05 01:17:15.235 10055 10087 I urovdetect: DOBBY_HOOK address=0x6f5f0de000 original=1234 hooked=1235
+10-05 01:17:15.235 10055 10087 I urovdetect: DOBBY_DETECT_KMEM stage=patch_only errno=0 match=1
+10-05 01:17:15.235 10055 10087 I urovdetect: DOBBY_DETECT_MANY stage=patch_only n=1024 got=32 match=1 errno=0
+10-05 01:17:15.235 10055 10087 I urovdetect: DOBBY_DETECT_SIBLING stage=patch_only tid=10154 got=32 match=1 errno=0
+10-05 01:17:15.235 10055 10087 I urovdetect: DOBBY_DETECT_SPLIT stage=patch_only got=32 match=1 errno=0
+10-05 01:17:16.456 10055 10087 I urovdetect: DOBBY_DETECT_AP stage=patch_only n=48 match=0 clean=47 unknown=1 accepted=4608 failed=1 control_failed=0 bytes_differ=1 accepted_crc=0 mean_ns=3100818 max_ns=3193440
+10-05 01:17:16.456 10055 10087 I urovdetect: DOBBY_DETECT stage=patch_only n=48 execute=1235 file=96964c4f live=24a41313 crc_pass=0 accepted_crc=0 match=0 clean=48 unknown=0 adjacent_match=0 adjacent_unknown=0 spaced_match=0 spaced_unknown=0 spaced_accepted=4608 spaced_failed=0 spaced_control_failed=0 bridge_match=0 bridge_unknown=0 bridge_trials=1536 bridge_successes=0 nop_match=0 nop_trials=1536 nop_successes=0 ind_match=0 ind_trials=1536 ind_successes=0 cross_page_trials=1536 cross_page_successes=0 probe_mean_ns=3172279 probe_max_ns=5249959
+10-05 01:17:16.456 10055 10087 I urovdetect: DOBBY_DETECT_LIVE stage=patch_only n=48 match=0 unknown=0 kernel_file=0 kernel_crc=24a41313 single_crc=24a41313 zero_match=0 zero_clean=48 zero_unknown=0 mean_ns=288850 max_ns=302165
+10-05 01:17:16.459 10055 10087 I urovdetect: DOBBY_DETECT_KEYLESS_RESTORE stage=unarmed errno=22 bytes_expected=1 vma_preserved=1 execute=1235
+10-05 01:17:16.460 10055 10087 I urovdetect: DOBBY_DETECT_BUSINESS ops=507520 errors=0
+10-05 01:17:16.460 10055 10087 I urovdetect: CONTEXT pid=10055 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 01:17:16.460 10055 10087 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=514 failures=0 mode=dobby-detect-clean
+10-05 01:17:16.464 10055 10055 I urovdetect: DETECT_RESULT PASS mode=dobby-detect-clean worker_ms=2512 ui_ticks=339 ui_max_gap_ms=17 native=PASS cases=2 assertions=514 failures=0

@@ -1,0 +1,1021 @@
+{
+  "serial": "25091FDF60063J",
+  "repeats": 8,
+  "cycles": 1,
+  "runs": [
+    {
+      "label": "no-module",
+      "mode": "dobby-detect-clean",
+      "uid": 10284,
+      "pid": "24330",
+      "log": "no-module-24330.log",
+      "result": "DETECT_RESULT PASS mode=dobby-detect-clean worker_ms=513 ui_ticks=142 ui_max_gap_ms=31 native=PASS cases=2 assertions=114 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "execute": "1234",
+          "file": "96964c4f",
+          "live": "96964c4f",
+          "crc_pass": "8",
+          "accepted_crc": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "1",
+          "spaced_accepted": "704",
+          "spaced_failed": "1",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "3438532",
+          "probe_max_ns": "5677246"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "execute": "1235",
+          "file": "96964c4f",
+          "live": "649a45f9",
+          "crc_pass": "0",
+          "accepted_crc": "0",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "0",
+          "spaced_accepted": "768",
+          "spaced_failed": "0",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "3023981",
+          "probe_max_ns": "3035075"
+        }
+      ],
+      "details": [
+        "DOBBY_DETECT_ACCESS self_mem_open_errno=13 other_mm_read_errno=1",
+        "DOBBY_DETECT_KMEM stage=clean errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=clean n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=clean tid=24420 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=clean got=32 match=1 errno=0",
+        "DOBBY_DETECT_KMEM stage=patch_only errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=patch_only n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=patch_only tid=24420 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=patch_only got=32 match=1 errno=0",
+        "DOBBY_DETECT_BUSINESS ops=92416 errors=0"
+      ],
+      "live_views": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "8",
+          "kernel_crc": "96964c4f",
+          "single_crc": "96964c4f",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "570933",
+          "max_ns": "2228597"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "0",
+          "kernel_crc": "649a45f9",
+          "single_crc": "649a45f9",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "291641",
+          "max_ns": "296061"
+        }
+      ],
+      "many_views": [
+        {
+          "stage": "clean",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "sibling_views": [
+        {
+          "stage": "clean",
+          "tid": "24420",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "tid": "24420",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "split_views": [
+        {
+          "stage": "clean",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "ap_views": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "clean": "7",
+          "unknown": "1",
+          "accepted": "736",
+          "failed": "1",
+          "control_failed": "0",
+          "bytes_differ": "0",
+          "accepted_crc": "7",
+          "mean_ns": "3779937",
+          "max_ns": "9340373"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "accepted": "768",
+          "failed": "0",
+          "control_failed": "0",
+          "bytes_differ": "1",
+          "accepted_crc": "0",
+          "mean_ns": "3012293",
+          "max_ns": "3024699"
+        }
+      ],
+      "keyless_recovery": [
+        {
+          "stage": "unarmed",
+          "errno": "22",
+          "bytes_expected": "1",
+          "vma_preserved": "1",
+          "execute": "1235"
+        }
+      ]
+    },
+    {
+      "label": "loaded-idle",
+      "mode": "dobby-detect-clean",
+      "uid": 10284,
+      "pid": "24449",
+      "log": "loaded-idle-24449.log",
+      "result": "DETECT_RESULT PASS mode=dobby-detect-clean worker_ms=513 ui_ticks=143 ui_max_gap_ms=21 native=PASS cases=2 assertions=114 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "execute": "1234",
+          "file": "96964c4f",
+          "live": "96964c4f",
+          "crc_pass": "8",
+          "accepted_crc": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "0",
+          "spaced_accepted": "768",
+          "spaced_failed": "0",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "3578633",
+          "probe_max_ns": "5983643"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "execute": "1235",
+          "file": "96964c4f",
+          "live": "649a45f9",
+          "crc_pass": "0",
+          "accepted_crc": "0",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "0",
+          "spaced_accepted": "768",
+          "spaced_failed": "0",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "3145803",
+          "probe_max_ns": "3162761"
+        }
+      ],
+      "details": [
+        "DOBBY_DETECT_ACCESS self_mem_open_errno=13 other_mm_read_errno=1",
+        "DOBBY_DETECT_KMEM stage=clean errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=clean n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=clean tid=24502 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=clean got=32 match=1 errno=0",
+        "DOBBY_DETECT_KMEM stage=patch_only errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=patch_only n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=patch_only tid=24502 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=patch_only got=32 match=1 errno=0",
+        "DOBBY_DETECT_BUSINESS ops=92160 errors=0"
+      ],
+      "live_views": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "8",
+          "kernel_crc": "96964c4f",
+          "single_crc": "96964c4f",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "623738",
+          "max_ns": "2701172"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "0",
+          "kernel_crc": "649a45f9",
+          "single_crc": "649a45f9",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "294092",
+          "max_ns": "314901"
+        }
+      ],
+      "many_views": [
+        {
+          "stage": "clean",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "sibling_views": [
+        {
+          "stage": "clean",
+          "tid": "24502",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "tid": "24502",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "split_views": [
+        {
+          "stage": "clean",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "ap_views": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "accepted": "768",
+          "failed": "0",
+          "control_failed": "0",
+          "bytes_differ": "0",
+          "accepted_crc": "8",
+          "mean_ns": "3709670",
+          "max_ns": "6129028"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "accepted": "768",
+          "failed": "0",
+          "control_failed": "0",
+          "bytes_differ": "1",
+          "accepted_crc": "0",
+          "mean_ns": "3152430",
+          "max_ns": "3189413"
+        }
+      ],
+      "keyless_recovery": [
+        {
+          "stage": "unarmed",
+          "errno": "22",
+          "bytes_expected": "1",
+          "vma_preserved": "1",
+          "execute": "1235"
+        }
+      ]
+    },
+    {
+      "label": "dobby-detect-active-1",
+      "mode": "dobby-detect-active",
+      "uid": 10284,
+      "pid": "24523",
+      "log": "dobby-detect-active-1-24523.log",
+      "result": "DETECT_RESULT PASS mode=dobby-detect-active worker_ms=1070 ui_ticks=200 ui_max_gap_ms=15 native=PASS cases=4 assertions=228 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "execute": "1234",
+          "file": "96964c4f",
+          "live": "96964c4f",
+          "crc_pass": "8",
+          "accepted_crc": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "1",
+          "spaced_accepted": "768",
+          "spaced_failed": "1",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "3565526",
+          "probe_max_ns": "5861166"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "execute": "1235",
+          "file": "96964c4f",
+          "live": "649a45f9",
+          "crc_pass": "0",
+          "accepted_crc": "0",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "0",
+          "spaced_accepted": "768",
+          "spaced_failed": "0",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "3113103",
+          "probe_max_ns": "3130005"
+        },
+        {
+          "stage": "overlay",
+          "n": "8",
+          "execute": "1235",
+          "file": "96964c4f",
+          "live": "96964c4f",
+          "crc_pass": "8",
+          "accepted_crc": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "0",
+          "spaced_accepted": "768",
+          "spaced_failed": "0",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "3218851",
+          "probe_max_ns": "3300578"
+        },
+        {
+          "stage": "deactivated",
+          "n": "8",
+          "execute": "1235",
+          "file": "96964c4f",
+          "live": "649a45f9",
+          "crc_pass": "0",
+          "accepted_crc": "0",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "0",
+          "spaced_accepted": "768",
+          "spaced_failed": "0",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "3166590",
+          "probe_max_ns": "3337199"
+        }
+      ],
+      "details": [
+        "DOBBY_DETECT_KMEM stage=clean errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=clean n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=clean tid=24575 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=clean got=32 match=1 errno=0",
+        "DOBBY_DETECT_KMEM stage=patch_only errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=patch_only n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=patch_only tid=24575 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=patch_only got=32 match=1 errno=0",
+        "DOBBY_DETECT_KMEM stage=overlay errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=overlay n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=overlay tid=24575 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=overlay got=32 match=1 errno=0",
+        "DOBBY_DETECT_FORK_KMEM stage=overlay match=1",
+        "DOBBY_DETECT_STATUS hits=4896 failures=0",
+        "DOBBY_DETECT_RESTORE outside_errno=22 still_active=1 madvise_errno=22 image_kept=1 vma_preserved=1 active_after_keyless=1 inactive_after_deactivate=1 deactivate_errno=0",
+        "DOBBY_DETECT_KMEM stage=deactivated errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=deactivated n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=deactivated tid=24575 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=deactivated got=32 match=1 errno=0",
+        "DOBBY_DETECT_LOCK bytes=4096 lock_errno=0 lock_ns=9358 register_errno=0 active=1 overlay=1 execute=1 rx=1 deactivate_errno=0 restored=1 unlock_errno=0",
+        "DOBBY_DETECT_GUARD filter_errno=0 thread_errno=0 register_errno=1 existing_thread_errno=1 inactive=1 nnp_before=0 nnp_after=1",
+        "DOBBY_DETECT_BUSINESS ops=211072 errors=0"
+      ],
+      "live_views": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "8",
+          "kernel_crc": "96964c4f",
+          "single_crc": "96964c4f",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "644897",
+          "max_ns": "2882324"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "0",
+          "kernel_crc": "649a45f9",
+          "single_crc": "649a45f9",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "285054",
+          "max_ns": "304728"
+        },
+        {
+          "stage": "overlay",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "8",
+          "kernel_crc": "96964c4f",
+          "single_crc": "96964c4f",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "323766",
+          "max_ns": "404582"
+        },
+        {
+          "stage": "deactivated",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "0",
+          "kernel_crc": "649a45f9",
+          "single_crc": "649a45f9",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "290201",
+          "max_ns": "314372"
+        }
+      ],
+      "many_views": [
+        {
+          "stage": "clean",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "overlay",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "deactivated",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "sibling_views": [
+        {
+          "stage": "clean",
+          "tid": "24575",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "tid": "24575",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "overlay",
+          "tid": "24575",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "deactivated",
+          "tid": "24575",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "split_views": [
+        {
+          "stage": "clean",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "overlay",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "deactivated",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "ap_views": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "accepted": "768",
+          "failed": "0",
+          "control_failed": "1",
+          "bytes_differ": "0",
+          "accepted_crc": "8",
+          "mean_ns": "3689326",
+          "max_ns": "6090372"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "accepted": "768",
+          "failed": "0",
+          "control_failed": "0",
+          "bytes_differ": "1",
+          "accepted_crc": "0",
+          "mean_ns": "3120346",
+          "max_ns": "3136637"
+        },
+        {
+          "stage": "overlay",
+          "n": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "accepted": "768",
+          "failed": "0",
+          "control_failed": "0",
+          "bytes_differ": "0",
+          "accepted_crc": "8",
+          "mean_ns": "3246744",
+          "max_ns": "3273885"
+        },
+        {
+          "stage": "deactivated",
+          "n": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "accepted": "768",
+          "failed": "0",
+          "control_failed": "0",
+          "bytes_differ": "1",
+          "accepted_crc": "0",
+          "mean_ns": "3154927",
+          "max_ns": "3240519"
+        }
+      ],
+      "keyless_recovery": [
+        {
+          "stage": "unarmed",
+          "errno": "22",
+          "bytes_expected": "1",
+          "vma_preserved": "1",
+          "execute": "1235"
+        },
+        {
+          "stage": "outside",
+          "errno": "22",
+          "bytes_expected": "1",
+          "vma_preserved": "1",
+          "execute": "1235"
+        },
+        {
+          "stage": "overlap",
+          "errno": "22",
+          "bytes_expected": "1",
+          "vma_preserved": "1",
+          "execute": "1235"
+        }
+      ]
+    },
+    {
+      "label": "post-unload",
+      "mode": "dobby-detect-clean",
+      "uid": 10284,
+      "pid": "24612",
+      "log": "post-unload-24612.log",
+      "result": "DETECT_RESULT PASS mode=dobby-detect-clean worker_ms=495 ui_ticks=143 ui_max_gap_ms=22 native=PASS cases=2 assertions=114 failures=0",
+      "stages": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "execute": "1234",
+          "file": "96964c4f",
+          "live": "96964c4f",
+          "crc_pass": "8",
+          "accepted_crc": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "0",
+          "spaced_accepted": "768",
+          "spaced_failed": "0",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "3328333",
+          "probe_max_ns": "4660115"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "execute": "1235",
+          "file": "96964c4f",
+          "live": "649a45f9",
+          "crc_pass": "0",
+          "accepted_crc": "0",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "adjacent_match": "0",
+          "adjacent_unknown": "0",
+          "spaced_match": "0",
+          "spaced_unknown": "0",
+          "spaced_accepted": "768",
+          "spaced_failed": "0",
+          "spaced_control_failed": "0",
+          "bridge_match": "0",
+          "bridge_unknown": "0",
+          "bridge_trials": "256",
+          "bridge_successes": "0",
+          "nop_match": "0",
+          "nop_trials": "256",
+          "nop_successes": "0",
+          "ind_match": "0",
+          "ind_trials": "256",
+          "ind_successes": "0",
+          "cross_page_trials": "256",
+          "cross_page_successes": "0",
+          "probe_mean_ns": "3039662",
+          "probe_max_ns": "3150961"
+        }
+      ],
+      "details": [
+        "DOBBY_DETECT_ACCESS self_mem_open_errno=13 other_mm_read_errno=1",
+        "DOBBY_DETECT_KMEM stage=clean errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=clean n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=clean tid=24666 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=clean got=32 match=1 errno=0",
+        "DOBBY_DETECT_KMEM stage=patch_only errno=0 match=1",
+        "DOBBY_DETECT_MANY stage=patch_only n=1024 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SIBLING stage=patch_only tid=24666 got=32 match=1 errno=0",
+        "DOBBY_DETECT_SPLIT stage=patch_only got=32 match=1 errno=0",
+        "DOBBY_DETECT_BUSINESS ops=92672 errors=0"
+      ],
+      "live_views": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "8",
+          "kernel_crc": "96964c4f",
+          "single_crc": "96964c4f",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "718892",
+          "max_ns": "3504842"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "unknown": "0",
+          "kernel_file": "0",
+          "kernel_crc": "649a45f9",
+          "single_crc": "649a45f9",
+          "zero_match": "0",
+          "zero_clean": "8",
+          "zero_unknown": "0",
+          "mean_ns": "292444",
+          "max_ns": "302572"
+        }
+      ],
+      "many_views": [
+        {
+          "stage": "clean",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "n": "1024",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "sibling_views": [
+        {
+          "stage": "clean",
+          "tid": "24666",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "tid": "24666",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "split_views": [
+        {
+          "stage": "clean",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        },
+        {
+          "stage": "patch_only",
+          "got": "32",
+          "match": "1",
+          "errno": "0"
+        }
+      ],
+      "ap_views": [
+        {
+          "stage": "clean",
+          "n": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "accepted": "768",
+          "failed": "0",
+          "control_failed": "0",
+          "bytes_differ": "0",
+          "accepted_crc": "8",
+          "mean_ns": "3740015",
+          "max_ns": "7420451"
+        },
+        {
+          "stage": "patch_only",
+          "n": "8",
+          "match": "0",
+          "clean": "8",
+          "unknown": "0",
+          "accepted": "768",
+          "failed": "0",
+          "control_failed": "0",
+          "bytes_differ": "1",
+          "accepted_crc": "0",
+          "mean_ns": "3037211",
+          "max_ns": "3123169"
+        }
+      ],
+      "keyless_recovery": [
+        {
+          "stage": "unarmed",
+          "errno": "22",
+          "bytes_expected": "1",
+          "vma_preserved": "1",
+          "execute": "1235"
+        }
+      ]
+    }
+  ],
+  "passed": true,
+  "initial_modules": "",
+  "boot_id_before": "fea597c2-5706-4fc1-8687-addced60ecc9",
+  "kernel": "Linux localhost 6.1.134-android14-11-g66e758f7d0c0-ab13748739 #1 SMP PREEMPT Tue Jul  8 09:17:32 UTC 2025 aarch64 Toybox",
+  "kpver": "c00",
+  "selinux": "Enforcing",
+  "artifacts": {
+    "urovdetect.apk": "35ff4314ddf59c00b575c73548132cd2cc259624cf67e9147fb857d7d8db3c64",
+    "urov-y.kpm": "0915b42c665ae082f58a32c9c4dcb54e0d7e5769f9b4c48205a115b19f652e36"
+  },
+  "loaded_status": "mode=site-trap state=inactive sites=0 armed=0 hits=0 replays=0 failures=0 llsc=0 degraded=0 imm=7cf1 hooks=0xff core_checks=4152 abi=8 fpsimd=1 flen=0 pages=0 shift=12 caps=0x73f",
+  "final_modules": "",
+  "boot_id_after": "fea597c2-5706-4fc1-8687-addced60ecc9",
+  "kernel_issues": []
+}

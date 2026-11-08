@@ -1,0 +1,10 @@
+--------- beginning of main
+10-05 01:13:05.495  8322  8347 I urovdetect: CONTEXT pid=8322 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 01:13:05.495  8322  8347 I urovdetect: BEGIN mode=y-clean repeats=8
+10-05 01:13:05.654  8322  8347 I urovdetect: ELIM_CASE name=idle_unregistered result=PASS n=3 exclusive_match=0 exclusive_clean=3 exclusive_unknown=0 accepted=288 failed=0 control_failed=1 reader_match=0 reader_clean=3 reader_unknown=0 direct=0xf2c66881f2aaacc1 file=0xf2c66881f2aaacc1 zero_match=0 zero_clean=3 zero_unknown=0 nonzero_match=0 nonzero_clean=3 nonzero_unknown=0 ap_match=0 ap_clean=3 ap_unknown=0
+10-05 01:13:05.679  8322  8347 I urovdetect: ELIM_EXEC name=unregistered n=8 expected=0 match=0 clean=8 unknown=0 accepted=768 failed=0 control_failed=0 total_ns=24788044 max_ns=3188273
+10-05 01:13:05.707  8322  8347 I urovdetect: ELIM_STORE name=unregistered n=8 expected=0 match=0 clean=8 unknown=0 completed=256 stores=0 total_ns=24674682 max_ns=3136922
+10-05 01:13:05.722  8322  8347 I urovdetect: ELIM_BRIDGE name=unregistered expected=0 verdict=0 trials=32 successes=0 elapsed_ns=3087972 nop_expected=0 nop_verdict=0 nop_trials=32 nop_successes=0 nop_elapsed_ns=3059285 indirect_verdict=0 indirect_trials=32 indirect_successes=0 indirect_elapsed_ns=3077352 cross_page_expected=0 cross_page_verdict=0 cross_page_trials=32 cross_page_successes=0 cross_page_elapsed_ns=3072265
+10-05 01:13:05.722  8322  8347 I urovdetect: CONTEXT pid=8322 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 01:13:05.722  8322  8347 I urovdetect: NATIVE_RESULT PASS cases=4 assertions=100 failures=0 mode=y-clean
+10-05 01:13:05.849  8322  8322 I urovdetect: DETECT_RESULT PASS mode=y-clean worker_ms=350 ui_ticks=128 ui_max_gap_ms=19 native=PASS cases=4 assertions=100 failures=0

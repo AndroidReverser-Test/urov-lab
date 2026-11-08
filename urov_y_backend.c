@@ -18,10 +18,11 @@
  * only AP[1] on the target page: fetch (including a BTI/RET canary) stays
  * native, while every data read is emulated with the same caller-window rules.
  * PAGE_AP does not emulate arbitrary stores.  Because the exception return
- * clears the exclusive reservation, an adjacent LDXR;load;STXR is completed
- * in the handler (see uy_llsc_prepare), but only when the LDXR result is still
- * in Rt and no direct branch in any executable mapping of the process, or
- * indirect branch target left in a GPR, reaches the LDXR..load span.  Every
+ * clears the exclusive reservation, an LDXR;load;[NOP...];STXR sequence is
+ * completed in the handler (see uy_llsc_prepare), but only when the LDXR
+ * result is still in Rt, no direct branch in any executable mapping of the
+ * process or indirect branch target left in a GPR reaches the LDXR..load span,
+ * and only NOP/BTI instructions sit between the load and the store.  Every
  * other store stays native.
  */
 #include <common.h>
@@ -102,6 +103,14 @@ static inline void uy_flush_icache_all(void)
 
 #define UY_FOLL_WRITE 0x01U
 
+/* Linux user protection bits (uapi/asm-generic/mman-common.h).  On arm64
+ * only PROT_NONE produces a leaf that EL0 cannot read; PROT_WRITE and
+ * PROT_EXEC are mapped with read permission (there is no execute-only or
+ * write-only user leaf). */
+#define UY_PROT_READ 0x1U
+#define UY_PROT_WRITE 0x2U
+#define UY_PROT_EXEC 0x4U
+
 #define UY_FAULT_WRITE 0x01U
 /* VM_FAULT_ERROR | VM_FAULT_RETRY | VM_FAULT_COMPLETED. A fault that returns
  * any of these bits may not have installed a PTE or may have dropped its lock. */
@@ -134,12 +143,14 @@ _Static_assert(sizeof(struct uy_fpstate) == UY_FPSIMD_BYTES, "FPSIMD image size"
 #define UY_EXCL_STXR 0x08007c00U
 #define UY_EXCL_STLXR 0x0800fc00U
 
-/* One adjacent LDXR;load;STXR triple that the PAGE_AP handler may complete
- * itself.  The plan is built from the registers as they were at the fault,
- * before the load is emulated, and committed only after emulation succeeds. */
+/* One LDXR;load;[NOP/BTI...];STXR sequence that the PAGE_AP handler may
+ * complete itself.  The plan is built from the registers as they were at the
+ * fault, before the load is emulated, and committed only after emulation
+ * succeeds. */
 struct uy_llsc {
     uint64_t base;
     uint64_t value;
+    uint64_t stxr_pc;    /* STXR may sit after a bounded run of NOPs */
     unsigned size;
     unsigned data_reg;
     unsigned base_reg;
@@ -195,7 +206,9 @@ struct uy_page {
     uint32_t flags;      /* UROV_Y_PAGE_SRC_* */
     uint32_t fake_off;
     uint32_t fake_len;
-    uint32_t armed;
+    uint32_t armed;      /* an AP[1]=0 trap is installed in the leaf PTE */
+    uint32_t want;       /* the current VMA allows EL0 reads: trap desired */
+    uint32_t dead;       /* a real store reached the page: overlay is stale */
     /* Registration-time VMA identity.  A fork copies the VMA with
      * vm_area_dup(), so the child keeps the same vm_file pointer, pgoff and
      * range; a foreign process that opens the same file again has a different
@@ -214,7 +227,7 @@ struct uy_session {
     uint64_t hits;
     uint64_t replays;
     uint64_t failures;
-    uint64_t llsc;      /* adjacent LL/SC stores completed by the AP bridge */
+    uint64_t llsc;      /* LL/SC stores completed by the AP bridge */
     uint64_t caller_start[UROV_Y_MAX_CALLERS];
     uint64_t caller_end[UROV_Y_MAX_CALLERS];
     struct uy_page *pages;     /* page_count entries, sorted by base */
@@ -879,11 +892,17 @@ static int page_set_uxn(void *mm, uint64_t page, int set)
  * only) held, clearing AP[1] makes every EL0 data read of this page take a
  * permission abort, while EL0 instruction fetch is governed by UXN alone and
  * stays native.  The caller holds the mmap write lock, or is completing the
- * fault that installed this PTE. */
+ * fault that installed this PTE.
+ *
+ * UXN is not a forbidden bit: a protection change may drop PROT_EXEC while
+ * keeping PROT_READ (a real sequence in production CRC code), and the data
+ * trap is independent of execute permission.  An execute-only page is never
+ * armed this way; its AP[1]=0 is the kernel's own execute-only encoding and
+ * is left untouched. */
 static int page_set_ap(void *mm, uint64_t page, int set)
 {
     return page_update_bits(mm, page, set ? PTE_USER : 0, set ? 0 : PTE_USER,
-                            PTE_RDONLY, PTE_UXN | PTE_DBM, 0);
+                            PTE_RDONLY, PTE_DBM, 0);
 }
 
 /* Registration already copied every target page. If reclaim drops a PTE
@@ -898,9 +917,12 @@ static long ap_arm_pages(struct uy_session *s, void *mm)
         struct uy_page *p = &s->pages[i];
 
         ret = validate_target_vma(f_find_vma(mm, p->base), p->base);
-        if (!ret)
+        if (!ret) {
+            p->want = 1;
+            p->dead = 0;
             ret = page_update_bits(mm, p->base, 0, PTE_USER,
                                    PTE_USER | PTE_RDONLY, PTE_UXN | PTE_DBM, &p->armed);
+        }
         if (ret < 0) break;
     }
     if (i) flush_tlb_all();
@@ -919,6 +941,7 @@ static int ap_disarm_pages(struct uy_session *s, void *mm)
         struct uy_page *p = &s->pages[i];
         int ret;
 
+        __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
         if (!__atomic_load_n(&p->armed, __ATOMIC_ACQUIRE)) continue;
         ret = page_set_ap(mm, p->base, 1);
         if (ret < 0 && ret != -ENOENT) {
@@ -936,15 +959,31 @@ static int ap_disarm_pages(struct uy_session *s, void *mm)
     return rc;
 }
 
-/* Re-apply the data trap after a protection change that kept the page
- * readable and executable.  Linux often returns early when the new
- * protection equals the current one, so the common mprotect(RX) hardening
- * call does not even change the PTE; this covers the calls that do. */
-static void ap_rearm_range(void *mm, uint64_t start, uint64_t len)
+/* Apply a successful mprotect()/pkey_mprotect() to the registered pages it
+ * covers.
+ *
+ * A protection change is not a reason to end the session.  A private
+ * file-backed leaf stays read-only after mprotect(PROT_WRITE) (the kernel
+ * keeps the COW encoding), so it can still carry the AP[1]=0 trap: reads are
+ * served from the image while a real store faults and is handed back to
+ * Linux, which performs the normal COW and then overwrites the page.  That is
+ * the only point at which the overlay becomes stale; it is recorded per page
+ * in `dead` and the page is never re-armed for this session.
+ *
+ * When the new protection removes EL0 read permission, the kernel has already
+ * installed its own PTE (PROT_NONE or the execute-only AP[1]=0 encoding).  The
+ * page is only suspended, never modified: reads must keep faulting exactly as
+ * they do without the module.  A later readable protection re-arms it.
+ *
+ * A leaf whose PTE cannot be read-protected (a genuinely writable shared
+ * file leaf) falls back to the live view for that page, which is the same
+ * visible behaviour 2.13 had after mprotect(PROT_WRITE). */
+static void ap_protection_update(void *mm, uint64_t start, uint64_t len, uint64_t prot)
 {
     uint64_t end = start + len;
     uint32_t i;
     int changed = 0;
+    int readable = (prot & (UY_PROT_READ | UY_PROT_WRITE | UY_PROT_EXEC)) != 0;
 
     if (end < start) end = ~UINT64_C(0);
     for (i = 0; i < g_sess.page_count; ++i) {
@@ -952,9 +991,29 @@ static void ap_rearm_range(void *mm, uint64_t start, uint64_t len)
         int ret;
 
         if (p->base < start || p->base + g_page_size > end) continue;
-        if (!__atomic_load_n(&p->armed, __ATOMIC_ACQUIRE)) continue;
+        if (!readable) {
+            __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
+            __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
+            continue;
+        }
+        __atomic_store_n(&p->want, 1, __ATOMIC_RELEASE);
+        if (__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) continue;
         ret = page_set_ap(mm, p->base, 0);
-        if (ret > 0) changed = 1;
+        if (ret >= 0) {
+            if (ret > 0) changed = 1;
+            /* page_update_bits() only records `armed` when it changed the
+             * entry; an already-trapped equal PTE also needs the flag. */
+            __atomic_store_n(&p->armed, 1, __ATOMIC_RELEASE);
+            continue;
+        }
+        if (ret == -ENOENT) {
+            /* Not resident: handle_mm_fault re-arms when it faults in. */
+            continue;
+        }
+        /* Writable shared leaf, DBM, or a lost CAS race: the image cannot be
+         * kept in front of the live bytes for this page any more. */
+        __atomic_store_n(&p->dead, 1, __ATOMIC_RELEASE);
+        __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
     }
     if (changed) flush_tlb_all();
 }
@@ -970,6 +1029,8 @@ static int ap_shadow_rearm(void *mm, uint64_t page, uint64_t file, uint64_t pgof
     int ret;
 
     if (!p || !mm || mm == g_sess.mm) return 0;
+    if (__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE) ||
+        !__atomic_load_n(&p->want, __ATOMIC_ACQUIRE)) return 0;
     if (file != (uint64_t)(uintptr_t)p->vma_file || pgoff != p->vma_pgoff ||
         start != p->vma_start || end != p->vma_end)
         return 0;
@@ -1756,6 +1817,39 @@ static int uy_llsc_indirect(const struct uro_regs *regs, uint64_t ldxr_pc, uint6
     return 0;
 }
 
+/* Find the STXR/STLXR that follows the faulting load inside a bounded window.
+ * Only NOPs and BTI landing pads may sit between the two instructions: they
+ * neither change the local exclusive monitor nor any register the bridge
+ * relies on.  Anything else -- CLREX, a syscall, another memory access, an
+ * ALU write to the reservation or data register -- makes the native sequence
+ * unverifiable, so the bridge declines instead of retiring a store the
+ * hardware might have failed.  The window covers the published post-load NOP
+ * probe (2.12.0) and its short-NOP variants without widening the conditions
+ * the bridge already checks. */
+#define UY_LLSC_FORWARD_MAX 8U
+
+static int uy_llsc_stxr_after(uint64_t pc, uint64_t *stxr_pc, uint32_t *stxr_insn,
+                              unsigned *ssize, unsigned *srs, unsigned *srt, unsigned *srn)
+{
+    unsigned gap;
+
+    for (gap = 0; gap < UY_LLSC_FORWARD_MAX; ++gap) {
+        uint64_t at = pc + 4U + 4U * gap;
+        uint32_t insn;
+
+        if (!uy_user_range(at, sizeof(insn)) || uy_read_insn(at, &insn)) return 0;
+        if (uy_is_stxr(insn, ssize, srs, srt, srn)) {
+            *stxr_pc = at;
+            *stxr_insn = insn;
+            return 1;
+        }
+        if (insn != UY_NOP && insn != UY_BTI_C && insn != UY_BTI_J && insn != UY_BTI_JC)
+            return 0;
+    }
+    return 0;
+}
+
+
 /* Decide whether the faulting load sits in an LDXR/LDAXR; load; STXR/STLXR
  * sequence that the handler can complete.
  *
@@ -1770,17 +1864,17 @@ static int uy_llsc_indirect(const struct uro_regs *regs, uint64_t ldxr_pc, uint6
 static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
                             const struct uro_load *load, struct uy_llsc *out)
 {
-    uint32_t after, ldxr_insn = 0;
+    uint32_t stxr_insn = 0, ldxr_insn = 0;
     unsigned lsize = 0, lrt = 0, lrn = 0, ssize, srt, srn, srs;
-    uint64_t mem = 0, mask, ldxr_pc = 0;
+    uint64_t mem = 0, mask, ldxr_pc = 0, stxr_pc = 0;
     unsigned gap;
 
     memset(out, 0, sizeof(*out));
     if (!f_copy_out || !load || load->vector || load->multi || load->count != 1U)
         return;
-    if (pc < 4U || !uy_user_range(pc - 4U, 4U) || !uy_user_range(pc + 4U, 4U))
+    if (pc < 4U || !uy_user_range(pc - 4U, 4U))
         return;
-    if (uy_read_insn(pc + 4U, &after) || !uy_is_stxr(after, &ssize, &srs, &srt, &srn))
+    if (!uy_llsc_stxr_after(pc, &stxr_pc, &stxr_insn, &ssize, &srs, &srt, &srn))
         return;
     /* The LDXR may be separated from the load by a few NOPs. */
     for (gap = 0; gap < 4U; ++gap) {
@@ -1830,19 +1924,21 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
 
     out->base = regs->x[lrn];
     out->value = lrt == 31U ? 0 : regs->x[lrt];
+    out->stxr_pc = stxr_pc;
     out->size = 1U << lsize;
     out->data_reg = lrt;
     out->base_reg = lrn;
     out->status_reg = srs;
     out->acquire = (ldxr_insn & (1U << 15)) != 0;
-    out->release = (after & (1U << 15)) != 0;
+    out->release = (stxr_insn & (1U << 15)) != 0;
     out->valid = 1;
 }
 
 /* Commit a prepared bridge after uy_emulate_load() advanced PC past the
  * faulting load.  The store is the STXR's own (same address, width and value),
  * so a failure to write leaves PC on the STXR and the native instruction runs
- * instead. */
+ * instead.  A bounded run of NOPs may sit between the load and the store; the
+ * handler skips those and resumes after the STXR. */
 static void uy_llsc_commit(struct pt_regs *regs, uint64_t fault_pc,
                            const struct uy_llsc *plan)
 {
@@ -1855,7 +1951,7 @@ static void uy_llsc_commit(struct pt_regs *regs, uint64_t fault_pc,
     if (plan->acquire) __asm__ volatile("dmb ishld" : : : "memory");
     if (plan->release) __asm__ volatile("dmb ishst" : : : "memory");
     if (plan->status_reg != 31U) regs->regs[plan->status_reg] = 0;
-    regs->pc += 4U;
+    regs->pc = plan->stxr_pc + 4U;
     __atomic_fetch_add(&g_sess.llsc, 1, __ATOMIC_RELAXED);
 }
 
@@ -1866,8 +1962,8 @@ static void uy_llsc_commit(struct pt_regs *regs, uint64_t fault_pc,
  * decoded access range.  On success the model is committed to `regs`. A
  * negative return is a fail-closed condition; *bad then names the address
  * whose access would have raised the original fault.  When `llsc` is not NULL
- * the function also records, before committing any register, whether an
- * adjacent exclusive sequence can be completed by the caller. */
+ * the function also records, before committing any register, whether a
+ * bounded exclusive sequence can be completed by the caller. */
 static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
                            uint64_t far, int check_far, uint64_t *bad,
                            struct uy_llsc *llsc)
@@ -2063,6 +2159,34 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
     }
 
 serve:
+    /* A store that the VMA would accept natively is not emulated: the AP[1]
+     * trap is removed and the original do_page_fault() performs the normal
+     * COW and write.  The page image can no longer describe the bytes after
+     * that store, so the page is marked dead for the rest of the session.
+     *
+     * A store to a VMA that is not writable is left alone: the native outcome
+     * is SIGSEGV, and it must stay SIGSEGV (a detector must not be able to
+     * kill the overlay with an illegal write it catches). */
+    if (g_sess.mode == UROV_Y_MODE_PAGE_AP && ec == UY_EC_DABT_LOW &&
+        (esr & UY_ESR_WNR) && !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) {
+        struct uy_page *wp = page_find(page_base(far));
+
+        if (wp && __atomic_load_n(&wp->armed, __ATOMIC_ACQUIRE) &&
+            !__atomic_load_n(&wp->dead, __ATOMIC_ACQUIRE)) {
+            void *vma = f_find_vma(g_sess.mm, far);
+            unsigned long flags = vma ?
+                *(unsigned long *)((char *)vma + g_layout.vma_flags) : 0;
+
+            if ((flags & UY_VM_WRITE) &&
+                page_set_ap(g_sess.mm, wp->base, 1) >= 0) {
+                __atomic_store_n(&wp->dead, 1, __ATOMIC_RELEASE);
+                __atomic_store_n(&wp->armed, 0, __ATOMIC_RELEASE);
+                flush_tlb_all();
+            }
+        }
+        goto out;
+    }
+
     if (g_sess.mode == UROV_Y_MODE_PAGE_AP && ap_read) {
         struct uy_page *page = page_find(page_base(far));
         struct uy_page *code = page_find(page_base(regs->pc));
@@ -2169,8 +2293,11 @@ static void uy_mm_fault_after(hook_fargs4_t *args, void *udata)
     if (!__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) {
         if (g_sess.mode == UROV_Y_MODE_PAGE_AP) {
             struct uy_page *p = page_find(page);
-            if (p && __atomic_load_n(&p->armed, __ATOMIC_ACQUIRE))
+            if (p && __atomic_load_n(&p->want, __ATOMIC_ACQUIRE) &&
+                !__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) {
                 ret = page_set_ap(mm, page, 0);
+                if (ret == 0) __atomic_store_n(&p->armed, 1, __ATOMIC_RELEASE);
+            }
             else if (!p && !(args->local.data2 & UY_FAULT_WRITE) &&
                      __atomic_load_n(&g_code.valid, __ATOMIC_ACQUIRE))
                 uy_code_scan_fault_page(mm, page);
@@ -2932,7 +3059,10 @@ static void uy_kread_after(hook_fargs6_t *args, void *udata)
 #define UY_CLONE_VM 0x00000100ULL
 #define UY_CLONE_VFORK 0x00004000ULL
 #define UY_MAP_FIXED 0x10ULL
+#define UY_MAP_FIXED_NOREPLACE 0x100000ULL
+#define UY_MREMAP_MAYMOVE 0x1ULL
 #define UY_MREMAP_FIXED 0x2ULL
+#define UY_MREMAP_DONTUNMAP 0x4ULL
 
 enum uy_gate_kind {
     UY_GATE_MPROTECT,
@@ -3017,10 +3147,6 @@ static int gate_range_overlaps(uint64_t start, uint64_t len)
     return 0;
 }
 
-#define UY_PROT_READ 0x1U
-#define UY_PROT_WRITE 0x2U
-#define UY_PROT_EXEC 0x4U
-
 /* Linux's madvise() accepts a bounded set of advice values and rejects the
  * rest before touching the VMA.  2.11.0 ran its range gate first, so
  * madvise(page, len, -1) ended the whole session and only then let Linux
@@ -3031,13 +3157,62 @@ static int uy_advice_valid(uint64_t advice)
     return advice == 100U || advice == 101U;  /* MADV_HWPOISON, SOFT_OFFLINE */
 }
 
-/* A protection change that keeps the page readable and executable cannot be
- * used to read the live bytes, so PAGE_AP stays armed and the after hook
- * re-applies the trap on the changed PTEs. */
-static int uy_prot_keeps_rx(uint64_t prot)
+/* Linux validates the address range before it takes the mmap lock or changes
+ * any VMA.  A syscall that Linux is going to reject with EINVAL must not end
+ * the session first: 2.12.0 checked the overlap before this validation, so
+ * mprotect(page + 1, 1, PROT_READ) returned EINVAL and still disarmed the
+ * whole overlay.  The checks below mirror the pre-mm-lock rejection paths for
+ * the gate syscalls; a rejected call is passed through untouched. */
+static int uy_mapping_range_ok(uint64_t start, uint64_t len)
 {
-    return (prot & (UY_PROT_READ | UY_PROT_EXEC)) == (UY_PROT_READ | UY_PROT_EXEC) &&
-           !(prot & UY_PROT_WRITE);
+    start &= (UINT64_C(1) << 56) - 1;
+    if (start & (g_page_size - 1U)) return 0;
+    if (start >= g_user_limit) return 0;
+    if (len > g_user_limit - start) return 0;
+    return 1;
+}
+
+#define UY_PROT_SEM 0x8U
+#define UY_PROT_GROWSDOWN 0x01000000U
+#define UY_PROT_GROWSUP 0x02000000U
+#define UY_PROT_BTI 0x10U
+#define UY_PROT_MTE 0x20U
+#define UY_PROT_MASK (UY_PROT_READ | UY_PROT_WRITE | UY_PROT_EXEC | UY_PROT_SEM | \
+                      UY_PROT_GROWSDOWN | UY_PROT_GROWSUP | UY_PROT_BTI | UY_PROT_MTE)
+
+static int uy_gate_args_invalid(int kind, uint64_t a0, uint64_t a1, uint64_t a2,
+                                uint64_t a3, uint64_t a4)
+{
+    switch (kind) {
+    case UY_GATE_MPROTECT:
+    case UY_GATE_PKEY_MPROTECT:
+        return !uy_mapping_range_ok(a0, a1) || (a2 & ~(uint64_t)UY_PROT_MASK);
+    case UY_GATE_MUNMAP:
+    case UY_GATE_MADVISE:
+        return !uy_mapping_range_ok(a0, a1);
+    case UY_GATE_MREMAP:
+        if (!uy_mapping_range_ok(a0, a1)) return 1;
+        if (a3 & ~(UY_MREMAP_MAYMOVE | UY_MREMAP_FIXED | UY_MREMAP_DONTUNMAP)) return 1;
+        if ((a3 & UY_MREMAP_FIXED) && !(a3 & UY_MREMAP_MAYMOVE)) return 1;
+        if ((a3 & UY_MREMAP_FIXED) && !uy_mapping_range_ok(a4, a2)) return 1;
+        return 0;
+    case UY_GATE_MMAP:
+        if (!uy_mapping_range_ok(a0, a1)) return 1;
+        /* Linux rejects the two fixed flags together before it unmaps
+         * anything; keeping that call away from the session is required. */
+        if ((a3 & (UY_MAP_FIXED | UY_MAP_FIXED_NOREPLACE)) ==
+            (UY_MAP_FIXED | UY_MAP_FIXED_NOREPLACE))
+            return 1;
+        return 0;
+    case UY_GATE_REMAP_FILE_PAGES:
+        if (!uy_mapping_range_ok(a0, a1) || a1 < g_page_size ||
+            (a1 & (g_page_size - 1U)) ||
+            (a2 & ~(uint64_t)(UY_PROT_READ | UY_PROT_WRITE | UY_PROT_EXEC)))
+            return 1;
+        return 0;
+    default:
+        return 0;
+    }
 }
 
 /* A protected mapping is restored before the native syscall runs. If a
@@ -3050,6 +3225,9 @@ static void uy_gate_before(hook_fargs6_t *args, void *udata)
 
     if (!caller_is_owner()) return;
     if (kind == UY_GATE_MMAP && !(sys_arg(args, 3) & UY_MAP_FIXED)) return;
+    if (uy_gate_args_invalid(kind, sys_arg(args, 0), sys_arg(args, 1),
+                             sys_arg(args, 2), sys_arg(args, 3), sys_arg(args, 4)))
+        return;
     if (kind == UY_GATE_MADVISE) {
         /* The advice itself never changes page permissions.  With PAGE_AP a
          * zapped PTE is re-armed by the fault path, so the session survives;
@@ -3057,10 +3235,28 @@ static void uy_gate_before(hook_fargs6_t *args, void *udata)
         if (!uy_advice_valid(sys_arg(args, 2))) return;
         if (overlay_live() && g_sess.mode == UROV_Y_MODE_PAGE_AP) return;
     }
+    if (kind == UY_GATE_REMAP_FILE_PAGES) {
+        /* The deprecated remap_file_pages() rejects a non-shared VMA before
+         * it changes any PTE.  An app's .text is MAP_PRIVATE, so this call
+         * must not be able to end the session on its way to EINVAL.  A
+         * genuinely shared VMA still takes the conservative teardown. */
+        void *vma;
+
+        if (!overlay_live() || g_sess.mode != UROV_Y_MODE_PAGE_AP) goto remap_release;
+        vma = f_find_vma(g_sess.mm, sys_arg(args, 0));
+        if (!vma || !(*(unsigned long *)((char *)vma + g_layout.vma_flags) & UY_VM_SHARED))
+            return;
+    }
+remap_release:
     if ((kind == UY_GATE_MPROTECT || kind == UY_GATE_PKEY_MPROTECT) &&
-        uy_prot_keeps_rx(sys_arg(args, 2)) && overlay_live() &&
-        g_sess.mode == UROV_Y_MODE_PAGE_AP)
+        overlay_live() && g_sess.mode == UROV_Y_MODE_PAGE_AP) {
+        /* 2.14.0: protection is virtual for the overlay.  The syscall still
+         * changes the VMA/PTE exactly as Linux wants; the after hook updates
+         * the trap state.  Nothing here may release the session: a
+         * protection-only change never makes the live bytes readable, and
+         * mprotect() calls that Linux rejects must not end the overlay. */
         return;
+    }
     if (!ctrl_try_lock()) {
         gate_error(args, -EBUSY);
         return;
@@ -3100,8 +3296,31 @@ static void uy_gate_after(hook_fargs6_t *args, void *udata)
 
     if (ret < 0 || !session_owned()) return;
     if ((kind == UY_GATE_MPROTECT || kind == UY_GATE_PKEY_MPROTECT) &&
-        g_sess.mode == UROV_Y_MODE_PAGE_AP && uy_prot_keeps_rx(sys_arg(args, 2)))
-        ap_rearm_range(g_sess.mm, sys_arg(args, 0), sys_arg(args, 1));
+        g_sess.mode == UROV_Y_MODE_PAGE_AP) {
+        unsigned spin;
+
+        /* Serialise with a control transaction (DEACTIVATE/SET): the after
+         * hook rewrites the leaf, and release_session() must not free the
+         * page array between the lookup and the PTE update.  The lock is
+         * only held for a short PTE walk, so a bounded yield is enough. */
+        for (spin = 0; spin < 1000U; ++spin) {
+            if (ctrl_try_lock()) break;
+            __asm__ volatile("yield" : : : "memory");
+        }
+        if (spin < 1000U) {
+            uint64_t ref = 0;
+
+            if (session_owned() &&
+                !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE))
+                ref = session_get();
+            if (ref) {
+                ap_protection_update(g_sess.mm, sys_arg(args, 0), sys_arg(args, 1),
+                                     sys_arg(args, 2));
+                uy_reader_exit(&g_readers, ref);
+            }
+            ctrl_unlock();
+        }
+    }
     if (!__atomic_load_n(&g_code.valid, __ATOMIC_ACQUIRE)) return;
     switch (kind) {
     case UY_GATE_MMAP:

@@ -140,6 +140,14 @@ def main():
             ap_views = [dict(KV.findall(line)) for line in re.findall(r"DOBBY_DETECT_AP [^\n]+", logs)]
             if [view["stage"] for view in ap_views] != expected:
                 raise IncompleteLog(f"{label}: missing AP reservation records in {log_path.name}")
+            recovery = [dict(KV.findall(line)) for line in
+                        re.findall(r"DOBBY_DETECT_KEYLESS_RESTORE [^\n]+", logs)]
+            expected_recovery = ["unarmed", "outside", "overlap"] if active else ["unarmed"]
+            if [step["stage"] for step in recovery] != expected_recovery:
+                raise IncompleteLog(f"{label}: missing keyless recovery controls in {log_path.name}")
+            if any(step["errno"] != "22" or step["bytes_expected"] != "1" or
+                   step["vma_preserved"] != "1" or step["execute"] != "1235" for step in recovery):
+                raise RuntimeError(f"{label}: keyless recovery did not preserve the fixture")
         if dobby and active and ("DOBBY_DETECT_RESTORE " not in logs or
                                  "DOBBY_DETECT_LOCK " not in logs or
                                  "DOBBY_DETECT_GUARD " not in logs):
@@ -169,6 +177,7 @@ def main():
             report["runs"][-1]["sibling_views"] = sibling_views
             report["runs"][-1]["split_views"] = split_views
             report["runs"][-1]["ap_views"] = ap_views
+            report["runs"][-1]["keyless_recovery"] = recovery
             last = stages[2] if active else stages[-1]
             live = live_views[2] if active else live_views[-1]
             many = many_views[2] if active else many_views[-1]

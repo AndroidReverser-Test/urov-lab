@@ -231,6 +231,87 @@ static void crc_ap_page_case(const char *name, const struct crc_patch_api *api,
             !uy_mapping_private_kb(address, &dirty, &anon) && !dirty && !anon,
             "CRC %s active mapping changed", name);
 
+    /* 2.14.0: a production CRC often wraps its hash in a protection change
+     * (drop EXEC, or make the text writable while it inspects it).  A
+     * protection-only change must not end the session or expose live bytes;
+     * the restore to RX must still execute the original code. */
+    {
+        struct ud_mapping prot;
+        uint64_t base = (uint64_t)address & ~(uint64_t)(UROV_Y_PAGE - 1U);
+        long ctl_rc;
+
+        REQUIRE(!ud_mapping_at("/proc/self/smaps", address, &prot),
+                "CRC %s protection VMA errno=%d", name, errno);
+        q = uy_req(UROV_Y_STATUS);
+        q.session = 1;
+        errno = 0;
+        ctl_rc = api->control(key, &q);
+        LOG("CRC_PROT_CTL name=%s stage=before rc=%ld errno=%d state=%u gen=%llu",
+            name, ctl_rc, errno, q.state, (unsigned long long)q.generation);
+        errno = 0;
+        REQUIRE(!mprotect((void *)(uintptr_t)base, UROV_Y_PAGE, PROT_READ),
+                "CRC %s mprotect(R) errno=%d", name, errno);
+        direct = crc_read_code(address, NULL);
+        window = crc_read_code(address, uy_business_ldrb);
+        q = uy_req(UROV_Y_STATUS);
+        q.session = 1;
+        errno = 0;
+        ctl_rc = api->control(key, &q);
+        LOG("CRC_PROT_CTL name=%s stage=R rc=%ld errno=%d state=%u gen=%llu",
+            name, ctl_rc, errno, q.state, (unsigned long long)q.generation);
+        REQUIRE(direct == clean_crc && window == patched_crc &&
+                !ctl_rc && q.state == UROV_Y_ACTIVE,
+                "CRC %s prot(R) direct=%08x window=%08x state=%u", name, direct, window,
+                q.state);
+        errno = 0;
+        REQUIRE(!mprotect((void *)(uintptr_t)base, UROV_Y_PAGE,
+                          PROT_READ | PROT_WRITE),
+                "CRC %s mprotect(RW) errno=%d", name, errno);
+        direct = crc_read_code(address, NULL);
+        window = crc_read_code(address, uy_business_ldrb);
+        q = uy_req(UROV_Y_STATUS);
+        q.session = 1;
+        errno = 0;
+        ctl_rc = api->control(key, &q);
+        LOG("CRC_PROT_CTL name=%s stage=RW rc=%ld errno=%d state=%u gen=%llu",
+            name, ctl_rc, errno, q.state, (unsigned long long)q.generation);
+        REQUIRE(direct == clean_crc && window == patched_crc &&
+                !ctl_rc && q.state == UROV_Y_ACTIVE,
+                "CRC %s prot(RW) direct=%08x window=%08x state=%u", name, direct, window,
+                q.state);
+        errno = 0;
+        REQUIRE(!mprotect((void *)(uintptr_t)base, UROV_Y_PAGE,
+                          PROT_READ | PROT_EXEC),
+                "CRC %s mprotect(RX) errno=%d", name, errno);
+        execute = crc_execute(address);
+        direct = crc_read_code(address, NULL);
+        window = crc_read_code(address, uy_business_ldrb);
+        q = uy_req(UROV_Y_STATUS);
+        q.session = 1;
+        errno = 0;
+        ctl_rc = api->control(key, &q);
+        LOG("CRC_PROT_CTL name=%s stage=RX rc=%ld errno=%d state=%u gen=%llu",
+            name, ctl_rc, errno, q.state, (unsigned long long)q.generation);
+        REQUIRE(execute == CRC_ORIGINAL_RETURN && direct == clean_crc &&
+                window == patched_crc && !ctl_rc && q.state == UROV_Y_ACTIVE,
+                "CRC %s prot restore execute=%04x direct=%08x window=%08x state=%u",
+                name, execute, direct, window, q.state);
+        LOG("CRC_PROT name=%s stage=all base=%llx execute=%04x direct=%08x window=%08x "
+            "state=%u generation=%llu", name, (unsigned long long)base, execute, direct,
+            window, q.state, (unsigned long long)q.generation);
+    }
+
+    /* mprotect() of one page inside the linker's multi-page .text splits that
+     * VMA in the kernel and does not merge it back.  That is native VMA
+     * bookkeeping caused by the probe, not by the module: re-baseline the
+     * post-deactivate identity check on the resulting mapping. */
+    REQUIRE(!ud_mapping_at("/proc/self/smaps", address, &before),
+            "CRC %s protection re-baseline errno=%d", name, errno);
+    LOG("CRC_PROT_VMA name=%s start=%llx end=%llx offset=%llx rx=%d shared=%d maywrite=%d",
+        name, (unsigned long long)before.start, (unsigned long long)before.end,
+        (unsigned long long)before.offset, before.readable && before.executable &&
+        !before.writable, before.shared, before.maywrite);
+
     if (!crc_deactivate(api, key)) return;
 
     execute = crc_execute(address);

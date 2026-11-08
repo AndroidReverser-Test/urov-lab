@@ -2,6 +2,277 @@
 
 本文按最新复核在前排列。
 
+## 2.14.0 保护切换存活与写入移交
+
+2026-11-08，Pixel 6 / Android 16 / `6.1.134-android14-11` / 4 KiB / KernelPatch
+`0xc00`。App 在 `untrusted_app` 域，`CapEff=0`、`Seccomp=2`、SELinux Enforcing。
+本轮改 `urov-y` 与测试 App，ABI 仍为 v8，请求布局、`ctl0` 字段、`hooks=0xff`
+和返回码不变。
+
+```text
+urov-y.kpm      51140d2147cf67f781f3883b5bac927d13e21279032f06c02562b5f80d49f175
+urovdetect.apk  889cb318e2766fda38bdebc517a50b2805cb4a36e6940f9c9e7b5fd7aea319f8
+```
+
+### 本轮消除的特征点
+
+| # | 2.13.0 仍成立的特征 | 2.14.0 做法 | 真机证据 |
+| --- | --- | --- | --- |
+| E3 | 对已登记页做任何成功的 `mprotect`（`PROT_READ`、`PROT_NONE`、`PROT_EXEC`、`PROT_READ\|PROT_WRITE`）都先 `release_session()`；App 随后读真实改码字节 | 会话在保护切换后继续存活；可读保护重新装 `AP[1]=0`，`PROT_NONE` 只挂起并在恢复可读时重装；private COW 页在 `mprotect(PROT_WRITE)` 后仍由镜像服务，第一次真实 store 才交给 Linux COW 并退役该页 | `CRC_PROT name=linker_text stage=all ... direct=f50bcaf6 window=0c7da8a0 state=1 generation=1`；`ELIM_PROT ... read_r=1 none_segv=1 exec_readable=1 rw_overlay=1 store_retired=1` |
+| E4 | 未分配 pkey 的 `pkey_mprotect`、private VMA 的 `remap_file_pages`、`MAP_FIXED\|MAP_FIXED_NOREPLACE` 会让门控先拆会话，Linux 随后才返回 `EINVAL` | `mprotect`/`pkey_mprotect` 在 owner 的 `PAGE_AP` 会话期间不再因重叠拆除；`remap_file_pages` 先做参数/private VMA 校验；`mmap` 补 fixed 标志组合预校验；Linux 拒绝的调用直接透传 | `CRC_PROT_CTL ... stage=R/RW/RX rc=0 errno=0 state=1`（三次保护切换后会话仍 ACTIVE）；`DOBBY_DETECT_RESTORE ... still_active=1 active_after_keyless=1` |
+
+实现与不引入新特征的论证见
+[ELIMINATION_2_14_DESIGN.md](ELIMINATION_2_14_DESIGN.md)。
+
+### 真机结果
+
+| 矩阵 | 结果 | 目录 |
+| --- | --- | --- |
+| Dobby 48×3 | PASS；3 个活动进程各 `accepted_crc=48/48`、`live=96964c4f`（等于文件）、`ap=0/48`、`accepted_crc_with_ap=48/48`；合计 `ap=0/144`、`accepted_crc_with_ap=144/144`；`views=0/144`、`xzr=0/144`、`cross_page=0/144`；`DOBBY_DETECT_RESTORE` 3/3 `still_active=1 active_after_keyless=1 inactive_after_deactivate=1 deactivate_errno=0` | [dobby-detect-20261108-114638](results/dobby-detect-20261108-114638/summary.json) |
+| CRC 5×2 | PASS，16 次运行；`crc-ap-text`/`crc-ap` 在 overlay 后追加 `mprotect(R)`→`mprotect(RW)`→`mprotect(RX)`，三个阶段普通 CRC 都等于镜像、`STATUS` 都 `state=1`，恢复 RX 后执行仍为原返回值；`CRC_PROT` 与 `CRC_PROT_VMA` 记录单页 VMA 的原生拆分 | [crc-20261108-114724](results/crc-20261108-114724/summary.json) |
+| 消除矩阵 3×1 | PASS，11 次运行、21 个 case、63 次观测；`w-active` 的 `ELIM_PROT` 验证 `mprotect(R)` 读镜像、非法 store 不杀覆盖、`PROT_NONE` 原生 `SIGSEGV`、`PROT_EXEC` 可读叶仍读镜像、`mprotect(RW)` 读镜像、真实 store 后该页退役且写入成功、`DEACTIVATE` 成功；`exclusive_match=0`、`reader_match=0`、`ap_match=0`、6048 个 accepted triplets；`site_call_ns=292` | [eliminate-20261108-114809](results/eliminate-20261108-114809/summary.json) |
+| 多页 5×1 | PASS，6 次运行；`mp-prod` 24 页 / 96 KiB、`paths=5`、`child_overlay=1`、`kmem_errno=0` | [multipage-20261108-114927](results/multipage-20261108-114927/summary.json) |
+
+全部矩阵前后 boot ID 一致，增量内核日志未匹配 `BUG:`/`WARNING:`/`Oops`/
+panic/RCU stall/hung task，测试后 `kpm list` 为空。
+
+### 机制要点
+
+- **保护状态机**：每页内部 `want`/`armed`/`dead`。`mprotect` 成功后按新 prot
+  重装或挂起 `AP[1]=0`；只有 `PROT_NONE` 在 arm64 上是真正的 EL0 不可读叶，
+  此时把 `want`/`armed` 清零、**不改 PTE**，让原生 `SIGSEGV` 保持。
+- **写入移交**：`mprotect(PROT_WRITE)` 后 private 文件叶仍是只读 COW，读陷阱
+  继续有效；第一次 `WNR=1` 的 store 故障把 `AP[1]` 恢复、置 `dead=1`，不
+  `skip_origin`，由原 `do_mem_abort()` 完成 COW。非法 store（VMA 不可写）
+  不碰陷阱，保持原生 `SIGSEGV`。
+- **门控**：owner 的 `PAGE_AP` 会话期间 `mprotect`/`pkey_mprotect` 不再因
+  重叠 `release_session()`；`remap_file_pages` 的 private VMA、`mmap` 的
+  `MAP_FIXED|MAP_FIXED_NOREPLACE` 先校验后透传。
+- **输出面**：没有新增 syscall hook、ABI 字段、文件、线程、定时器或返回码；
+  `hooks` 仍为 `0xff`，`ctl0` 文本格式不变。真实 store 后该页 `armed` 计数
+  降为 0，但会话仍 ACTIVE，`DEACTIVATE` 正常。
+
+### 2.13.0 的对照
+
+同一设备、同一测试 App 矩阵的 2.13.0 构建（KPM `3395b61b…`、APK
+`6c1726f4…`）在保护切换上：
+
+| 阶段 | 2.13.0 | 2.14.0 |
+| --- | --- | --- |
+| `mprotect(PROT_READ)` 后读 | 会话已拆除，读到真实改码字节 | 会话 ACTIVE，读到镜像 |
+| `mprotect(PROT_READ\|PROT_WRITE)` 后读 | 会话已拆除，读到真实改码字节 | 会话 ACTIVE，仍读到镜像 |
+| `PROT_NONE` 后读 | 会话已拆除；恢复 RX 后读真实字节 | 会话 ACTIVE；`PROT_NONE` 期间原生 `SIGSEGV`；恢复 RX 后读镜像 |
+| 首次真实 store | 无（会话已结束） | 原 Linux COW 完成写入；该页 `dead`，后续读真实字节 |
+
+### 残余（2.14.0）
+
+1. **真实 store 会退役该页覆盖**：普通 store、`STP`、原子 RMW
+   （`LDADD`/`SWP`/`CAS`）、`DC ZVA` 都让该页 `dead`；检测器写一个字节
+   （包括写回原值）后即可读真实字节。这是“不解码 store”的边界。
+2. `munmap`/`mremap`/`MAP_FIXED` 覆盖、owner `execve`、进程退出仍结束会话；
+   `fork` 子进程把自己的拷贝改成可写仍不受 owner 门控保护。
+3. `pkey_mprotect` 在支持 POE 且 pkey 已分配的内核上没有逐项建模 pkey
+   权限；本机 arm64 6.1 无 POE，App 的 seccomp 对 syscall 288 直接
+   `SIGSYS`，测试无法从 `untrusted_app` 覆盖。
+4. `remap_file_pages` 只在 private VMA 上免拆除；shared VMA 的合法重映射仍
+   保守结束会话。
+5. `LDXR XZR` 非零目标、`LDXP/STXP`、非 `NOP/BTI` 间隔、计时/PMU 仍是
+   2.13 的残余；`site_call_ns=288/292` 与 2.13 的 280/285 同量级。
+6. 单页 `mprotect` 会把多页 `.text` 拆成 VMA，这是 Linux 原生行为；
+   `CRC_PROT_VMA` 明确记录并重新取基线，不把它归因于模块。
+7. root 仍可用 `kpm list`/`ctl0 status` 看到模块和会话。
+
+### 复跑
+
+```powershell
+./kpms/urov-lab/build.ps1
+./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --dobby-detection --repeats 48 --cycles 3
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --repeats 5 --cycles 2
+python ./kpms/urov-lab/tools/run_elimination_device.py --serial $Serial --key $KpKey --skip-x-control --repeats 3 --cycles 1
+python ./kpms/urov-lab/tools/run_multipage_device.py --serial $Serial --key $KpKey --repeats 5 --cycles 1
+```
+
+## 2.13.0 普通 App 的 AP 探针与无效映射门控消除
+
+2026-11-08，Pixel 6 / Android 16 / `6.1.134-android14-11` / 4 KiB / KernelPatch
+`0xc00`。App 在 `untrusted_app` 域，`CapEff=0`、`Seccomp=2`、SELinux Enforcing。
+本轮改 `urov-y` 与测试 App，ABI 仍为 v8，请求布局、`ctl0` 字段、`hooks=0xff`
+和返回码不变。
+
+```text
+urov-y.kpm      3395b61bd8c707d281b9dc908fee27c56d6eb8f950a8a983b285447e58ae5b62
+urovdetect.apk  6c1726f458b80812cb0fc0648e3cdc1f28547aaf6e3efabfaa6a1fc96fa48b83
+```
+
+### 本轮消除的特征点
+
+| # | 2.12.0 仍成立的特征 | 2.13.0 做法 | 真机证据 |
+| --- | --- | --- | --- |
+| E1 | `LDXR; LDRB; NOP; STXR` 的目标 `STXR` 在 `ERET` 后失败，AP 探针 `MATCH` | AP 桥在故障 load 后做有界前向扫描（最多 8 条，只允许 `NOP/BTI`），命中 `STXR/STLXR` 后补做原 store、置状态 0、跳过间隔和 `STXR` | 3 个活动进程各 `ap=0/48`、`accepted_crc_with_ap=48/48`，合计 144/144（2.12.0 为 `ap=48/48`、`accepted_crc_with_ap=0`） |
+| E2 | 非对齐 `mprotect(page+1,1,PROT_READ)` 先撤销会话再返回 `EINVAL`，App 可无密钥恢复 | 映射门控在拿控制锁/撤销会话前镜像 Linux 的页对齐、`TASK_SIZE`、`prot`、`mremap` flags 预校验；Linux 会拒绝的调用直接透传，不碰会话 | `DOBBY_DETECT_RESTORE ... still_active=1 active_after_keyless=1 inactive_after_deactivate=1 deactivate_errno=0`，3/3 活动进程；镜像保持 `file` 字节，VMA 不变 |
+
+实现与不引入新特征的论证见
+[ELIMINATION_2_13_DESIGN.md](ELIMINATION_2_13_DESIGN.md)。
+
+### 真机结果
+
+| 矩阵 | 结果 | 目录 |
+| --- | --- | --- |
+| Dobby 48×3 | PASS；3 个活动进程各 `accepted_crc=48/48`、`live=96964c4f`（等于文件）、`ap=0/48`、`accepted_crc_with_ap=48/48`；`views=0/144`、`iov1024/sibling/split` 全等、`xzr=0/144`、`cross_page=0/144`、`bridge/nop/ind` 全 0；`DOBBY_DETECT_RESTORE` 3/3 | [dobby-detect-20261108-110733](results/dobby-detect-20261108-110733/summary.json) |
+| CRC 5×2 | PASS，16 次运行（BRK/UXN/AP/AP-all/text/libc/big 及 clean/idle）；门控预校验未改变合法映射行为 | [crc-20261108-110819](results/crc-20261108-110819/summary.json) |
+| 消除矩阵 3×1 | PASS，11 次运行、21 个 case、63 次观测；`exclusive_match=0`、`reader_match=0`、`ap_match=0`、6048 个 accepted triplets、0 个目标 store 失败；`site_call_ns=280`（2.12.0 为 285/286） | [eliminate-20261108-110905](results/eliminate-20261108-110905/summary.json) |
+| 多页 5×1 | PASS，6 次运行；`mp-prod` 24 页 / 96 KiB、`paths=5`、`child_overlay=1`、`kmem_errno=0` | [multipage-20261108-111020](results/multipage-20261108-111020/summary.json) |
+
+全部矩阵前后 boot ID 一致，增量内核日志未匹配 `BUG:`/`WARNING:`/`Oops`/
+panic/RCU stall/hung task，测试后 `kpm list` 为空。
+
+### 2.12.0 的对照
+
+同一设备、同一测试 App 矩阵的 2.12.0 构建（KPM
+`13ca0c0c…`、APK `2b9427f9…`）在活动阶段为：
+
+| 阶段 | AP 探针 `MATCH` | `accepted_crc_with_ap` | `DOBBY_DETECT_RESTORE` |
+| --- | ---: | ---: | --- |
+| 2.12.0 活动 | 48/48 | 0 | `inactive_after_keyless=1`（非对齐 `mprotect` 拆会话） |
+| 2.13.0 活动 | **0/48** | **48/48** | `active_after_keyless=1`，随后认证 `DEACTIVATE` |
+
+因此，2.12.0 文档中“用 AP 探针拒绝采信”和“用非对齐 `mprotect` 撤销会话”
+这两条普通 App 阻断路径在 2.13.0 上都不再成立。
+
+### 机制要点
+
+- **前向 LL/SC 窗口**：`uy_llsc_prepare()` 从故障 load 的 `PC+4` 起最多扫描
+  8 条指令；只允许 `NOP/BTI` 作为间隔，遇到 `CLREX`、`SVC`、另一次
+  load/store 或会改寄存器的 ALU 指令立即放弃。仍要求 `LDXR/LDAXR` 在
+  load 前 0–3 条 `NOP` 内、宽度/基址/数据寄存器一致、`LDXR` 结果仍等于
+  `[Xn]`，并经过既有全进程直接分支位图和 GPR 门控。提交时写 `STXR` 自己
+  的值、状态寄存器置 0、`PC` 设为 `STXR+4`。
+- **门控预校验**：`uy_gate_before()` 在 `ctrl_try_lock()`/`release_session()`
+  之前检查 `mprotect`/`pkey_mprotect`/`munmap`/`madvise`/`mremap`/
+  `mmap(MAP_FIXED)` 的页对齐、范围、`prot` 和 `mremap` flags。非法调用直接
+  透传，Linux 仍返回 `EINVAL`；合法调用保持 2.12.0 的保活/重装/结束策略。
+- **输出面**：没有新增 syscall hook、ABI 字段、文件、线程、定时器或返回码；
+  `hooks` 仍为 `0xff`，`ctl0` 文本格式不变。
+
+### 残余（2.13.0）
+
+1. `LDXR XZR; ...; STXR XZR` 且目标内存非零时仍不代写：`XZR` 无执行存证，
+   代写零可能改变未执行 `LDXR` 的内存。消除矩阵保留 `nonzero` 正对照。
+2. `LDXP/STXP` 成对独占、非 `NOP/BTI` 间隔、`CLREX`/`SVC` 间隔仍不桥；
+   fail-closed，不是新增能力。
+3. 每次读仍一次同步异常（约 280 ns 站点调用）；桥的 store 仍是内核 nofault
+   普通写，不是硬件独占 store；计时仍可区分。
+4. 可写 `mprotect`、`munmap`/`mremap`/`MAP_FIXED`、owner `execve`、进程退出
+   仍结束会话；子进程把拷贝改成可写后该子进程失去覆盖。
+5. PTE 重装窗口、孤儿陷阱修复依赖模块仍加载、`fork` 不重建会话状态、
+   `REGISTER` 后新建匿名可执行页的位图残余、`caller_count>0` 窗口语义、
+   root 可见性和 App 自己的 seccomp 控制面均不变。
+6. `pkey_mprotect` 的 pkey 取值和 `remap_file_pages` 的架构特定参数没有逐项
+   镜像 Linux 校验；本文只覆盖常见预校验路径。
+
+### 复跑
+
+```powershell
+./kpms/urov-lab/build.ps1
+./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --dobby-detection --repeats 48 --cycles 3
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --repeats 5 --cycles 2
+python ./kpms/urov-lab/tools/run_elimination_device.py --serial $Serial --key $KpKey --skip-x-control --repeats 3 --cycles 1
+python ./kpms/urov-lab/tools/run_multipage_device.py --serial $Serial --key $KpKey --repeats 5 --cycles 1
+```
+
+## 2.12.0 普通 App 无密钥检测与恢复
+
+2026-11-08，Pixel 6 / Android 16 / `6.1.134-android14-11` / 4 KiB / KernelPatch
+`0xc00`。App 在 `untrusted_app` 域，`CapEff=0`、`Seccomp=2`、SELinux Enforcing。
+本轮只改测试 App 和运行器，KPM 未改（SHA-256 `13ca0c0c…`，`hooks=0xff`、ABI v8）。
+新版 APK 的 SHA-256 为 `2b9427f9…`。ADB 使用 root 装卸 KPM 与检查设备状态；
+夹具用随机模块密钥建立会话并核对状态，检测探针和非对齐 `mprotect` 都不使用密钥或控制请求。
+
+### 机制与检测选择
+
+[`REGISTER`](urov_y_backend.c#L2323) 经 [`prctl` 鉴权](urov_y_backend.c#L2692)，把唯一
+活动会话绑定到调用者的 `mm`。登记时保留实际页快照，再将 `SRC_USER` 内容合入返回镜像；
+带调用窗口时依据 `x30` 和最多 16 层 `x29` 链选择镜像或快照，无窗口时统一取镜像。
+陷阱处理器模拟读取，写回 GPR / FPSIMD、回写地址和 PC。[读值选择](urov_y_backend.c#L1871)
+
+| 模式 | 实现与普通 App 的检查 |
+| --- | --- |
+| `SITE_BRK` | 登记的 load 指令经 COW 改成 BRK，异常按 `mm`、PC 和立即数匹配。对照签名发布 ELF 中已知读点的指令字；软件断点也会产生 BRK，COW 只作佐证。 |
+| `PAGE_UXN` | 设置读取点页的 UXN，模拟该页取指，VMA 和指令字可保持原样。只调用设计时放在读点同页的自有 `BTI C; RET` canary，用独立 RX 别名做独占预约对照。没有安全 canary 就标为未知。 |
+| `PAGE_AP` | 清登记页 PTE 的 AP[1]，真实指令仍供取指，数据读触发 `do_mem_abort`。用 `LDXR; LDRB; NOP; STXR` 做配对探测；异常返回丢失本地独占预约，而该版桥要求 `STXR` 紧跟故障 load，不会补做这条 store。 |
+
+`PAGE_AP` 的对照是同一文件、同一偏移的独立 `r--` 别名；该版要求目标 VMA 为 RX，不能
+直接登记此别名。探针预热后分三轮，每轮取 32 组「对照成功 → 目标 → 对照成功」。只有目标
+96 次全部失败才报 `MATCH`；结果混合、对照不稳或映射身份变化报 `UNKNOWN`。只读目标页，
+独占写回限于线程私有 scratch。采样字节不需要与对照相等，因此可将正常 COW 字节差异和
+读路径异常区分开。调试、缺页和 CPU 实现也能影响独占状态，阳性不是模块身份证明；
+阴性仅表示此次所采页和时段未观察到该现象。
+[探针接口](native/urov_observe.h#L81) · [桥的条件](urov_y_backend.c#L1770) ·
+[Arm 独占访问约束](https://support.arm.com/documentation/ddi0487/mb/-Part-B-The-AArch64-Application-Level-Architecture/-Chapter-B2-The-AArch64-Memory-Model/-B2-12-Synchronization-and-semaphores/-B2-12-5-Load-Exclusive-and-Store-Exclusive-instruction-usage-restrictions)
+
+2.12.0 已改写同/跨进程 `process_vm_readv` 以及 proc mem、ptrace 走的内核读缓冲区。
+换 CRC 读函数、换 iovec 数、锁页、fork、同权限 `mprotect(RX)` 和 `madvise` 都不宜作为
+本版 AP 的检测或恢复主方案。纯计时与 `maps/smaps` 的权限或脏页标记也不足以单独判定。
+
+### 真机对照
+
+测试 App 在专用 linker `.text` 页用 Dobby 将执行结果从 `0x1234` 改为 `0x1235`；
+开启 `PAGE_AP + SRC_USER` 后仍执行改码，读到的却是发布文件字节。
+
+| 阶段 | 样本数 | 执行结果 | 内存 CRC32 | 探针 MATCH | UNKNOWN | 采信 CRC 通过 |
+| --- | ---: | --- | --- | ---: | ---: | ---: |
+| 原始代码 | 624 | `0x1234` | `96964c4f` | 0 | 0 | 624 |
+| 仅 Dobby 改码 | 624 | `0x1235` | `24a41313` | 0 | 1 | 0 |
+| 改码并开启覆盖 | 480 | `0x1235` | `96964c4f` | **480** | 0 | **0** |
+| 无密钥撤销覆盖 | 480 | `0x1235` | `24a41313` | 0 | 1 | 0 |
+
+13 个进程全部通过，含未加载、已加载但空闲、10 轮活动会话和卸载后对照。活动期
+46,080 组有效目标 `STXR` 全失败；1,728 个对照样本零命中、2 个未知。仅按旧读值判定会
+采信活动期 480 次 CRC；加入 AP 探针后全部拒绝采信。活动期单次探针平均 3.24 ms、
+最大 3.75 ms，含文件身份与映射检查；全矩阵最大 9.90 ms。并行业务执行
+12,091,520 次迭代，0 错误，UI 心跳最大间隔 31 ms。
+[Dobby 原始记录](results/dobby-detect-20261108-104239/summary.json)
+
+同一 KPM 的三模式矩阵 14 次 App 运行通过：`SITE_BRK` 2/2 见到读点 BRK 并在注销后恢复
+原指令；`PAGE_UXN` 取指 83/83 命中、263 次对照均阴性；`PAGE_AP` 的窗口内、窗口外、
+更新后和等值覆盖合计 64/64 命中独占探针。其他 UID 对照阴性。两套矩阵前后 boot ID
+一致，模块列表为空，内核增量日志无匹配的 BUG、Oops、WARNING 或挂起记录。
+[三模式原始记录](results/eliminate-20261108-103820/summary.json)
+
+### 如何阻断
+
+- **默认仅拒绝采信。** 对 `MATCH` 或 `UNKNOWN` 不把这次 CRC 当作完整性证明。
+  普通业务照常。用签名发布清单定位 App 自有且稳定的 RX 代码页，持有映射和 fd 生命周期，
+  在后台低频复测。避免探测 JIT、热补丁或可卸载映射。必要时对敏感操作另做服务端验证。
+- **撤销本版 AP 的当前会话。** 在夹具中对已登记页执行 `mprotect(page + 1, 1, PROT_READ)`。
+  [模块的前置门控](urov_y_backend.c#L3046) 先按重叠范围撤销；[Linux 的对齐检查](https://github.com/torvalds/linux/blob/v6.1/mm/mprotect.c)
+  随后拒绝修改 VMA。未激活时 13/13 不改变读值；活动期对非重叠别名 10/10 保持伪造，
+  对登记页 10/10 撤销伪造并恢复改码字节；全部返回 `EINVAL`，目标映射身份、权限和执行
+  结果保持。必须用前后读值与探针复核，`EINVAL` 本身没有检测价值。该动作会撤销整个
+  会话，依赖这一版门控顺序，建议仅用于受控恢复，不放入常规业务检测。
+  [恢复夹具](apps/urov-detect/dobby_crc_fixture.inc#L259)
+- **限制再次注册。** 恢复后，在安装过滤器前仍可重新注册（10/10）。在明确采用该策略的
+  进程启动时，可用 seccomp TSYNC 精确拒绝 ARM64、固定 magic、`REGISTER` 和 288 字节
+  请求的组合。实测安装 10/10，调用线程和已有同线程组线程的重试各 10/10 返回 `EPERM`。
+  过滤器仅阻断已受过滤的线程，既有会话需另行恢复；`NoNewPrivs` 和过滤器对进程生命周期
+  持久，启用前应核对进程模型。它不构成对内核执行权的隔离。
+  [过滤器夹具](apps/urov-detect/dobby_crc_fixture.inc#L157) ·
+  [Linux seccomp 文档](https://docs.kernel.org/userspace-api/seccomp_filter.html)
+
+结果仅限上述设备、模块和采样页。部署前需在其他 SoC、页大小和 App 生命周期上校准。
+普通 App 无法阻止已能改页表和异常处理器的内核；设备侧应使用已知可信签名镜像及锁定的
+Verified Boot，敏感请求可在服务端验硬件证明与新鲜挑战。启动证明不等于逐页运行时证明。
+[Android Verified Boot](https://source.android.com/docs/security/features/verifiedboot) ·
+[Android 硬件密钥证明](https://developer.android.com/privacy-and-security/security-key-attestation)
+
+```powershell
+.\kpms\urov-lab\apps\urov-detect\build.ps1
+python kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --dobby-detection --repeats 48 --cycles 10
+python kpms/urov-lab/tools/run_elimination_device.py --serial $Serial --key $KpKey --skip-x-control --repeats 8 --cycles 2
+```
+
 ## 2.12.0 生产读路径、锁页、映射门控与 fork 保活
 
 2026-11-08，Pixel 6 / Android 16 / `6.1.134-android14-11` / 4 KiB / KernelPatch

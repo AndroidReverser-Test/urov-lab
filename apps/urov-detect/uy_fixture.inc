@@ -133,6 +133,158 @@ static int uy_open_exec_reference(struct page *reference)
     return page_open_at(reference, MAP_PRIVATE, (const void *)pc);
 }
 
+/* 2.14.0: protection-only changes must not end the PAGE_AP session.  The
+ * fixture below uses a private file-backed map of its own library page, so a
+ * real store only changes this private COW copy.  It checks every transition
+ * a production CRC can use to get a live view: drop PROT_EXEC, PROT_NONE,
+ * execute-only, and add PROT_WRITE without storing. */
+static sigjmp_buf g_prot_jmp;
+static volatile sig_atomic_t g_prot_fault;
+
+static void prot_sigaction(int sig, siginfo_t *info, void *context)
+{
+    (void)sig;
+    (void)info;
+    (void)context;
+    ++g_prot_fault;
+    siglongjmp(g_prot_jmp, 1);
+}
+
+__attribute__((noinline)) static uint8_t prot_load8(const volatile uint8_t *p)
+{
+    uint8_t value = *p;
+
+    __asm__ volatile("" : "+r"(value) : : "memory");
+    return value;
+}
+
+__attribute__((noinline)) static void prot_store8(volatile uint8_t *p, uint8_t value)
+{
+    *p = value;
+    __asm__ volatile("" : : "r"(p), "r"(value) : "memory");
+}
+
+static int prot_expect_segv(int write_access, const void *address)
+{
+    struct sigaction action = {0}, old_segv, old_bus;
+    int faulted = 0;
+
+    g_prot_fault = 0;
+    action.sa_sigaction = prot_sigaction;
+    action.sa_flags = SA_SIGINFO;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGSEGV, &action, &old_segv) ||
+        sigaction(SIGBUS, &action, &old_bus))
+        return 0;
+    if (!sigsetjmp(g_prot_jmp, 1)) {
+        if (write_access) prot_store8((volatile uint8_t *)address, 0);
+        else (void)prot_load8((const volatile uint8_t *)address);
+    } else {
+        faulted = 1;
+    }
+    (void)sigaction(SIGSEGV, &old_segv, NULL);
+    (void)sigaction(SIGBUS, &old_bus, NULL);
+    return faulted && g_prot_fault > 0;
+}
+
+static void elimination_protection_case(struct uy_ctx *ctx)
+{
+    struct page p;
+    struct urov_y_request st = {0};
+    const uint64_t fake = UINT64_C(0x1122334455667788);
+    uint64_t generation = 0, disk;
+    const uint8_t *at;
+    int rc;
+
+    if (sysconf(_SC_PAGESIZE) != UROV_Y_PAGE || page_open(&p, MAP_PRIVATE)) {
+        REQUIRE(0, "PROT page open errno=%d", errno);
+        return;
+    }
+    at = p.address + p.entry + 8U;
+    disk = load64_at(at);
+    if (uy_register_page(ctx, &p, 8, fake, UROV_Y_MODE_PAGE_AP, &generation)) {
+        page_close(&p);
+        return;
+    }
+    ++g_cases;
+    REQUIRE(uy_business_ldr(at) == fake, "PROT overlay read=%llx",
+            (unsigned long long)uy_business_ldr(at));
+
+    /* A production CRC may drop PROT_EXEC while it hashes: reads must still
+     * come from the image, and an illegal store must not kill the overlay. */
+    errno = 0;
+    rc = mprotect(p.address, UROV_Y_PAGE, PROT_READ);
+    REQUIRE(rc == 0, "PROT mprotect(R) rc=%d errno=%d", rc, errno);
+    REQUIRE(uy_business_ldr(at) == fake, "PROT mprotect(R) exposed live bytes");
+    REQUIRE(!uy_status(ctx, &st) && st.state == UROV_Y_ACTIVE && st.reserved == 1,
+            "PROT mprotect(R) state=%u armed=%llu", st.state,
+            (unsigned long long)st.reserved);
+    REQUIRE(prot_expect_segv(1, at), "PROT mprotect(R) store did not fault");
+    REQUIRE(uy_business_ldr(at) == fake, "PROT illegal store killed the overlay");
+
+    /* PROT_NONE is a native SIGSEGV, not a fake read. */
+    errno = 0;
+    rc = mprotect(p.address, UROV_Y_PAGE, PROT_NONE);
+    REQUIRE(rc == 0, "PROT mprotect(NONE) rc=%d errno=%d", rc, errno);
+    REQUIRE(prot_expect_segv(0, at), "PROT mprotect(NONE) read did not fault");
+    REQUIRE(!uy_status(ctx, &st) && st.state == UROV_Y_ACTIVE && st.reserved == 0,
+            "PROT mprotect(NONE) state=%u armed=%llu", st.state,
+            (unsigned long long)st.reserved);
+
+    errno = 0;
+    rc = mprotect(p.address, UROV_Y_PAGE, PROT_READ | PROT_EXEC);
+    REQUIRE(rc == 0, "PROT restore RX rc=%d errno=%d", rc, errno);
+    REQUIRE(uy_business_ldr(at) == fake, "PROT RX restore did not re-arm");
+    REQUIRE(!uy_status(ctx, &st) && st.state == UROV_Y_ACTIVE && st.reserved == 1,
+            "PROT RX state=%u armed=%llu", st.state, (unsigned long long)st.reserved);
+
+    /* This arm64 kernel has no execute-only leaf: mprotect(PROT_EXEC) is
+     * recorded as --xp in maps but the PTE is still EL0-readable.  The
+     * overlay must follow the PTE and keep serving the image, not hand the
+     * live bytes to a detector that asks for "no read". */
+    errno = 0;
+    rc = mprotect(p.address, UROV_Y_PAGE, PROT_EXEC);
+    REQUIRE(rc == 0, "PROT mprotect(X) rc=%d errno=%d", rc, errno);
+    REQUIRE(uy_business_ldr(at) == fake, "PROT mprotect(X) exposed live bytes");
+    REQUIRE(!uy_status(ctx, &st) && st.state == UROV_Y_ACTIVE && st.reserved == 1,
+            "PROT mprotect(X) state=%u armed=%llu", st.state,
+            (unsigned long long)st.reserved);
+    errno = 0;
+    rc = mprotect(p.address, UROV_Y_PAGE, PROT_READ | PROT_EXEC);
+    REQUIRE(rc == 0 && uy_business_ldr(at) == fake, "PROT X restore rc=%d errno=%d",
+            rc, errno);
+
+    /* Adding PROT_WRITE without storing is the key production shape: the
+     * private file leaf stays COW read-only, so reads keep the image. */
+    errno = 0;
+    rc = mprotect(p.address, UROV_Y_PAGE, PROT_READ | PROT_WRITE);
+    REQUIRE(rc == 0, "PROT mprotect(RW) rc=%d errno=%d", rc, errno);
+    REQUIRE(uy_business_ldr(at) == fake, "PROT mprotect(RW) exposed live bytes");
+    REQUIRE(!uy_status(ctx, &st) && st.state == UROV_Y_ACTIVE && st.reserved == 1,
+            "PROT mprotect(RW) state=%u armed=%llu", st.state,
+            (unsigned long long)st.reserved);
+
+    /* The first real store is handed to Linux, which performs the normal COW.
+     * It changes this private copy only, and retires the stale image. */
+    prot_store8((volatile uint8_t *)p.address + UROV_Y_PAGE - 1U, 0);
+    REQUIRE(uy_business_ldr(at) == disk, "PROT store did not retire the overlay: %llx/%llx",
+            (unsigned long long)uy_business_ldr(at), (unsigned long long)disk);
+    REQUIRE(!uy_status(ctx, &st) && st.state == UROV_Y_ACTIVE && st.reserved == 0,
+            "PROT store state=%u armed=%llu", st.state, (unsigned long long)st.reserved);
+
+    /* Android denies execmod after this private page became dirty, so the
+     * test (like a real process) leaves the VMA writable and releases the
+     * session from that state. */
+    REQUIRE(uy_business_ldr(at) == disk, "PROT final read=%llx",
+            (unsigned long long)uy_business_ldr(at));
+    REQUIRE(uy_deactivate(ctx) == 0, "PROT DEACTIVATE errno=%d", errno);
+    LOG("ELIM_PROT result=PASS generation=%llu disk=0x%llx fake=0x%llx "
+        "read_r=1 none_segv=1 exec_readable=1 rw_overlay=1 store_retired=1",
+        (unsigned long long)generation, (unsigned long long)disk,
+        (unsigned long long)fake);
+    page_close(&p);
+}
+
 static void elimination_exec_case(const char *name, const struct page *reference,
                                   int repeats, enum ud_verdict expected)
 {
@@ -387,7 +539,7 @@ static void elimination_case(const char *name, const struct page *p, const uint8
         nonzero_unknown += nonzero.reservation_loss == UD_UNKNOWN;
         struct ud_exclusive_observation ap;
         ud_observe_ap_reservation(at, ro_alias + p->entry + delta, p->fd, offset, &ap);
-        REQUIRE(errno == EDOM && (ap.reservation_loss == expected_nonzero ||
+        REQUIRE(errno == EDOM && (ap.reservation_loss == UD_NO_MATCH ||
                 (ap.reservation_loss == UD_UNKNOWN && ap.error == EAGAIN)),
                 "%s AP verdict=%d accepted=%u failed=%u control=%u error=%d",
                 name, ap.reservation_loss, ap.accepted, ap.target_failed, ap.control_failed, ap.error);
@@ -706,6 +858,9 @@ static void elimination_active(const char *key_hex, int repeats, unsigned mode)
     elimination_exec_case("deactivated", &reference, repeats, UD_NO_MATCH);
     store_case("deactivated", &p, 8, repeats, UD_NO_MATCH);
     elimination_bridge_case("deactivated", &p, 8, UD_NO_MATCH);
+    /* A fresh private mapping: protection transitions and one real store,
+     * without touching the business page used above. */
+    if (mode == UROV_Y_MODE_PAGE_AP) elimination_protection_case(&ctx);
 
 out:
     if (have_thread) {
