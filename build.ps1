@@ -81,13 +81,19 @@ foreach ($test in @('emulate_test','native_test','kpm_check_test','copy_probe','
 & $clang @userFlags ('-I' + $repo) ('-I' + $PSScriptRoot) `
     (Join-Path $PSScriptRoot 'tests/v217_probe.c') -o (Join-Path $out 'v217_probe')
 if ($LASTEXITCODE -ne 0) { throw 'v217 probe compile failed' }
+# Standalone differential test for the urov-y LL/SC window model.  It shares
+# urov_y_window.h with the backend and needs no KPM or root to run.
+& $clang @userFlags ('-I' + $repo) ('-I' + $PSScriptRoot) `
+    -idirafter (Join-Path $repo 'kernel/include') `
+    (Join-Path $PSScriptRoot 'tests/urov_window_test.c') -o (Join-Path $out 'urov_window_test')
+if ($LASTEXITCODE -ne 0) { throw 'window model test compile failed' }
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-lab-check.kpm')
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-lab.kpm')
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'urov-x.kpm')
 $built = @('urov-lab.kpm', 'urov-lab-check.kpm', 'urov-x.kpm', 'urov-y.kpm', 'urov_overlay_test',
     'urov_hold_test', 'urov_hold2_test', 'urov_foreign_test', 'urov_y_test', 'urov_copy_probe',
     'urov_vector_fault_probe', 'urov_emulate_test', 'urov_native_test', 'urov_kpm_check_test',
-    'v217_probe')
+    'v217_probe', 'urov_window_test')
 $sums = foreach ($name in $built) {
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out $name)).Hash.ToLowerInvariant()
     "$hash  $name"

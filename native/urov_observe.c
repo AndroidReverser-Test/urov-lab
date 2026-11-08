@@ -197,8 +197,10 @@ done:
  * exactly this instruction sequence on the same backing-file byte.
  */
 __attribute__((noinline))
-static unsigned exclusive_once(const void *address, uint64_t *scratch, unsigned *byte)
+static unsigned exclusive_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                    uint64_t *aux)
 {
+    (void)aux;
     uint64_t old;
     unsigned value, failed;
     __asm__ volatile("ldxr %0, [%3]\n"
@@ -211,8 +213,10 @@ static unsigned exclusive_once(const void *address, uint64_t *scratch, unsigned 
 }
 
 __attribute__((noinline))
-static unsigned spaced_exclusive_once(const void *address, uint64_t *scratch, unsigned *byte)
+static unsigned spaced_exclusive_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                    uint64_t *aux)
 {
+    (void)aux;
     uint64_t old;
     unsigned value, failed;
     /* The NOP distinguishes this from the original adjacent-only bridge. */
@@ -227,8 +231,10 @@ static unsigned spaced_exclusive_once(const void *address, uint64_t *scratch, un
 }
 
 __attribute__((noinline))
-static unsigned post_load_nop_once(const void *address, uint64_t *scratch, unsigned *byte)
+static unsigned post_load_nop_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                    uint64_t *aux)
 {
+    (void)aux;
     uint64_t old;
     unsigned value, failed;
     /* Y 2.11.0 requires STXR at the faulting PC + 4. Keep the NOP after
@@ -245,8 +251,10 @@ static unsigned post_load_nop_once(const void *address, uint64_t *scratch, unsig
 }
 
 __attribute__((noinline))
-static unsigned post_load_alu_once(const void *address, uint64_t *scratch, unsigned *byte)
+static unsigned post_load_alu_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                    uint64_t *aux)
 {
+    (void)aux;
     uint64_t value;
     unsigned sample, failed;
     __asm__ volatile("ldxr %0, [%3]\n"
@@ -260,8 +268,116 @@ static unsigned post_load_alu_once(const void *address, uint64_t *scratch, unsig
 }
 
 __attribute__((noinline))
-static unsigned zero_exclusive_once(const void *address, uint64_t *scratch, unsigned *byte)
+static unsigned post_load_csel_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                    uint64_t *aux)
 {
+    uint64_t old;
+    unsigned sample, failed;
+    /* Either arm of CSEL preserves the value. UROV-Y 2.19's LL/SC bridge
+     * declines flag-reading instructions, leaving STXR to the hardware. */
+    (void)aux;
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     "ldrb %w1, [%4]\n"
+                     "csel %0, %0, %0, eq\n"
+                     "stxr %w2, %0, [%3]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+/* A plain LDR in the gap. The loaded word is what the STXR stores, so the
+ * recorded scratch value proves the load read the address the app named, at the
+ * width the app used. */
+__attribute__((noinline))
+static unsigned post_load_load_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                    uint64_t *aux)
+{
+    uint64_t old, loaded;
+    unsigned sample, failed;
+
+    aux[0] = UINT64_C(0x53495752414c4c44);
+    __asm__ volatile("ldxr %0, [%4]\n"
+                     "ldrb %w1, [%5]\n"
+                     "ldr %2, [%6]\n"
+                     "stxr %w3, %2, [%4]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(loaded), "=&r"(failed)
+                     : "r"(scratch), "r"(address), "r"(aux) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+/* A plain STR in the gap. The private word receives the sampled byte, so the
+ * observer can tell whether the window's store actually ran. */
+__attribute__((noinline))
+static unsigned post_load_store_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                     uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed;
+
+    uint64_t value;
+
+    aux[0] = UINT64_C(0x1230);
+    __asm__ volatile("ldxr %0, [%4]\n"
+                     "ldrb %w1, [%5]\n"
+                     "ldr %2, [%6]\n"
+                     "orr %2, %2, #1\n"
+                     "str %2, [%6]\n"
+                     "stxr %w3, %0, [%4]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(value), "=&r"(failed)
+                     : "r"(scratch), "r"(address), "r"(aux) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+/* A conditional branch in the gap, taken from the sampled byte. Both runs read
+ * the same byte, so both must reach the same value. */
+__attribute__((noinline))
+static unsigned post_load_branch_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                      uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed;
+
+    (void)aux;
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     "ldrb %w1, [%4]\n"
+                     "cbnz %w1, 1f\n"
+                     "orr %0, %0, #1\n"
+                     "1:\n"
+                     "stxr %w2, %0, [%3]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+/* A second LDXR in the gap re-establishes the reservation on the same word, so
+ * the STXR still succeeds natively. */
+__attribute__((noinline))
+static unsigned post_load_xload_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                     uint64_t *aux)
+{
+    uint64_t old, again;
+    unsigned sample, failed;
+
+    (void)aux;
+    __asm__ volatile("ldxr %0, [%4]\n"
+                     "ldrb %w1, [%5]\n"
+                     "ldxr %2, [%4]\n"
+                     "stxr %w3, %0, [%4]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(again), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned zero_exclusive_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                    uint64_t *aux)
+{
+    (void)aux;
     unsigned value, failed;
     __asm__ volatile("ldxr xzr, [%2]\n"
                      "ldrb %w0, [%3]\n"
@@ -274,10 +390,11 @@ static unsigned zero_exclusive_once(const void *address, uint64_t *scratch, unsi
 
 static const uint64_t scratch_initial = UINT64_C(0x5a5a5a5aa5a5a5a5);
 
-static unsigned nonzero_exclusive_once(const void *address, uint64_t *scratch, unsigned *byte)
+static unsigned nonzero_exclusive_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                        uint64_t *aux)
 {
     *scratch = scratch_initial;
-    unsigned status = zero_exclusive_once(address, scratch, byte);
+    unsigned status = zero_exclusive_once(address, scratch, byte, aux);
     return *scratch == (status ? scratch_initial : 0) ? status : 2U;
 }
 
@@ -286,6 +403,8 @@ enum unreserved_branch {
     UNRESERVED_TO_NOP,      /* direct branch to a NOP in the LDXR gap */
     UNRESERVED_INDIRECT,    /* ADR + BR to the LDRB, target left in x9 */
     UNRESERVED_CROSS_PAGE,
+    UNRESERVED_GAP_CLREX,   /* LDXR executes; CLREX clears it before the STXR */
+    UNRESERVED_GAP_SVC,     /* LDXR executes; SVC takes an exception in between */
 };
 
 /* Keep an unreachable LDXR in the bridge's look-behind and skip it with the
@@ -331,6 +450,33 @@ static int unreserved_store_once(const void *address, uint64_t *scratch,
                          "stxr %w1, %0, [%3]\n"
                          : "+&r"(value), "=&r"(status), "=&r"(*byte)
                          : "r"(scratch), "r"(address) : "memory");
+    } else if (branch == UNRESERVED_GAP_SVC) {
+        /* An exception in the gap. The kernel may clobber the caller-saved
+         * registers, so the monitored address and the loaded word live in
+         * callee-saved registers across the SVC. */
+        __asm__ volatile("stp x19, x20, [sp, #-16]!\n"
+                         "mov x19, %2\n"
+                         "mov x20, %3\n"
+                         "ldxr x21, [x19]\n"
+                         "ldrb %w1, [x20]\n"
+                         "mov x8, #172\n"
+                         "svc #0\n"
+                         "stxr %w0, x21, [x19]\n"
+                         "ldp x19, x20, [sp], #16\n"
+                         : "=&r"(status), "=&r"(*byte)
+                         : "r"(scratch), "r"(address)
+                         : "x21", "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8",
+                           "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17",
+                           "x30", "memory");
+    } else if (branch == UNRESERVED_GAP_CLREX) {
+        /* The LDXR really executes; CLREX in the gap then clears the
+         * reservation, so the architecture reports STXR failure. */
+        __asm__ volatile("ldxr %0, [%3]\n"
+                         "ldrb %w2, [%4]\n"
+                         "clrex\n"
+                         "stxr %w1, %0, [%3]\n"
+                         : "+&r"(value), "=&r"(status), "=&r"(*byte)
+                         : "r"(scratch), "r"(address) : "memory");
     } else {
         __asm__ volatile("clrex\n"
                          "b 1f\n"
@@ -370,7 +516,9 @@ static void observe_unreserved_store(const void *address, const void *reference,
     }
     out->error = identity(address, 1, backing_fd, offset, &target);
     if (out->error) goto done;
-    out->error = identity(reference, 1, backing_fd, offset, &control);
+    bool exec_reference = branch != UNRESERVED_GAP_CLREX && branch != UNRESERVED_GAP_SVC;
+
+    out->error = identity_with_exec(reference, 1, backing_fd, offset, exec_reference, &control);
     if (out->error) goto done;
     ssize_t got = pread(backing_fd, &file_byte, 1, offset);
     if (got != 1) { out->error = got < 0 ? errno : EIO; goto done; }
@@ -394,7 +542,7 @@ static void observe_unreserved_store(const void *address, const void *reference,
     out->error = identity(address, 1, backing_fd, offset, &after);
     if (out->error) goto done;
     if (!unchanged(&target, &after)) { out->error = EAGAIN; goto done; }
-    out->error = identity(reference, 1, backing_fd, offset, &after);
+    out->error = identity_with_exec(reference, 1, backing_fd, offset, exec_reference, &after);
     if (out->error) goto done;
     if (!unchanged(&control, &after)) { out->error = EAGAIN; goto done; }
     if (out->unexpected_stores == UD_STORE_TRIALS) out->verdict = UD_MATCH;
@@ -445,6 +593,22 @@ void ud_observe_unreserved_cross_page_status(const void *address, const void *re
                              UNRESERVED_CROSS_PAGE, out);
 }
 
+void ud_observe_gap_clrex_status(const void *address, const void *reference,
+                                 int backing_fd, off_t offset,
+                                 struct ud_store_observation *out)
+{
+    observe_unreserved_store(address, reference, backing_fd, offset, scratch_initial,
+                             UNRESERVED_GAP_CLREX, out);
+}
+
+void ud_observe_gap_svc_status(const void *address, const void *reference,
+                               int backing_fd, off_t offset,
+                               struct ud_store_observation *out)
+{
+    observe_unreserved_store(address, reference, backing_fd, offset, scratch_initial,
+                             UNRESERVED_GAP_SVC, out);
+}
+
 static uint64_t scalar_word(const void *address)
 {
     uint64_t value;
@@ -465,8 +629,10 @@ static int check_canary(const void *address, const void *reference, int fd, off_
 }
 
 __attribute__((noinline))
-static unsigned execution_once(const void *address, uint64_t *scratch, unsigned *byte)
+static unsigned execution_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                    uint64_t *aux)
 {
+    (void)aux;
     uint64_t old;
     unsigned failed;
     /* The only callable code in this window is the verified two-word canary.
@@ -482,9 +648,12 @@ static unsigned execution_once(const void *address, uint64_t *scratch, unsigned 
 }
 
 enum reservation_probe {
-    READ_ADJACENT, READ_SPACED, READ_POST_LOAD_NOP, READ_POST_LOAD_ALU,
+    READ_ADJACENT, READ_SPACED, READ_POST_LOAD_NOP, READ_POST_LOAD_ALU, READ_POST_LOAD_CSEL,
+    READ_POST_LOAD_LOAD, READ_POST_LOAD_STORE, READ_POST_LOAD_BRANCH, READ_POST_LOAD_XLOAD,
     READ_ZERO, READ_NONZERO, EXECUTE_CANARY
 };
+
+typedef unsigned (*probe_fn)(const void *, uint64_t *, unsigned *, uint64_t *);
 
 static void observe_reservation(const void *address, const void *reference,
                                 int backing_fd, off_t offset, enum reservation_probe probe,
@@ -492,19 +661,34 @@ static void observe_reservation(const void *address, const void *reference,
 {
     struct sample_identity target, control, after;
     int execute = probe == EXECUTE_CANARY;
-    bool ap_probe = probe == READ_POST_LOAD_NOP || probe == READ_POST_LOAD_ALU;
+    bool ap_probe = probe == READ_POST_LOAD_NOP || probe == READ_POST_LOAD_ALU ||
+                    probe == READ_POST_LOAD_CSEL || probe == READ_POST_LOAD_LOAD ||
+                    probe == READ_POST_LOAD_STORE || probe == READ_POST_LOAD_BRANCH ||
+                    probe == READ_POST_LOAD_XLOAD;
+    /* The value-producing probes store an input-derived word through the STXR;
+     * comparing it with the control run proves the modeled window computed the
+     * same registers and memory as the native instructions. */
+    bool valued = probe == READ_POST_LOAD_CSEL || probe == READ_POST_LOAD_LOAD ||
+                  probe == READ_POST_LOAD_STORE || probe == READ_POST_LOAD_BRANCH ||
+                  probe == READ_POST_LOAD_XLOAD;
     size_t size = execute ? sizeof(uint64_t) : 1U;
-    unsigned (*sample)(const void *, uint64_t *, unsigned *) = exclusive_once;
+    probe_fn sample = exclusive_once;
     if (execute) sample = execution_once;
     if (probe == READ_SPACED) sample = spaced_exclusive_once;
     if (probe == READ_POST_LOAD_NOP) sample = post_load_nop_once;
     if (probe == READ_POST_LOAD_ALU) sample = post_load_alu_once;
+    if (probe == READ_POST_LOAD_CSEL) sample = post_load_csel_once;
+    if (probe == READ_POST_LOAD_LOAD) sample = post_load_load_once;
+    if (probe == READ_POST_LOAD_STORE) sample = post_load_store_once;
+    if (probe == READ_POST_LOAD_BRANCH) sample = post_load_branch_once;
+    if (probe == READ_POST_LOAD_XLOAD) sample = post_load_xload_once;
     if (probe == READ_ZERO) sample = zero_exclusive_once;
     if (probe == READ_NONZERO) sample = nonzero_exclusive_once;
     /* Keep the scratch away from normal stack writes and compiler spills.
      * The caller does not share this stack storage with other threads.
      */
     _Alignas(2048) uint64_t scratch[256] = {0};
+    _Alignas(64) uint64_t aux[2] = {0, 0};
     int saved = errno, error;
     long ps = sysconf(_SC_PAGESIZE);
     uint64_t begin = now_ns();
@@ -528,8 +712,8 @@ static void observe_reservation(const void *address, const void *reference,
     /* Warm both addresses and the exclusive code, outside the measured window. */
     for (unsigned i = 0; i < 8; ++i) {
         unsigned a, b;
-        unsigned control_status = sample(reference, scratch, &a);
-        unsigned target_status = sample(address, scratch, &b);
+        unsigned control_status = sample(reference, scratch, &a, aux);
+        unsigned target_status = sample(address, scratch, &b, aux);
         if (control_status > 1U || target_status > 1U) { out->error = EPROTO; goto done; }
         if ((!ap_probe && a != b) ||
             (i && (a != control_byte || b != target_byte))) {
@@ -543,9 +727,20 @@ static void observe_reservation(const void *address, const void *reference,
         for (unsigned attempt = 0; attempt < UD_OBSERVE_TRIALS * 2U &&
                                    accepted < UD_OBSERVE_TRIALS; ++attempt) {
             unsigned a, b, c;
-            unsigned before = sample(reference, scratch, &a);
-            unsigned tested = sample(address, scratch, &b);
-            unsigned after_control = sample(reference, scratch, &c);
+            unsigned before = sample(reference, scratch, &a, aux);
+            uint64_t control_value = scratch[0], control_aux = aux[0];
+            unsigned tested = sample(address, scratch, &b, aux);
+            uint64_t target_value = scratch[0], target_aux = aux[0];
+            unsigned after_control = sample(reference, scratch, &c, aux);
+            if (valued && !out->value_seen && !before && !tested && !after_control) {
+                /* The store probe keeps its result in the private aux word. */
+                bool aux_value = probe == READ_POST_LOAD_STORE;
+
+                out->value_seen = 1;
+                out->control_value = aux_value ? control_aux : control_value;
+                out->target_value = aux_value ? target_aux : target_value;
+                out->value_match = out->target_value == out->control_value;
+            }
             if (before > 1U || tested > 1U || after_control > 1U) {
                 out->error = EPROTO; goto done;
             }
@@ -606,6 +801,36 @@ void ud_observe_ap_alu(const void *address, const void *reference, int backing_f
                        off_t offset, struct ud_exclusive_observation *out)
 {
     observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_ALU, out);
+}
+
+void ud_observe_ap_csel(const void *address, const void *reference, int backing_fd,
+                        off_t offset, struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_CSEL, out);
+}
+
+void ud_observe_ap_load(const void *address, const void *reference, int backing_fd,
+                        off_t offset, struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_LOAD, out);
+}
+
+void ud_observe_ap_store(const void *address, const void *reference, int backing_fd,
+                         off_t offset, struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_STORE, out);
+}
+
+void ud_observe_ap_branch(const void *address, const void *reference, int backing_fd,
+                          off_t offset, struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_BRANCH, out);
+}
+
+void ud_observe_ap_xload(const void *address, const void *reference, int backing_fd,
+                         off_t offset, struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_XLOAD, out);
 }
 
 void ud_observe_zero_exclusive(const void *address, const void *reference,

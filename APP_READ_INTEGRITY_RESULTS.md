@@ -2,9 +2,190 @@
 
 本文按最新复核在前排列。
 
+## 2.20.0 LL/SC 窗口的完整建模
+
+`urov-y` 2.20.0 把 2.19.0 的“STXR 前向白名单”换成**整窗建模**：故障 load 提交
+之后，handler 在私有寄存器副本上逐条执行 `LDXR..STXR` 之间的窗口指令（最多 24 条、
+`fault_pc+4 .. +96` 字节），gap 里的普通 load 走与故障 load 相同的
+`read_range(allow_fake)` 视图，gap 里的普通 store 先记录、提交时经内核 GUP/COW 写
+路径完成并把同样字节发布进 image/shadow，最后停在真正消费预约的 `STXR` 上。窗口内
+再出现的 `LDXR/LDAXR` 按架构重建预约并把监视地址移到新地址。方案与不引入新特征的
+论证见 [ELIMINATION_2_20_DESIGN.md](ELIMINATION_2_20_DESIGN.md)。
+[窗口执行](urov_y_backend.c#L2526) · [读](urov_y_backend.c#L2425) ·
+[写记录](urov_y_backend.c#L2472) · [提交](urov_y_backend.c#L2779)
+
+| 模式 | 实现 | 普通 App 的观察点 |
+| --- | --- | --- |
+| `SITE_BRK` | 私有 COW 页上的指定读指令换成 `BRK`，异常处理器模拟原 load | 用独立读指令核对已知读点的指令字，交叉检查业务/独立/内核三路读 |
+| `PAGE_UXN` | 读点页叶 PTE 设 UXN，由取指异常处理器模拟读指令及受限 `RET`/`NOP`/`BTI` | 交叉检查三路读视图与 canary 取指 |
+| `PAGE_AP` | 清目标页叶 PTE 的 `AP[1]`，EL0 数据读陷入模拟，取指走活页 | 六种窗口探针（下表）+ 三路读交叉检查 |
+
+### 探针与处置
+
+`--read-defense-v220` 在 `PAGE_AP` 上下发六种无密钥窗口探针，每种都把窗口算出的
+值通过 `STXR` 写进线程私有字，再与原生（同一序列、未装模块）比较：
+
+- `csel`：`LDXR; LDRB; CSEL x,x,x,EQ; STXR`，读 NZCV。2.19 的残余；
+- `load`：gap 里一条 `LDR`，其值就是 `STXR` 写回的值；
+- `store`：gap 里 `LDR`+`ORR`+`STR` 改私有字，观察该字是否真的被写；
+- `branch`：`CBNZ` 按读到的字节决定是否执行 `ORR`；
+- `xload`：gap 里第二条 `LDXR` 重建预约（2.19 也是 0，用于证明没把成功改成失败）；
+- `clrex` / `svc`：gap 里 `CLREX` 或 `SVC #0`。架构上这两者清本地监视器，原生
+  `STXR` 必须失败；探针要求模块装上后仍失败（`unexpected_stores == 0`），
+  即“拒绝建模”没有变成新特征。
+
+判定沿用 2.18/2.19 的配对控制：每个有效三元组由只读别名上的两次成功 `STXR` 夹住
+一次目标读取，三段各 32 个三元组；目标全失败记读陷阱，全成功记阴性，混合记未知。
+新增 `value`/`value_ok`：窗口算出的值与原生不一致时单独记失败，不给“预约保住了”
+的假阳性。
+[窗口探针](native/urov_observe.c) · [夹具](apps/urov-detect/read_defense_fixture.inc)
+
+### 真机结果
+
+Pixel 6 / Android 16 / ARM64 / 4 KiB / `6.1.134-android14-11` / KernelPatch
+`0xc00`。App 在 `untrusted_app`，`CapEff=0`、`Seccomp=2`、SELinux Enforcing。
+模块 `urov-y.kpm` SHA-256 `7b43e768…`，测试 APK `0d4d8ad5…`。
+[检测矩阵](results/read-defense-v220-20261108-201133/summary.json)
+
+6 种配置各 1 轮、每阶段 8 个样本。下表是覆盖阶段（`overlay`）的统计，另外 3 个
+阴性阶段（`clean`、`patch_only`、`deactivated`）与 `no-module`、`post-unload`
+全部为 0：
+
+| 活动覆盖配置 | load | store | branch | xload | csel | value_ok | clrex_bad | svc_bad |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| SITE_BRK 调用窗口 / 全调用者 | 0/8 | 0/8 | 0/8 | 0/8 | 0/8 | 32/32 | 0 | 0 |
+| PAGE_UXN 调用窗口 / 全调用者 | 0/8 | 0/8 | 0/8 | 0/8 | 0/8 | 32/32 | 0 | 0 |
+| PAGE_AP 调用窗口 | 0/8 | 0/8 | 0/8 | 0/8 | 0/8 | 32/32 | 0 | 0 |
+| PAGE_AP 全调用者 | 0/8 | 0/8 | 0/8 | 0/8 | 0/8 | 32/32 | 0 | 0 |
+
+全部 6 配置 × 5 阶段 × 8 样本 = 240 个样本，`unknown=0`；`clrex_done=svc_done=8`
+表示两种“原生必失败”的形状在每个阶段都被采样并保持失败。会话结束后 `kpm list`
+为空，前后 boot ID 一致，增量内核日志无 BUG/WARNING/Oops。
+
+单变量对照（同一 APK、同一页面，只换模块，`--repeats 4`，AP-all 覆盖阶段）：
+
+| 模块 | load | store | branch | csel | value_ok |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 2.19.0（`b173a91a…`） | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 |
+| 2.20.0（`7b43e768…`） | 0/4 | 0/4 | 0/4 | 0/4 | 16/16 |
+
+2.19 上只有 `xload` 一种形状能完成 `STXR`，所以 `value_ok` 分母是 4；2.20 上四种
+形状全部完成，分母 16，分子相同——窗口模型算出的寄存器与内存效果与原生一致。
+
+### 窗口模型的差分测试
+
+`out/urov_window_test`（源码 [tests/urov_window_test.c](tests/urov_window_test.c)，
+与 backend 共用 [urov_y_window.h](urov_y_window.h)）对 56 条指令用**独立写出的架构
+期望值**校验窗口模型：位域抽取/插入/符号扩展、逻辑立即数、`EXTR`、`MADD/MSUB`、
+`UDIV/SDIV`、变量移位、`RBIT/REV/REV16/REV32/CLZ/CLS`、`ADD/SUB`（含 `SP` 形式）、
+`MOVN/MOVZ/MOVK`、`CSEL/CSINC/CSINV/CSNEG`、`CCMP/CCMN`、`ADR/ADRP`、`NOP/BTI/
+DMB/ISB`、窗口内分支的取/不取，以及 `MRS/CLREX/SVC` 必须被拒绝。运行
+`adb shell /data/local/tmp/urov_window_test` 输出 `cases=56 failures=0`。该测试在
+开发中发现并修掉了三处建模错误（`UBFX/LSR/ASR` 的字段掩码、`CSINV/CSNEG` 的
+`op` 位、以及 `SBFIZ` 的符号位边界）。
+
+### 残余（2.20.0）
+
+计时、未解码 store 重放窗口、pkey/POE、root 可见性、子进程外部写、重放交叠与不缺页
+uaccess 写与 2.18/2.19 相同。窗口模型的边界是 `MRS/MSR`、SIMD&FP、SVE/SME、
+`BL/BLR/RET`、LSE 原子、成对独占和走出窗口区域的形状：它们在不装模块时通常成功，
+因此仍是潜在特征，但都不出现在编译器生成的 LL/SC 序列里。见
+[2.20.0 设计 §5](ELIMINATION_2_20_DESIGN.md#5-残余2200)。
+
+## 2.19.0 无密钥检测与防护复测
+
+`urov-y` 按地址空间建立会话。每个目标页保存登记时的 `snapshot` 和用
+`SRC_USER` 字节覆盖后的 `image`。读点的返回地址或帧链命中调用窗口时使用
+`image`，窗口外使用 `snapshot`。零个调用窗口表示全调用者。测试先做 Dobby
+改码再登记，因此伪造读值可以匹配文件，指令取指仍执行补丁。
+[目标页和会话](urov_y_backend.c#L4232) · [读值提交](urov_y_backend.c#L3647)
+
+| 模式 | 实现 | 普通 App 的观察点 |
+| --- | --- | --- |
+| `SITE_BRK` | 私有 COW 页上的指定读指令被换成 `BRK`，异常处理器模拟原 load | 用独立读指令核对已知读点的指令字。对目标页交叉检查业务读取和独立标量读取 |
+| `PAGE_UXN` | 给读点页的叶 PTE 设置 UXN，由取指异常处理器模拟读指令及受限的 `RET`、`NOP`、`BTI` | 交叉检查业务和独立读视图。可调用预置在同一读点页的无副作用 `BTI C; RET` canary，与未登记的 RX 别名成对比较独占预约 |
+| `PAGE_AP` | 清目标页叶 PTE 的 AP[1]，让 EL0 数据读陷入模拟。普通取指使用活页 | 用未被 LL/SC 桥补偿的 `LDXR; LDRB; CSEL; STXR` 测目标页 |
+
+`process_vm_readv` 的 GUP 源页可被替换，`__access_remote_vm` 能改写
+`/proc/*/mem` 和 ptrace 的返回，`vmsplice` 的 GUP 源页也有覆盖。fork 可以继承
+受陷阱影响的映射。全调用者 AP 下，多个接口与文件的 CRC 一致时仍可能执行
+不同的指令。早期双 iovec 读回、`mlock` 和等长 `mremap` 的结论以旧版本为准。
+[远端 pin](urov_y_backend.c#L4793) · [内核辅助读](urov_y_backend.c#L5010) ·
+[AP 异常](urov_y_backend.c#L3796) · [2.19 设计](ELIMINATION_2_19_DESIGN.md)
+
+### 探针与处置
+
+- `CSEL Xold, Xold, Xold, EQ` 在条件成立与否时都保留原值，读取 NZCV 而不修改
+  标志。2.19.0 补偿了常见整数数据处理 gap，遇到读标志的 `CSEL` 仍交给
+  硬件执行 `STXR`。目标读发生 AP 异常时，返回 EL0 后的独占预约丢失。探针只用
+  `LDRB` 读取目标，`STXR` 最多向线程私有临时字原样写回。
+  [模块解码](urov_y_backend.c#L1921) · [CSEL 探针](native/urov_observe.c#L263) ·
+  [Arm 独占访问约束](https://support.arm.com/documentation/ddi0487/mb/-Part-B-The-AArch64-Application-Level-Architecture/-Chapter-B2-The-AArch64-Application-Level-Memory-Model/-B2-12-Synchronization-and-semaphores/-B2-12-5-Load-Exclusive-and-Store-Exclusive-instruction-usage-restrictions)
+- 低频在工作线程检查自有、生命周期固定的 RX 页。验证设备号、inode、文件偏移和
+  VMA 前后一致。AP 对照用同文件同偏移的新 `PROT_READ` 别名。预热后取三轮
+  各 32 组有效的「对照成功 → 目标 → 对照成功」样本。目标全失败才记读陷阱，
+  全成功记本次未见异常。混合结果、别名对照异常或身份变更记 `UNKNOWN`。
+  独占失败还可能来自调试、调度或硬件行为，故将阳性限定为当前页的异常证据。
+  [对照和判定](native/urov_observe.c#L505)
+- 将实际读取、独立读取和已验证的文件基准用于完整性判断。确认设备允许
+  `process_vm_readv` 时可把它纳入交叉检查。稳定分歧、内容变化或读点/页陷阱
+  会阻止采信该完整性结果。若必需信号缺失或不稳定，完整性结论降为
+  `UNKNOWN`，业务继续。等值会话的陷阱阳性说明读路径被接管，样本字节仍可等于
+  原值。作用域限于采样地址和时段。
+  [夹具与判定](apps/urov-detect/read_defense_fixture.inc#L224)
+- 使用已验证制品的文件描述符或只读非执行映射提供原始字节，供版本校验和摘要
+  基准使用。专门设计的代码可使用新建 `PROT_EXEC` 映射并分离数据读取，或在
+  系统允许时使用私有匿名 RX。三种映射形状都被本版目标登记校验拒绝。只读别名
+  表示文件的原始字节，已被 COW 修改的执行页仍要单独检测。全局卸载或阻止
+  内核加载需要设备管理权限。
+  [目标校验](urov_y_backend.c#L1278) · [映射验证](apps/urov-detect/read_defense_fixture.inc#L380)
+- 两页 `MAP_SHARED` RX 的只读 fd 别名在真机上仍可登记。内核对这种 fd
+  清除 `VM_SHARED`，但 `maps` 仍能依据 `VM_MAYSHARE` 显示 `s`。
+  [反例日志](results/read-defense-v219-20261108-192929/read-defense-v219-brk-1-11202.log) ·
+  [Linux mmap](https://github.com/torvalds/linux/blob/v6.1/mm/mmap.c#L1277-L1279) ·
+  [Linux maps](https://github.com/torvalds/linux/blob/v6.1/fs/proc/task_mmu.c#L245-L249)
+
+### 真机结果
+
+Pixel 6 / Android 16 / ARM64 / 4 KiB / `6.1.134-android14-11` / KernelPatch
+`0xc00`。检测运行在 `untrusted_app`，`CapEff=0`、`Seccomp=2`，SELinux
+Enforcing。主机 root 用于 KPM 装卸和日志核验，模块密钥只供夹具建立、校验和
+拆除会话。探针入口只接收地址、文件和偏移等观察参数。
+[检测矩阵](results/read-defense-v219-20261108-193150/summary.json)
+
+每种配置运行 3 次，每阶段 32 个样本。下表统计真实补丁被覆盖的阶段。读点
+指令或 canary 每阶段检查一次。
+
+| 配置 | 读值分歧 | CSEL 陷阱 | 读点证据 | 新规则采信 |
+| --- | ---: | ---: | --- | ---: |
+| SITE_BRK 窗口 / 全调用者（各） | 96/96 | 0/96 | 指令字变化 3/3 | 0/96 |
+| PAGE_UXN 窗口 / 全调用者（各） | 96/96 | 0/96 | canary 取指陷阱 3/3 | 0/96 |
+| PAGE_AP 窗口 | 96/96 | 96/96 | — | 0/96 |
+| PAGE_AP 全调用者 | 0/96 | 96/96 | — | 0/96 |
+
+AP 全调用者下，旧 ADD 探针和三路字节比较仍采信 96/96，载荷执行值为
+`0x1235`。六种配置的等值会话也各自命中对应的读点或页陷阱。未登记阶段的
+1920 个样本中陷阱误报为 0，672/672 个原始样本获采信。仅 Dobby 改码及拆会话
+后仍保留补丁的样本被分类为内容变化。全部 3072 个样本最终 `UNKNOWN=0`。
+
+`PROT_READ` 别名、专用 `PROT_EXEC` 和私有匿名 RX 的登记尝试分别
+18/18 返回 `EINVAL`，原字节或执行值正常。21 次 App 进程启动累计记录
+4,868,608 次业务 worker 操作，错误为 0，UI 心跳最大间隔为 20 ms。
+7 种 CRC 配置回归通过，两套矩阵均保持 boot ID 一致，最终模块列表为空，
+增量内核日志没有 BUG、WARNING 或 Oops。性能和误报数据来自本机，其他
+机型或页大小应独立跑对照。
+[检测矩阵](results/read-defense-v219-20261108-193150/summary.json) ·
+[CRC 矩阵](results/crc-20261108-193256/summary.json)
+
+```powershell
+./kpms/urov-lab/apps/urov-detect/build.ps1
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --read-defense-v219 --repeats 32 --cycles 3
+python ./kpms/urov-lab/tools/run_crc_device.py --serial $Serial --key $KpKey --repeats 3 --cycles 1 --skip-install
+```
+
 ## 2.19.0 LL/SC 寄存器 gap 补完
 
-本节消掉 2.18.0 残余 §6.5 的唯一稳定普通 App、无密钥读侧特征：
+以下为原设计对 2.18.0 残余 §6.5 的补偿及旧探针基线。
 `PAGE_AP` 的读异常清掉本地独占监视器后，`LDXR; LDRB; ADD; STXR` 仍能观察到
 `STXR` 失败。2.19.0 保留 2.18.0 的 `LDXR` 执行证据、直接/间接分支门控和
 fail-closed 路径，只把 STXR 前向窗口从 NOP/BTI 扩到寄存器-only 整数数据加工。

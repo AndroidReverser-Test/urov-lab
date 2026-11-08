@@ -1,5 +1,24 @@
 # UROV-LAB
 
+`urov-y` 2.20.0 把 2.19.0 的“LL/SC 前向白名单”换成**整窗建模**：故障 load 提交
+之后，handler 在私有寄存器副本上逐条执行 `LDXR..STXR` 之间的全部窗口指令（最多
+24 条、96 字节区域），读 gap 里的普通 load（与故障 load 同一 image/snapshot 视图），
+把 gap 里的 store 记成待提交项并在提交时经内核 GUP/COW 写路径完成，最后在真正消费
+预约的 `STXR` 处停下。覆盖 `NOP/BTI/HINT#0/DMB/DSB/ISB`、整数加减/逻辑/位域/搬移/
+1·2·3 源数据加工、`CSEL` 族、`CCMP/CCMN`、`ADR/ADRP`、窗口内 `B/B.cond/CBZ/CBNZ/
+TBZ/TBNZ`、GPR `LDR/LDP/STR/STP` 和 `LDXR/LDAXR`。`CLREX`、异常、成对/不同宽度的
+独占、与监视地址重叠的 store 一律交给硬件——实测这些形状原生本来就失败
+（`clrex_bad=0`、`svc_bad=0`），所以拒绝它们是复现架构而不是掩盖特征。没有新增
+hook、线程、定时器、PTE/VMA/代码字，ABI 仍为 v8、`hooks=0xff`、请求布局、`ctl0`
+字段与返回码不变。普通 App 的无密钥探针（`--read-defense-v220`）在 AP-all 覆盖阶段
+从 2.19 的 `load=4 store=4 branch=4 csel=4` 变为全部 0，且窗口算出的值与原生一致
+（`value=32/32`）；CRC 的 `.text` 在 EL0/crc32/pipe/process_vm_readv/fork 上仍等于
+文件摘要，执行仍是 Dobby 的 `1235`。v220 6 模式 ×8、CRC 3×1、Dobby 8×1
+（`accepted_crc_with_ap=8/8`、`ap=0/8`）、消除 3×1、多页 3×1 均 PASS；
+`out/urov_window_test` 用 56 条独立期望值差分校验窗口模型。设计与残余见
+[ELIMINATION_2_20_DESIGN.md](ELIMINATION_2_20_DESIGN.md)。构建
+`urov-y.kpm 7b43e768...`。
+
 `urov-y` 2.19.0 消掉 2.18.0 残余里唯一稳定的普通 App、无密钥读侧特征：
 `PAGE_AP` 的读异常清掉本地独占监视器后，`LDXR; LDRB; ADD; STXR` 仍能观察到
 `STXR` 失败。2.19.0 保留 2.18.0 的 `LDXR` 执行证据、直接/间接分支门控和
@@ -400,6 +419,7 @@ BTF 选择。`QUERY` 报告基础页大小、页数配额和可用模式。2.4.0
 | `urov_foreign_test` | 非 owner 控制/死 owner 回收探针（root 运行） |
 | `urov-lab-check.kpm` | 历史只读预检产物，保留用于对照 |
 | `urov_emulate_test`、`urov_native_test`、`urov_copy_probe`、`urov_vector_fault_probe`、`urov_kpm_check_test` | 软件核心、原生差分与平台基线测试 |
+| `urov_window_test` | LL/SC 窗口模型差分测试（56 条指令，无 root/KPM） |
 
 普通 app 测试程序在 `apps/urov-app/out/urovapp.apk`，由
 `apps/urov-app/build-app.ps1` 构建（`-Hold` 生成生命周期变体
@@ -532,9 +552,12 @@ fake 字节按小端排列：`value` 是字节 0..7，`value_hi[0]` 是 8..15，
 | `APP_READ_INTEGRITY_AUDIT.md` / `APP_READ_INTEGRITY_RESULTS.md` | 读取完整性检测面、特征清单与 2.7.0 整页/间接分支门控复测（Dobby、消除矩阵、CRC、多页） |
 | `urov_x_backend.c` / `.h` / `urov_x.c` / `urov_x_abi.h` | covert 变体 `urov-x`：密钥化控制通道、读取点绑定、透明生命周期 |
 | `urov_y_backend.c` / `.h` / `urov_y.c` / `urov_y_abi.h` | `urov-y`：BRK 读取点、UXN 页陷阱、AP[1] 数据读陷阱；调用窗口、ABI v8 多页和向量读 |
+| `urov_y_window.h` | LL/SC 窗口模型（纯函数）：整数数据加工、`CSEL` 族、`CCMP/CCMN`、窗口内分支；由 backend 与窗口测试共用 |
+| `tests/urov_window_test.c` | 窗口模型的差分测试：56 条指令的编码与原生期望值 |
 | `urov_y_compat.h` / `urov_y_readers.h` | 内核 ABI、页表几何、BTF 校验和会话读侧引用 |
 | `PAGE_AP_KEYLESS_RESULTS.md` / `PAGE_AP_KEYLESS_RESULTS_R2.md` | 历史普通 App 复核：AP 数据陷阱和旧 LL/SC 桥（2.4.0 已移除） |
 | `tests/urov_y_test.c` | `urov-y` root 验收程序（三种模式；功能/fork/门控/活动期卸载/代码页探针） |
+| `tests/urov_window_test.c` | 窗口模型差分测试（真机或任意 arm64 环境运行，无 root、无 KPM） |
 | `apps/urov-detect/uy_fixture.inc` | `urov-y` App 夹具（`y-*` BRK、`z-*` UXN 页陷阱、`w-*` AP 数据陷阱） |
 | `apps/urov-detect/mp_fixture.inc` | ABI v8 App 夹具：24 页、SIMD、跨页、文件源及 `mp-audit` 并发/生命周期回归 |
 | `apps/urov-detect/crc_fixture.inc` | CRC 夹具：`crc-ap-text`/`crc-ap-libc`（标量 libc）与 `crc-ap-big`（整页覆盖 + SIMD 大长度传输、内部窗口、`SET`） |

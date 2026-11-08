@@ -40,14 +40,19 @@ def main():
     matrix.add_argument("--read-defense-v218", action="store_true",
                         help="test independent reads, LL/SC and protected mappings against urov-y 2.18.0")
     matrix.add_argument("--read-defense-v219", action="store_true",
-                        help="test the 2.19.0 ALU-gap LL/SC bridge against urov-y")
+                        help="test keyless detection and reference protection against urov-y 2.19.0")
+    matrix.add_argument("--read-defense-v220", action="store_true",
+                        help="test the modeled LL/SC window shapes against urov-y 2.20.0")
     parser.add_argument("--repeats", type=int, default=15)
     parser.add_argument("--cycles", type=int, default=3)
     args = parser.parse_args()
     if not 3 <= args.repeats <= 200 or not 1 <= args.cycles <= 10:
         parser.error("repeats 3..200, cycles 1..10")
 
-    if args.read_defense_v219:
+    if args.read_defense_v220:
+        prefix = "read-defense-v220"
+        modes = tuple(f"{prefix}-{shape}" for shape in ("brk", "brk-all", "uxn", "uxn-all", "ap", "ap-all"))
+    elif args.read_defense_v219:
         prefix = "read-defense-v219"
         modes = tuple(f"{prefix}-{shape}" for shape in ("brk", "brk-all", "uxn", "uxn-all", "ap", "ap-all"))
     elif args.read_defense_v218:
@@ -99,8 +104,9 @@ def main():
         defense = mode.startswith("read-defense-")
         v218 = mode.startswith("read-defense-v218-")
         v219 = mode.startswith("read-defense-v219-")
-        modern_defense = v218 or v219 or mode.startswith("read-defense-v216-")
-        defense_tag = "V219" if v219 else "V218" if v218 else "V216"
+        v220 = mode.startswith("read-defense-v220-")
+        modern_defense = v218 or v219 or v220 or mode.startswith("read-defense-v216-")
+        defense_tag = "V220" if v220 else "V219" if v219 else "V218" if v218 else "V216"
         active = mode != f"{prefix}-clean"
         shell("am", "force-stop", PACKAGE)
         argv = ["am", "start", "-W", "-n", ACTIVITY, "--es", "mode", mode,
@@ -173,6 +179,24 @@ def main():
             if (v218 or v219) and active and (f"READ_DEFENSE_{defense_tag}_GUARD shape=1 errno=22 "
                                               "inactive=1 reference=1 execute=1234" not in logs):
                 raise IncompleteLog(f"{label}: missing execute-only registration guard result")
+            if v219 or v220:
+                keyless = [dict(KV.findall(line)) for line in
+                           re.findall(r"READ_DEFENSE_KEYLESS [^\n]+", logs)]
+                if [s["stage"] for s in keyless] != expected:
+                    raise IncompleteLog(f"{label}: missing keyless probe records")
+                if active and "READ_DEFENSE_KEYLESS_GUARD shape=1 errno=22 inactive=1 intact=1" not in logs:
+                    raise IncompleteLog(f"{label}: missing read-only reference guard result")
+            if v220:
+                window = [dict(KV.findall(line)) for line in
+                          re.findall(r"READ_DEFENSE_KEYLESS2 [^\n]+", logs)]
+                if [s["stage"] for s in window] != expected:
+                    raise IncompleteLog(f"{label}: missing window probe records in {log_path.name}")
+                if any(s["load"] != "0" or s["store"] != "0" or s["branch"] != "0" or
+                       s["xload"] != "0" or s["unknown"] != "0" or
+                       s["value"] != s["value_ok"] or s["clrex_bad"] != "0" or
+                       s["clrex_done"] != s["n"] or s["svc_bad"] != "0" or
+                       s["svc_done"] != s["n"] for s in window):
+                    raise RuntimeError(f"{label}: window probes reported a residual feature")
         elif defense:
             remaps = [dict(KV.findall(line)) for line in re.findall(r"READ_DEFENSE_REMAP [^\n]+", logs)]
             if [step["stage"] for step in remaps] != (["unarmed", "outside", "overlap"] if active else ["unarmed"]):
@@ -242,13 +266,31 @@ def main():
                                                      r"|ELIM_EXEC|DOBBY_DETECT_(?:STATUS|RESTORE|LOCK|GUARD|BUSINESS|ACCESS|KMEM|FORK_KMEM|MANY|SIBLING|SPLIT)) [^\n]+", logs)})
         if modern_defense:
             report["runs"][-1]["details"] = re.findall(
-                rf"READ_DEFENSE_(?:{defense_tag}_(?:STATUS|GUARD)|GUARD|BUSINESS) [^\n]+", logs)
+                rf"READ_DEFENSE_(?:{defense_tag}_(?:STATUS|GUARD)|KEYLESS_GUARD|GUARD|BUSINESS) [^\n]+", logs)
             report["runs"][-1]["ui"] = dict(KV.findall(result[0]))
-            if v218 or v219:
+            if v219 or v220:
+                report["runs"][-1]["keyless"] = keyless
+            if v220:
+                report["runs"][-1]["window"] = window
+            if v218 or v219 or v220:
                 matches = ", ".join(f"{s['stage']}=split:{s['split']}/trap:{s['trap']}/accept:{s['accept']}"
                                     f" of {s['n']}" for s in stages)
             else:
                 matches = ", ".join(f"{s['stage']}={s['split']}/{s['n']}" for s in stages)
+            if v219:
+                selected = keyless[3 if active else 0]
+                matches += (f"; {selected['stage']} keyless csel={selected['csel']}/{selected['n']} "
+                            f"site={selected['site_code']}/{selected['site_fetch']} "
+                            f"guarded={selected['guarded']}/{selected['n']}")
+            if v220:
+                selected = window[3 if active else 0]
+                matches += (f"; {selected['stage']} window load={selected['load']} "
+                            f"store={selected['store']} branch={selected['branch']} "
+                            f"xload={selected['xload']} value={selected['value_ok']}/"
+                            f"{selected['value']} clrex_bad={selected['clrex_bad']} "
+                            f"svc_bad={selected['svc_bad']} "
+                            f"guarded={keyless[3 if active else 0]['guarded']}/"
+                            f"{selected['n']}")
             print(f"{label}: {matches}", flush=True)
             return
         if defense:

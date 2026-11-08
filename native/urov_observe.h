@@ -12,6 +12,12 @@ struct ud_exclusive_observation {
     enum ud_verdict reservation_loss;
     int error;
     unsigned epochs, accepted, target_failed, control_failed;
+    /* Every probe stores its own private scratch word through the STXR.  The
+     * last target/control pair is compared so a modeled window that produces a
+     * different value than the native sequence cannot hide behind a preserved
+     * reservation.  value_seen is set when the probe has a stable value. */
+    unsigned value_seen, value_match;
+    uint64_t target_value, control_value;
     uint64_t elapsed_ns;
 };
 
@@ -120,6 +126,27 @@ void ud_observe_ap_reservation(const void *address, const void *reference,
 void ud_observe_ap_alu(const void *address, const void *reference, int backing_fd,
                        off_t offset, struct ud_exclusive_observation *out);
 
+/* Same contract as ud_observe_ap_reservation. CSEL reads NZCV and preserves
+ * the scratch value. The UROV-Y 2.19.0 single LL/SC bridge declines this gap. */
+void ud_observe_ap_csel(const void *address, const void *reference, int backing_fd,
+                        off_t offset, struct ud_exclusive_observation *out);
+
+/* Same paired controls. 2.20.0 models the whole LL/SC window, so the following
+ * gap shapes must preserve the reservation natively and under the module, and
+ * the value the STXR writes must match the control run:
+ *   - a plain LDR from a private word whose value the STXR stores;
+ *   - a plain STR that leaves the sampled byte in a private word;
+ *   - a conditional branch whose direction is taken from the sampled byte;
+ *   - a second LDXR that re-establishes the reservation on the same word. */
+void ud_observe_ap_load(const void *address, const void *reference, int backing_fd,
+                        off_t offset, struct ud_exclusive_observation *out);
+void ud_observe_ap_store(const void *address, const void *reference, int backing_fd,
+                         off_t offset, struct ud_exclusive_observation *out);
+void ud_observe_ap_branch(const void *address, const void *reference, int backing_fd,
+                          off_t offset, struct ud_exclusive_observation *out);
+void ud_observe_ap_xload(const void *address, const void *reference, int backing_fd,
+                         off_t offset, struct ud_exclusive_observation *out);
+
 /* Same paired controls as ud_observe_exclusive. The scratch word is zero
  * and both exclusives use XZR, a shape the UROV-Y 2.9.0 bridge rejects.
  * A MATCH indicates reservation loss, including when the read bytes agree.
@@ -164,6 +191,22 @@ void ud_observe_unreserved_status(const void *address, const void *reference,
 void ud_observe_unreserved_nop_status(const void *address, const void *reference,
                                       int backing_fd, off_t offset,
                                       struct ud_store_observation *out);
+
+/* Same contract, but the LDXR really executes and CLREX clears the reservation
+ * between the sampled load and the STXR. The architecture makes that STXR fail,
+ * so a window model must leave it native: unexpected_stores must stay 0 with
+ * the module loaded exactly as it is without it. This isolates the deliberate
+ * fail-closed boundary from a hidden reservation-loss feature. */
+void ud_observe_gap_clrex_status(const void *address, const void *reference,
+                                 int backing_fd, off_t offset,
+                                 struct ud_store_observation *out);
+
+/* Same contract, with an SVC #0 (an exception) between the sampled load and the
+ * STXR. An exception entry clears the local monitor, so the native outcome is
+ * again failure and the module must preserve it. */
+void ud_observe_gap_svc_status(const void *address, const void *reference,
+                               int backing_fd, off_t offset,
+                               struct ud_store_observation *out);
 
 /* Same contract, but the skipped LDXR is reached through ADR + BR.  The
  * target address remains in x9 when LDRB faults; a handler that retires the

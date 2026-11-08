@@ -1,0 +1,22 @@
+--------- beginning of main
+10-05 10:18:20.338 14860 14884 I urovdetect: CONTEXT pid=14860 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 10:18:20.338 14860 14884 I urovdetect: BEGIN mode=read-defense-v219-brk-all repeats=16
+10-05 10:18:20.524 14860 14884 I urovdetect: READ_DEFENSE_V219 stage=clean n=16 split=0 trap=0 unknown=0 changed=0 accept=16 business_file=16 scalar_file=16 kernel_file=16 execute=1234 triplets=1536 target_failed=0 control_failed=0 retries=0 mean_ns=9806719 max_ns=24730916
+10-05 10:18:20.524 14860 14884 I urovdetect: READ_DEFENSE_KEYLESS stage=clean n=16 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=1536 csel_retries=0 site_code=0 site_fetch=0 guarded=16
+10-05 10:18:20.637 14860 14884 I urovdetect: READ_DEFENSE_V219 stage=identity n=16 split=0 trap=0 unknown=0 changed=0 accept=16 business_file=16 scalar_file=16 kernel_file=16 execute=1234 triplets=1536 target_failed=0 control_failed=0 retries=1 mean_ns=6842521 max_ns=8275106
+10-05 10:18:20.637 14860 14884 I urovdetect: READ_DEFENSE_KEYLESS stage=identity n=16 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=1536 csel_retries=1 site_code=1 site_fetch=0 guarded=0
+10-05 10:18:20.642 14860 14884 I urovdetect: DOBBY_HOOK address=0x714a162000 original=1234 hooked=1235
+10-05 10:18:20.751 14860 14884 I urovdetect: READ_DEFENSE_V219 stage=patch_only n=16 split=0 trap=0 unknown=0 changed=16 accept=0 business_file=0 scalar_file=0 kernel_file=0 execute=1235 triplets=1536 target_failed=0 control_failed=0 retries=0 mean_ns=6617574 max_ns=6666178
+10-05 10:18:20.751 14860 14884 I urovdetect: READ_DEFENSE_KEYLESS stage=patch_only n=16 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=1536 csel_retries=0 site_code=0 site_fetch=0 guarded=0
+10-05 10:18:20.862 14860 14884 I urovdetect: READ_DEFENSE_V219 stage=overlay n=16 split=16 trap=0 unknown=0 changed=0 accept=0 business_file=16 scalar_file=0 kernel_file=16 execute=1235 triplets=1536 target_failed=0 control_failed=0 retries=0 mean_ns=6661448 max_ns=6772827
+10-05 10:18:20.862 14860 14884 I urovdetect: READ_DEFENSE_KEYLESS stage=overlay n=16 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=1536 csel_retries=0 site_code=1 site_fetch=0 guarded=0
+10-05 10:18:20.862 14860 14884 I urovdetect: READ_DEFENSE_V219_STATUS parent_active=1 callers=0
+10-05 10:18:21.086 14860 14884 I urovdetect: READ_DEFENSE_V219 stage=deactivated n=16 split=0 trap=0 unknown=0 changed=16 accept=0 business_file=0 scalar_file=0 kernel_file=0 execute=1235 triplets=1536 target_failed=0 control_failed=0 retries=0 mean_ns=6647417 max_ns=6829223
+10-05 10:18:21.086 14860 14884 I urovdetect: READ_DEFENSE_KEYLESS stage=deactivated n=16 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=1536 csel_retries=0 site_code=0 site_fetch=0 guarded=0
+10-05 10:18:21.087 14860 14884 I urovdetect: READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1
+10-05 10:18:21.089 14860 14884 I urovdetect: READ_DEFENSE_V219_GUARD shape=1 errno=22 inactive=1 reference=1 execute=1234
+10-05 10:18:21.090 14860 14884 I urovdetect: READ_DEFENSE_KEYLESS_GUARD shape=1 errno=22 inactive=1 intact=1
+10-05 10:18:21.091 14860 14884 I urovdetect: READ_DEFENSE_BUSINESS ops=148608 errors=0
+10-05 10:18:21.091 14860 14884 I urovdetect: CONTEXT pid=14860 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 10:18:21.091 14860 14884 I urovdetect: NATIVE_RESULT PASS cases=5 assertions=189 failures=0 mode=read-defense-v219-brk-all
+10-05 10:18:21.094 14860 14860 I urovdetect: DETECT_RESULT PASS mode=read-defense-v219-brk-all worker_ms=754 ui_ticks=169 ui_max_gap_ms=18 native=PASS cases=5 assertions=189 failures=0
