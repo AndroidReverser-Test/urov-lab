@@ -26,6 +26,16 @@ struct ud_ap_v221_observation {
     struct ud_exclusive_observation baseline, pre_gpr, simd;
 };
 
+struct ud_ap_v222_observation {
+    enum ud_verdict verdict;
+    struct ud_exclusive_observation leaf_call, permute;
+};
+
+struct ud_ap_v223_observation {
+    enum ud_verdict verdict;
+    struct ud_exclusive_observation fparith;
+};
+
 struct ud_reader_observation {
     enum ud_verdict reader_diff;
     int error;
@@ -151,6 +161,21 @@ void ud_observe_ap_fp(const void *address, const void *reference, int backing_fd
  * mappings and unstable controls yield UNKNOWN. */
 void ud_observe_ap_v221(const void *address, const void *reference, int backing_fd,
                         off_t offset, struct ud_ap_v221_observation *out);
+
+/* Same worker and mapping contract as ud_observe_ap_reservation. A local
+ * BL/RET and a SIMD REV64 each fall outside the 2.22.0 forward window.
+ * Both paired probes must agree. MATCH indicates repeatable read-associated
+ * reservation loss even when the returned byte equals the file. Other
+ * sources of exceptions can produce the same symptom. */
+void ud_observe_ap_v222(const void *address, const void *reference, int backing_fd,
+                        off_t offset, struct ud_ap_v222_observation *out);
+
+/* A scalar FADD between the target read and STXR is outside the byte-level
+ * window model.  UROV-Y 2.23.0 executes the straight-line window natively
+ * under software step and completes the STXR, so the paired probe must return
+ * NO_MATCH in the AP mode. */
+void ud_observe_ap_v223(const void *address, const void *reference, int backing_fd,
+                        off_t offset, struct ud_ap_v223_observation *out);
 
 /* Same contract as ud_observe_ap_reservation. CSEL reads NZCV and preserves
  * the scratch value. The UROV-Y 2.19.0 single LL/SC bridge declines this gap. */

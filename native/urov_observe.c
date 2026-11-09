@@ -346,6 +346,78 @@ static unsigned post_load_simd_once(const void *address, uint64_t *scratch, unsi
 }
 
 __attribute__((noinline))
+static unsigned post_load_fparith_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                       uint64_t *aux)
+{
+    (void)aux;
+    uint64_t old, other = 0;
+    unsigned sample, failed;
+    /* Scalar FP arithmetic is outside the byte-level window model, and the
+     * local BL/RET forces the native replay to follow control flow.  The
+     * operand and result are irrelevant to the reservation probe. */
+    __asm__ volatile("movi v0.16b, #0\n"
+                     "ldxr %0, [%3]\n"
+                     "ldrb %w1, [%4]\n"
+                     "ldrb w10, [%4, #1]\n"
+                     "str xzr, [%5]\n"
+                     "mrs x10, cntvct_el0\n"
+                     "prfm pldl1keep, [%4]\n"
+                     "dmb ish\n"
+                     "isb\n"
+                     "bl 1f\n"
+                     "stxr %w2, %0, [%3]\n"
+                     "b 2f\n"
+                     "1: fadd d0, d0, d0\n"
+                     "ret\n"
+                     "2:\n"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(address), "r"(&other)
+                     : "v0", "x10", "x30", "memory");
+    *byte = sample;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned post_load_call_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                    uint64_t *aux)
+{
+    (void)aux;
+    uint64_t old;
+    unsigned sample, failed;
+    /* Only the local RET executes in the call. No callee reads or writes data. */
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     "ldrb %w1, [%4]\n"
+                     "bl 1f\n"
+                     "stxr %w2, %0, [%3]\n"
+                     "b 2f\n"
+                     "1: ret\n"
+                     "2:\n"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "x30", "memory");
+    *byte = sample;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned post_load_permute_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                       uint64_t *aux)
+{
+    (void)aux;
+    uint64_t old;
+    unsigned sample, failed;
+    /* REV64 uses a different encoding class from the modeled three-same SIMD. */
+    __asm__ volatile("movi v0.16b, #0\n"
+                     "ldxr %0, [%3]\n"
+                     "ldrb %w1, [%4]\n"
+                     "rev64 v0.16b, v0.16b\n"
+                     "stxr %w2, %0, [%3]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "v0", "memory");
+    *byte = sample;
+    return failed;
+}
+
+__attribute__((noinline))
 static unsigned post_load_csel_once(const void *address, uint64_t *scratch, unsigned *byte,
                                     uint64_t *aux)
 {
@@ -729,6 +801,7 @@ enum reservation_probe {
     READ_ADJACENT, READ_SPACED, READ_POST_LOAD_NOP, READ_POST_LOAD_ALU, READ_PRE_LOAD_ALU,
     READ_POST_LOAD_FP, READ_PRE_LOAD_GPR, READ_POST_LOAD_SIMD, READ_POST_LOAD_CSEL,
     READ_POST_LOAD_LOAD, READ_POST_LOAD_STORE, READ_POST_LOAD_BRANCH, READ_POST_LOAD_XLOAD,
+    READ_POST_LOAD_CALL, READ_POST_LOAD_PERMUTE, READ_POST_LOAD_FPARITH,
     READ_ZERO, READ_NONZERO, EXECUTE_CANARY
 };
 
@@ -745,7 +818,8 @@ static void observe_reservation(const void *address, const void *reference,
                     probe == READ_PRE_LOAD_GPR || probe == READ_POST_LOAD_SIMD ||
                     probe == READ_POST_LOAD_CSEL || probe == READ_POST_LOAD_LOAD ||
                     probe == READ_POST_LOAD_STORE || probe == READ_POST_LOAD_BRANCH ||
-                    probe == READ_POST_LOAD_XLOAD;
+                    probe == READ_POST_LOAD_XLOAD || probe == READ_POST_LOAD_CALL ||
+                    probe == READ_POST_LOAD_PERMUTE || probe == READ_POST_LOAD_FPARITH;
     /* The value-producing probes store an input-derived word through the STXR;
      * comparing it with the control run proves the modeled window computed the
      * same registers and memory as the native instructions. */
@@ -768,6 +842,9 @@ static void observe_reservation(const void *address, const void *reference,
     if (probe == READ_POST_LOAD_STORE) sample = post_load_store_once;
     if (probe == READ_POST_LOAD_BRANCH) sample = post_load_branch_once;
     if (probe == READ_POST_LOAD_XLOAD) sample = post_load_xload_once;
+    if (probe == READ_POST_LOAD_CALL) sample = post_load_call_once;
+    if (probe == READ_POST_LOAD_PERMUTE) sample = post_load_permute_once;
+    if (probe == READ_POST_LOAD_FPARITH) sample = post_load_fparith_once;
     if (probe == READ_ZERO) sample = zero_exclusive_once;
     if (probe == READ_NONZERO) sample = nonzero_exclusive_once;
     /* Keep the scratch away from normal stack writes and compiler spills.
@@ -912,6 +989,23 @@ void ud_observe_ap_v221(const void *address, const void *reference, int backing_
     if (out->baseline.reservation_loss == UD_NO_MATCH &&
         out->pre_gpr.reservation_loss == out->simd.reservation_loss)
         out->verdict = out->pre_gpr.reservation_loss;
+}
+
+void ud_observe_ap_v222(const void *address, const void *reference, int backing_fd,
+                        off_t offset, struct ud_ap_v222_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_CALL, &out->leaf_call);
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_PERMUTE, &out->permute);
+    out->verdict = out->leaf_call.reservation_loss == out->permute.reservation_loss ?
+                   out->leaf_call.reservation_loss : UD_UNKNOWN;
+}
+
+void ud_observe_ap_v223(const void *address, const void *reference, int backing_fd,
+                        off_t offset, struct ud_ap_v223_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_FPARITH,
+                        &out->fparith);
+    out->verdict = out->fparith.reservation_loss;
 }
 
 void ud_observe_ap_csel(const void *address, const void *reference, int backing_fd,

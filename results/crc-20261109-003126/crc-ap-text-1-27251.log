@@ -1,0 +1,21 @@
+--------- beginning of main
+10-05 15:06:02.178 27251 27274 I urovdetect: CONTEXT pid=27251 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 15:06:02.178 27251 27274 I urovdetect: BEGIN mode=crc-ap-text repeats=3
+10-05 15:06:02.180 27251 27274 I urovdetect: CRC_FIXTURE dlopen=1 mode=crc-ap-text all_callers=0
+10-05 15:06:02.181 27251 27274 I urovdetect: CRC_QUERY authenticated=1 state=0
+10-05 15:06:02.184 27251 27274 I urovdetect: CRC_TEXT address=0x7633a6c000 lib=/data/app/~~dnCHAsFJTJarOXB4-xfA9w==/com.example.urovdetect-sU8etV4fRYRBSAGy0XQR-g==/lib/arm64/liburovdetect.so span=892928 offset=2c000 shared=0 maywrite=1
+10-05 15:06:02.294 27251 27274 I urovdetect: CRC_LOCK_GUARD name=linker_text mode=3 all_callers=0 bytes=4096 n=3 lock_ns=40894 register_errno=0 active=1 window=0c7da8a0 image=0c7da8a0 live=f50bcaf6 execute=1234 deactivate_errno=0 restored=f50bcaf6 rx=1 unlock_errno=0
+10-05 15:06:02.306 27251 27274 I urovdetect: CRC_VMA name=linker_text span=892928 offset=2c000 rx=1 shared=0 maywrite=1 dc=0 private_dirty_kb=0 anonymous_kb=0
+10-05 15:06:02.306 27251 27274 I urovdetect: CRC_PAGE name=linker_text stage=clean n=3 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=3 bridge_unknown=0
+10-05 15:06:02.372 27251 27274 I urovdetect: CRC_PAGE name=linker_text stage=overlay n=3 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=0c7da8a0 bridge_match=0 bridge_clean=3 bridge_unknown=0
+10-05 15:06:02.372 27251 27274 I urovdetect: CRC_OVERLAY mode=3 generation=1 hits=36 replays=72 failures=0
+10-05 15:06:02.385 27251 27274 I urovdetect: CRC_PROT_CTL name=linker_text stage=before rc=0 errno=0 state=1 gen=1
+10-05 15:06:02.385 27251 27274 I urovdetect: CRC_PROT_CTL name=linker_text stage=R rc=0 errno=0 state=1 gen=1
+10-05 15:06:02.385 27251 27274 I urovdetect: CRC_PROT_CTL name=linker_text stage=RW rc=0 errno=0 state=1 gen=1
+10-05 15:06:02.385 27251 27274 I urovdetect: CRC_PROT_CTL name=linker_text stage=RX rc=0 errno=0 state=1 gen=1
+10-05 15:06:02.385 27251 27274 I urovdetect: CRC_PROT name=linker_text stage=all base=7633a6c000 execute=1234 direct=f50bcaf6 window=0c7da8a0 state=1 generation=1
+10-05 15:06:02.386 27251 27274 I urovdetect: CRC_PROT_VMA name=linker_text start=7633a6c000 end=7633a6d000 offset=2f000 rx=1 shared=0 maywrite=1
+10-05 15:06:02.386 27251 27274 I urovdetect: CRC_PAGE name=linker_text stage=deactivated n=3 execute=1234 file=f50bcaf6 backing=0c7da8a0 direct=f50bcaf6 site=f50bcaf6 window=f50bcaf6 bridge_match=0 bridge_clean=3 bridge_unknown=0
+10-05 15:06:02.397 27251 27274 I urovdetect: CONTEXT pid=27251 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 15:06:02.397 27251 27274 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=27 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0 mode=crc-ap-text
+10-05 15:06:02.537 27251 27251 I urovdetect: DETECT_RESULT PASS mode=crc-ap-text worker_ms=351 ui_ticks=129 ui_max_gap_ms=20 native=PASS cases=2 assertions=27 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0

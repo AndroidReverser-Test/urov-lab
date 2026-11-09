@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+﻿/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Loadable entry points for UROV-Y, the site-trap read-overlay variant.
  *
@@ -17,10 +17,10 @@
 #include "urov_y_backend.h"
 
 KPM_NAME("urov-y");
-KPM_VERSION("2.22.0");
+KPM_VERSION("2.23.0");
 KPM_LICENSE("GPL v2");
 KPM_AUTHOR("UROV-Y");
-KPM_DESCRIPTION("Reader-site trap ARM64 user read overlay: BRK, UXN page trap or AP[1] data trap; shadow-GPR pre-chain, scalar and integer-SIMD post window");
+KPM_DESCRIPTION("Reader-site trap ARM64 user read overlay: BRK, UXN or AP[1] trap; shadow-GPR pre-chain, modeled BL/RET and REV windows, native-step fallback");
 KPM_INFO(context, "sleepable-v2", 32);
 
 static int str_eq(const char *a, const char *b)
@@ -74,3 +74,4 @@ static long urov_y_exit(void *reserved)
 KPM_INIT(urov_y_init);
 KPM_CTL0(urov_y_control);
 KPM_EXIT(urov_y_exit);
+

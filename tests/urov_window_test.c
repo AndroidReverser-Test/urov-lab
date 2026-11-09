@@ -301,6 +301,50 @@ static void check_simd3(const char *name, uint32_t insn,
     printf("ok   %-30s\n", name);
 }
 
+static void check_permute(const char *name, uint32_t insn,
+                          void (*native)(const void *, void *))
+{
+    uint8_t a[16], want[16];
+    unsigned i;
+
+    for (i = 0; i < 16; ++i) a[i] = simd_byte();
+    native(a, want);
+    fp_reset();
+    for (i = 0; i < 16; ++i) fp.vregs[1][i] = a[i];
+    ++cases;
+    if (!uy_win_simd_permute_insn(insn) || !uy_win_simd_permute(&fp, insn) ||
+        memcmp(fp.vregs[0], want, 16)) {
+        printf("FAIL %-30s model/arch mismatch insn=%08x\n", name, insn);
+        ++failures;
+        return;
+    }
+    printf("ok   %-30s\n", name);
+}
+
+static void native_rev64_16(const void *a, void *out)
+{
+    __asm__ volatile("ldr q1, [%0]\n movi v0.16b, #0\n rev64 v0.16b, v1.16b\n"
+                     "str q0, [%1]" : : "r"(a), "r"(out) : "v0", "v1", "memory");
+}
+
+static void native_rev64_8(const void *a, void *out)
+{
+    __asm__ volatile("ldr q1, [%0]\n movi v0.16b, #0\n rev64 v0.8b, v1.8b\n"
+                     "str q0, [%1]" : : "r"(a), "r"(out) : "v0", "v1", "memory");
+}
+
+static void native_rev32_16(const void *a, void *out)
+{
+    __asm__ volatile("ldr q1, [%0]\n movi v0.16b, #0\n rev32 v0.16b, v1.16b\n"
+                     "str q0, [%1]" : : "r"(a), "r"(out) : "v0", "v1", "memory");
+}
+
+static void native_rev16_16(const void *a, void *out)
+{
+    __asm__ volatile("ldr q1, [%0]\n movi v0.16b, #0\n rev16 v0.16b, v1.16b\n"
+                     "str q0, [%1]" : : "r"(a), "r"(out) : "v0", "v1", "memory");
+}
+
 static void check_simd_declined(const char *name, uint32_t insn)
 {
     ++cases;
@@ -494,6 +538,27 @@ int main(void)
     reset(A, 0, 0);
     check_branch("tbnz w1,#3 set", 0x37180041U, 0x2000, 0x2008);
     reset(A, 0, 0);
+    ++cases;
+    if (!uy_win_branch(&model, 0x94000002U, 0x2000) || model.pc != 0x2008 ||
+        model.x[30] != 0x2004) {
+        printf("FAIL %-30s\n", "bl +8/lr");
+        ++failures;
+    } else printf("ok   %-30s\n", "bl +8/lr");
+    reset(0, 0, 0);
+    model.x[1] = 0x3000;
+    ++cases;
+    if (!uy_win_branch(&model, 0xd63f0020U, 0x2000) || model.pc != 0x3000 ||
+        model.x[30] != 0x2004) {
+        printf("FAIL %-30s\n", "blr x1/lr");
+        ++failures;
+    } else printf("ok   %-30s\n", "blr x1/lr");
+    reset(0, 0, 0);
+    model.x[1] = 0x3000;
+    check_branch("br x1", 0xd61f0020U, 0x2000, 0x3000);
+    reset(0, 0, 0);
+    model.x[30] = 0x4000;
+    check_branch("ret x30", 0xd65f03c0U, 0x2000, 0x4000);
+    reset(A, 0, 0);
     check_declined("mrs x0,midr_el1", 0xd5380000U);
     reset(A, 0, 0);
     check_declined("clrex", 0xd5033f5fU);
@@ -598,6 +663,10 @@ int main(void)
     check_simd2("sshl v0.4s,v1.4s,v2.4s", 0x4ea24420U, vec_sshl4s);
     check_simd2("ushl v0.2d,v1.2d,v2.2d", 0x6ee24420U, vec_ushl2d);
     check_simd2("cmeq v0.2d,v1.2d,v2.2d", 0x6ee28c20U, vec_cmeq2d);
+    check_permute("rev64 v0.16b,v1.16b", 0x4e200820U, native_rev64_16);
+    check_permute("rev64 v0.8b,v1.8b", 0x0e200820U, native_rev64_8);
+    check_permute("rev32 v0.16b,v1.16b", 0x6e200820U, native_rev32_16);
+    check_permute("rev16 v0.16b,v1.16b", 0x4e201820U, native_rev16_16);
     check_simd_declined("fadd v0.4s,v1.4s,v2.4s", 0x4e22d420U);
     check_simd_declined("ldr q0,[x1]", 0x3dc00020U);
     check_simd_declined("tbl v0.16b,{v1.16b},v2.16b", 0x4e020020U);
@@ -605,3 +674,4 @@ int main(void)
     printf("cases=%u failures=%u\n", cases, failures);
     return failures ? 1 : 0;
 }
+

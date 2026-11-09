@@ -1,5 +1,11 @@
 # Android ARM64 代码读取完整性复核
 
+> 当前实现为 `urov-y` 2.23.0：前向模型新增 `BL/BLR/BR/RET` 与 SIMD
+> `REV16/REV32/REV64`，模型放弃的纯寄存器/调用/load/无关 store 窗口改由原生单步
+> 回放并在 `STXR` 前完成 store。设计与残余见
+> [ELIMINATION_2_23_DESIGN.md](ELIMINATION_2_23_DESIGN.md)。本文以下保留 2.16.0
+> 及更早版本的审计记录。
+
 2026-11-07，Pixel 6，Android 16，内核 `6.1.134-android14-11`，4 KiB 页，KernelPatch `0xc00`。检测在 `untrusted_app` 域运行，`CapEff=0`，`Seccomp=2`。ADB 端使用 root 装卸模块和收集内核真值。活动测试夹具用单独的模块密钥注册自己的页，检测函数只接收地址、同文件参考映射和偏移。
 
 **当前 `urov-y` 2.16.0 的普通 App 方案**见[GUP 读、成对独占、mremap 保活与写形状补全](APP_READ_INTEGRITY_RESULTS.md#2160-gup-读成对独占mremap-保活与写形状补全)。2.16.0 在 2.15.0 之上补齐 `vmsplice` 的 GUP-fast 读、`LDXP/STXP` 成对独占、等长/移动 `mremap`、按页 `munmap`/`MAP_FIXED`、LSE 原子 RMW（含 `CAS/CASP`）、跨页 store 和 fork 子进程影子镜像。2.15.0 让普通 store 不再退役覆盖并桥接 `LDXR XZR`；2.14.0 让 `mprotect` 保护切换不再结束会话。以下保留各版本的实验记录。

@@ -2,6 +2,27 @@
 
 本文按最新复核在前排列。
 
+## 2.23.0 原生单步回放与调用/REV 模型
+
+`urov-y` 2.23.0 在 2.22.0 的字节模型上新增 `BL/BLR/BR/RET` 和 SIMD
+`REV16/REV32/REV64`。模型仍只走 64 条窗口；当窗口含 FP 算术、SIMD 立即数/置换、
+SVE 数据处理、循环或长链时，handler 改为让 CPU 原生执行每条指令，并在消费预约的
+`STXR` 前完成同一地址/宽度/值的 store。目标页的第二次读会先按原路径完成 load，
+再继续回放；与监视字不重叠的普通 store、EL0 `MRS`、局部调用都可原生执行。重叠
+监视字的 store、`CLREX`/其他独占、LSE 原子、`SVC`/异常、SVE 内存形式、非会话缺页、
+信号/抢占和超过 4096 条指令仍失败关闭。
+
+v223 探针在 AP-all overlay 阶段同时包含两次目标页 `LDRB`、无关地址 `STR`、
+`MRS CNTVCT_EL0`、局部 `BL/RET` 和 `FADD D0,D0,D0`，
+`READ_DEFENSE_V223_RESIDUAL` 逐阶段 `leaf_call=permute=fp_arith=0`。六种模式 ×3
+PASS，AP-all overlay `accepted=3/3`、`evidence=0`、`unknown=0`；生产 CRC 7 模式 ×3
+PASS（`crc-ap-all` `direct=window=file=f50bcaf6`、`execute=1235`）；Dobby 8×1
+PASS（`ap=0/8`、`accepted_crc_with_ap=8/8`）；消除 3×1、多页 3×1 PASS；窗口模型
+`cases=121 failures=0`。模块 SHA-256 `d04e2b09...`，APK `9bc60167...`。
+[设计、残余与残余边界证明](ELIMINATION_2_23_DESIGN.md) ·
+[v223 矩阵](results/read-defense-v223-20261109-215232/summary.json) ·
+[CRC 回归](results/crc-20261109-215256/summary.json)
+
 ## 2.22.0 影子 GPR 预链与整数 SIMD 窗口
 
 ### 实现与旧探针的盲区

@@ -619,7 +619,28 @@ static int uy_win_branch(struct uro_regs *model, uint32_t insn, uint64_t at)
         model->pc = target;
         return 1;
     }
-    if ((insn & 0xfc000000U) == 0x94000000U) return 0;    /* BL: a call */
+    if ((insn & 0xfc000000U) == 0x94000000U) {            /* BL */
+        target = at + (uint64_t)uy_win_sx((uint64_t)(insn & 0x03ffffffU) << 2, 28);
+        model->x[30] = at + 4U;
+        model->pc = target;
+        return 1;
+    }
+    if ((insn & 0xfffffc1fU) == 0xd63f0000U) {            /* BLR */
+        unsigned rn = (insn >> 5) & 31U;
+
+        target = uy_win_gpr(model, rn);
+        model->x[30] = at + 4U;
+        model->pc = target;
+        return 1;
+    }
+    if ((insn & 0xfffffc1fU) == 0xd61f0000U) {            /* BR */
+        model->pc = uy_win_gpr(model, (insn >> 5) & 31U);
+        return 1;
+    }
+    if ((insn & 0xfffffc1fU) == 0xd65f0000U) {            /* RET */
+        model->pc = uy_win_gpr(model, (insn >> 5) & 31U);
+        return 1;
+    }
     if ((insn & 0xff000010U) == 0x54000000U) {            /* B.cond */
         target = at + (uint64_t)uy_win_sx((uint64_t)((insn >> 5) & 0x7ffffU) << 2, 21);
         model->pc = uy_win_cond(model->pstate, insn & 15U) ? target : at + 4U;
@@ -1097,6 +1118,51 @@ static inline int uy_win_simd(struct uro_regs *model, struct uy_fpstate *fp, uin
 done:
     if (!q) {
         for (b = 8U; b < 16U; ++b) d[b] = 0;
+    }
+    return 1;
+}
+
+/* Two-register byte-reversal permutes: REV64, REV32 and REV16.  They are pure
+ * lane shuffles and write no FPSR.  Q=0 writes the low 64 bits and clears the
+ * high half, as for the three-same family above. */
+static inline int uy_win_simd_permute_insn(uint32_t insn)
+{
+    unsigned opcode, u, size;
+
+    if ((insn & 0x9f200c00U) != 0x0e200800U) return 0;
+    opcode = (insn >> 12) & 0x1fU;
+    u = (insn >> 29) & 1U;
+    size = (insn >> 22) & 3U;
+    if (size != 0U) return 0;
+    return (opcode == 0U) || (opcode == 1U && u == 0U);
+}
+
+static inline int uy_win_simd_permute(struct uy_fpstate *fp, uint32_t insn)
+{
+    unsigned q = (insn >> 30) & 1U;
+    unsigned u = (insn >> 29) & 1U;
+    unsigned opcode = (insn >> 12) & 0x1fU;
+    unsigned rn = (insn >> 5) & 31U;
+    unsigned rd = insn & 31U;
+    unsigned bytes = q ? 16U : 8U;
+    uint8_t out[16];
+    const uint8_t *n = fp->vregs[rn];
+    unsigned i, b;
+
+    if (!uy_win_simd_permute_insn(insn)) return 0;
+    for (i = 0; i < bytes; ++i) {
+        unsigned unit;
+
+        if (opcode == 0U)
+            unit = u ? 4U : 8U;                            /* REV32 / REV64 */
+        else
+            unit = 2U;                                     /* REV16 */
+        b = (i / unit) * unit + (unit - 1U - (i % unit));
+        out[i] = n[b];
+    }
+    for (b = 0; b < bytes; ++b) fp->vregs[rd][b] = out[b];
+    if (!q) {
+        for (b = 8U; b < 16U; ++b) fp->vregs[rd][b] = 0;
     }
     return 1;
 }

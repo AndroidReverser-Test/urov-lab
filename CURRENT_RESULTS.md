@@ -1,6 +1,17 @@
 # UROV-LAB 当前进度
 
-更新于 2026-11-08（Asia/Shanghai）。
+更新于 2026-11-09（Asia/Shanghai）。
+
+> 2026-11-09 补充：`urov-y` 2.23.0 清掉 2.22.0 残余清单里普通 App 可构造的读侧边界。
+> 前向模型新增局部/间接调用与返回（`BL/BLR/BR/RET`）和 SIMD `REV16/REV32/REV64`；
+> 模型放弃时进入原生单步回放：CPU 执行 FP 算术、SIMD 立即数/置换、SVE 数据处理、
+> 循环、长窗口，以及“第二次目标页读 + 无关地址 store + `MRS CNTVCT_EL0` + 局部
+> `BL/RET` + `FADD`”组合，handler 在消费预约的 `STXR` 前完成同一 store。没有新增
+> hook、线程、定时器、PTE/VMA/代码字，ABI 仍为 v8、`hooks=0xff`。v223 6 模式 ×3、
+> CRC 7 模式 ×3、Dobby 8×1、消除 3×1、多页 3×1 均 PASS；窗口模型
+> `cases=121 failures=0`。构建 `urov-y.kpm d04e2b09...`、
+> `urovdetect.apk 9bc60167...`。见
+> [ELIMINATION_2_23_DESIGN.md](ELIMINATION_2_23_DESIGN.md)。
 
 > 2026-11-08 补充：`urov-y` 2.22.0 消掉 2.21.0 `--read-defense-v221-guarded` 仍能稳定
 > 复现的两条无密钥 AP 读侧特征：`LDXR` 与故障 load 之间写第二个 GPR 的

@@ -1,5 +1,18 @@
 # UROV-LAB
 
+`urov-y` 2.23.0 清掉 2.22.0 残余清单里普通 App 可构造的读侧边界：前向模型新增
+`BL/BLR/BR/RET` 和 SIMD `REV16/REV32/REV64`，并把 FP 算术、SIMD 立即数/置换、SVE
+数据处理、循环、长窗口和“第二次目标页读 + 无关 store + `MRS`”交给原生单步回放。
+回放让 CPU 原生执行窗口，在消费预约的 `STXR` 前由内核完成同一地址/宽度/值的 store，
+因此不重算 FP/SIMD/SVE 数据通路；模型仍优先，只有模型放弃时才进入回放。没有新增
+hook、线程、定时器、PTE/VMA/代码字，ABI 仍为 v8、`hooks=0xff`。v223 6 模式 ×3 PASS
+（AP-all overlay `pre_gpr=simd=leaf_call=permute=fp_arith=ap=0`、`accepted=3/3`），
+生产 CRC 7 模式 ×3、Dobby 8×1（`ap=0/8`、`accepted_crc_with_ap=8/8`）、消除 3×1、
+多页 3×1 均 PASS；`out/urov_window_test` 的 121 条独立期望值差分校验通过（新增
+BL/BLR/BR/RET 与 REV 用例）。设计与残余见
+[ELIMINATION_2_23_DESIGN.md](ELIMINATION_2_23_DESIGN.md)。构建
+`urov-y.kpm d04e2b09...`、`urovdetect.apk 9bc60167...`。
+
 `urov-y` 2.22.0 清掉 2.21.0 `--read-defense-v221-guarded` 仍能稳定复现的两条 AP 读侧
 特征：`LDXR` 与故障 load 之间写第二个 GPR 的 `MOV X9,X0` 链，以及 load 之后的整数
 SIMD `EOR V0.16B`。后向窗口从 `LDXR` 起在私有影子 GPR 文件上重放最多 12 条整数

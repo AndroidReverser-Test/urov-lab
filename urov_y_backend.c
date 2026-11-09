@@ -2618,12 +2618,16 @@ static void uy_llsc_walk(struct pt_regs *regs, uint64_t fault_pc, struct uy_llsc
             at += 4U;
             continue;
         }
-        if (uy_win_simd_insn(insn)) {
+        if (uy_win_simd_insn(insn) || uy_win_simd_permute_insn(insn)) {
             if (!plan->fp_valid) {
                 if (uy_fp_snapshot(&plan->fp)) return;
                 plan->fp_valid = 1;
             }
-            if (!uy_win_simd(&model, &plan->fp, insn)) return;
+            if (uy_win_simd_insn(insn)) {
+                if (!uy_win_simd(&model, &plan->fp, insn)) return;
+            } else if (!uy_win_simd_permute(&plan->fp, insn)) {
+                return;
+            }
             at += 4U;
             continue;
         }
@@ -3390,6 +3394,7 @@ struct uy_replay {
 
 static struct uy_replay g_replay[UY_REPLAY_MAX];
 static int g_replay_active;
+static int g_step_active;
 static int g_replay_block;
 static int g_ss_ok;
 static void *f_debug_exception;
@@ -3608,7 +3613,8 @@ static int uy_replay_quiesce(void)
 
     __atomic_store_n(&g_replay_block, 1, __ATOMIC_RELEASE);
     for (i = 0; i < 4000U; ++i) {
-        if (!__atomic_load_n(&g_replay_active, __ATOMIC_ACQUIRE)) return 0;
+        if (!__atomic_load_n(&g_replay_active, __ATOMIC_ACQUIRE) &&
+            !__atomic_load_n(&g_step_active, __ATOMIC_ACQUIRE)) return 0;
         f_msleep(1);
     }
     return -1;
@@ -3617,6 +3623,259 @@ static int uy_replay_quiesce(void)
 static void uy_replay_unblock(void)
 {
     __atomic_store_n(&g_replay_block, 0, __ATOMIC_RELEASE);
+}
+
+/* ------------------------------------- native single-step for a read window */
+
+/* Some windows contain an instruction the byte-level model does not reproduce:
+ * scalar FP arithmetic, a SIMD permute outside the integer three-same family,
+ * SVE data processing, or a longer straight-line run.  Modeling those in the
+ * kernel would mean reimplementing IEEE-754 and the vector ISA.  Instead the
+ * handler lets the CPU execute the window one instruction at a time and stops
+ * before the consuming STXR.  The reservation is gone (every debug exception
+ * clears it), so the STXR is completed by the handler exactly as the modeled
+ * path does.  Each next instruction is validated before it runs: ordinary
+ * loads and non-overlapping stores are allowed, branches are followed, and
+ * anything that could change the exclusive state declines so the native STXR
+ * reports its own result. */
+#define UY_STEP_MAX 4096U
+struct uy_step {
+    void *mm;
+    void *task;
+    uint64_t base;
+    uint64_t next_pc;
+    uint64_t stxr_pc;
+    unsigned size;
+    unsigned status_reg;
+    unsigned store_reg;
+    unsigned release;
+    unsigned steps;
+    uint32_t used;
+};
+static struct uy_step g_step[2];
+
+static struct uy_step *uy_step_current(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < 2U; ++i) {
+        struct uy_step *s = &g_step[i];
+
+        if (!__atomic_load_n(&s->used, __ATOMIC_ACQUIRE)) continue;
+        if (s->mm != mm_of_task(current) || s->task != current) continue;
+        return s;
+    }
+    return 0;
+}
+
+static void uy_step_arm(struct pt_regs *regs)
+{
+    uy_mdscr_write(uy_mdscr_read() | UY_MDSCR_SS);
+    regs->pstate |= UY_PSR_SS;
+}
+
+static void uy_step_disarm(struct pt_regs *regs)
+{
+    uy_mdscr_write(uy_mdscr_read() & ~UY_MDSCR_SS);
+    regs->pstate &= ~UY_PSR_SS;
+}
+
+static void uy_step_end(struct uy_step *s)
+{
+    memset(s, 0, sizeof(*s));
+    __atomic_sub_fetch(&g_step_active, 1, __ATOMIC_RELEASE);
+}
+
+static void uy_step_cancel(void)
+{
+    struct uy_step *s = uy_step_current();
+
+    if (!s) return;
+    uy_mdscr_write(uy_mdscr_read() & ~UY_MDSCR_SS);
+    uy_step_end(s);
+}
+
+/* One instruction that may run natively between the sampled load and STXR.
+ * Exclusives, atomics, CLREX and system instructions are declined.  Loads are
+ * allowed (a target-page load is completed by the abort path and the replay
+ * resumes); branch targets are revalidated after every step.  Everything else
+ * is register/vector computation, including the FP/SIMD/SVE classes the model
+ * does not reproduce. */
+static int uy_step_safe(uint32_t insn, const struct pt_regs *regs,
+                        const struct uy_step *s)
+{
+    struct uro_regs model;
+    struct uro_load load;
+    struct uro_store store;
+    struct uro_atomic atomic;
+    unsigned size, rs, rt, rt2, rn, i;
+
+    memset(&model, 0, sizeof(model));
+    for (i = 0; i < 31U; ++i) model.x[i] = regs->regs[i];
+    model.sp = regs->sp;
+    model.pc = regs->pc;
+    model.pstate = regs->pstate;
+    if (uy_is_stxr(insn, &size, &rs, &rt, &rn) ||
+        uy_is_stxp(insn, &size, &rs, &rt, &rt2, &rn) ||
+        uy_is_ldxr(insn, &size, &rt, &rn) ||
+        uy_is_ldxp(insn, &size, &rt, &rt2, &rn))
+        return 0;
+    if (insn == 0xd5033f5fU) return 0;                    /* CLREX */
+    if ((insn & 0xffff0000U) == 0xd53b0000U) return 1;    /* MRS, EL0-readable */
+    if ((insn & 0xfffff0ffU) == 0xd503309fU ||            /* DMB */
+        (insn & 0xfffff0ffU) == 0xd50330bfU ||            /* DSB */
+        (insn & 0xfffff0ffU) == 0xd50330dfU ||            /* ISB */
+        (insn & 0xfffff01fU) == 0xd503201fU ||            /* NOP/HINT */
+        insn == 0xd503245fU || insn == 0xd503249fU ||     /* BTI C/J */
+        insn == 0xd50324dfU)                              /* BTI JC */
+        return 1;
+    if ((insn & 0xffc00000U) == 0xf9800000U ||            /* PRFM imm */
+        (insn & 0xffe00000U) == 0xf8a00000U ||            /* PRFM reg */
+        (insn & 0xffe00000U) == 0xf8800000U)              /* PRFUM */
+        return 1;
+    switch (insn) {                                       /* harmless MSR */
+    case 0xd51b4200U:                                     /* NZCV */
+    case 0xd51b4400U:                                     /* FPCR */
+    case 0xd51b4420U:                                     /* FPSR */
+    case 0xd51bd040U:                                     /* TPIDR_EL0 */
+        return 1;
+    default:
+        break;
+    }
+    if (uy_win_branch(&model, insn, 0)) return 1;
+    if (!uro_decode(insn, &model, &load)) return 1;   /* ordinary load */
+    if (!uro_decode_store(insn, &model, &store)) {
+        uint64_t end = store.address + store.total;
+        uint64_t mon_end = s->base + s->size;
+
+        /* A store to the monitored word would clear the reservation.  Other
+         * stores preserve it, so the CPU may execute them natively. */
+        if (end < store.address || mon_end < s->base) return 0;
+        if (store.address < mon_end && s->base < end) return 0;
+        return 1;
+    }
+    if (!uro_decode_atomic(insn, &model, &atomic)) return 0;
+    if (insn & 0x80000000U) return 0;                     /* system / SVE ldst */
+    return 1;
+}
+
+/* Complete the STXR the native run stopped in front of. */
+static int uy_step_force(struct pt_regs *regs, struct uy_step *s)
+{
+    uint32_t insn;
+    uint64_t value;
+    unsigned size, rs, rt, rn;
+    void *mm;
+
+    if (uy_read_insn(s->stxr_pc, &insn) ||
+        !uy_is_stxr(insn, &size, &rs, &rt, &rn))
+        return -1;
+    if ((1U << size) != s->size || rn == 31U || regs->regs[rn] != s->base ||
+        !uy_user_range(s->base, s->size))
+        return -1;
+    value = rt == 31U ? 0 : regs->regs[rt];
+    mm = mm_of_task(current);
+    uy_write_enter();
+    if (f_copy_out((void *)(uintptr_t)s->base, &value, s->size)) {
+        uy_write_leave();
+        return -1;
+    }
+    if (mm == g_sess.mm)
+        uy_image_store(s->base, (const uint8_t *)&value, s->size);
+    else if (mm)
+        uy_shadow_store_range(mm, s->base, (const uint8_t *)&value, s->size);
+    if (mm && uy_page_for_fault(mm, s->base))
+        uy_rearm_written(mm, s->base, s->size);
+    uy_write_leave();
+    if (s->release) __asm__ volatile("dmb ishst" : : : "memory");
+    if (s->status_reg != 31U) regs->regs[s->status_reg] = 0;
+    regs->pc = s->stxr_pc + 4U;
+    __atomic_fetch_add(&g_sess.llsc, 1, __ATOMIC_RELAXED);
+    return 0;
+}
+
+/* Validate the instruction at PC and either arm one step, force the consuming
+ * STXR, or decline.  Branches are allowed because the next PC is revalidated
+ * after every single step; memory and system instructions still decline. */
+static int uy_step_next(struct pt_regs *regs, struct uy_step *s)
+{
+    uint32_t insn;
+    unsigned size, rs, rt, rn;
+
+    if (s->steps++ >= UY_STEP_MAX) return -1;
+    if (uy_read_insn(regs->pc, &insn)) return -1;
+    if (uy_is_stxr(insn, &size, &rs, &rt, &rn)) {
+        if ((1U << size) != s->size || rn == 31U || regs->regs[rn] != s->base)
+            return -1;
+        s->stxr_pc = regs->pc;
+        s->status_reg = rs;
+        s->store_reg = rt;
+        s->release = (insn >> 15) & 1U;
+        return uy_step_force(regs, s) ? -1 : 1;
+    }
+    if (!uy_step_safe(insn, regs, s)) return -1;
+    s->next_pc = regs->pc;
+    uy_step_arm(regs);
+    return 0;
+}
+
+/* Arm the first step, or complete an STXR that is already at PC. */
+static int uy_step_begin(struct pt_regs *regs, const struct uy_llsc *plan)
+{
+    struct uy_step *s = 0;
+    unsigned i;
+    int rc;
+
+    if (!g_ss_ok || !plan->valid || plan->pair || !plan->size ||
+        (regs->pstate & UY_PSR_SS) || uy_step_current() || uy_replay_current())
+        return -1;
+    for (i = 0; i < 2U; ++i) {
+        if (!__atomic_load_n(&g_step[i].used, __ATOMIC_ACQUIRE)) {
+            s = &g_step[i];
+            break;
+        }
+    }
+    if (!s) return -1;
+    s->mm = mm_of_task(current);
+    s->task = current;
+    s->base = plan->base;
+    s->size = plan->size;
+    __atomic_store_n(&s->used, 1, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&g_step_active, 1, __ATOMIC_RELEASE);
+    rc = uy_step_next(regs, s);
+    if (rc) {
+        uy_step_end(s);
+        return -1;
+    }
+    return 0;
+}
+
+/* Software-step exception for a native read window.  Returns 1 when the
+ * exception belongs to this mechanism and must be consumed. */
+static int uy_step_handle(struct pt_regs *regs)
+{
+    struct uy_step *s = uy_step_current();
+    int rc;
+
+    if (!s) return 0;
+    uy_step_disarm(regs);
+    rc = uy_step_next(regs, s);
+    if (rc) uy_step_end(s);
+    return 1;
+}
+
+/* Re-arm after a trapped read from a registered page interrupted the replay.
+ * The load has already been committed to pt_regs, so validation resumes at the
+ * following instruction. */
+static int uy_step_resume(struct pt_regs *regs)
+{
+    struct uy_step *s = uy_step_current();
+    int rc;
+
+    if (!s) return -1;
+    rc = uy_step_next(regs, s);
+    if (rc) uy_step_end(s);
+    return rc;
 }
 
 /* Software-step exception (EC 0x32) for a task with a deferred replay: publish
@@ -3631,6 +3890,11 @@ static void uy_dbg_before(hook_fargs3_t *args, void *udata)
     if (!regs || !user_mode(regs) || compat_user_mode(regs) ||
         ((esr >> 26) & 0x3fUL) != UY_EC_SOFTSTP_LOW)
         return;
+    if (uy_step_handle(regs)) {
+        args->ret = 0;
+        args->skip_origin = 1;
+        return;
+    }
     if (!uy_replay_step(regs)) return;
     args->ret = 0;
     args->skip_origin = 1;
@@ -3645,11 +3909,12 @@ static void uy_switch_after(hook_fargs2_t *args, void *udata)
 
     (void)args;
     (void)udata;
-    if (!__atomic_load_n(&g_replay_active, __ATOMIC_ACQUIRE) && !g_step_orphan_task)
+    if (!__atomic_load_n(&g_replay_active, __ATOMIC_ACQUIRE) &&
+        !__atomic_load_n(&g_step_active, __ATOMIC_ACQUIRE) && !g_step_orphan_task)
         return;
     mm = mm_of_task(current);
     if (!mm) return;
-    if (uy_replay_current() ||
+    if (uy_replay_current() || uy_step_current() ||
         (g_step_orphan_task == current && g_step_orphan_mm == mm))
         uy_mdscr_write(uy_mdscr_read() | UY_MDSCR_SS);
 }
@@ -3727,9 +3992,13 @@ static int uy_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
     model.pc = pc;
     model.pstate = regs->pstate;
 
-    if ((model.pstate & (UINT64_C(31) | (UINT64_C(1) << 20) | (UINT64_C(1) << 21))) ||
-        (pc & 3U) || !uy_user_range(pc, 4))
-        return -1;
+    {
+        uint64_t reject = UINT64_C(31) | (UINT64_C(1) << 20);
+
+        if (!uy_step_current()) reject |= UINT64_C(1) << 21;
+        if ((model.pstate & reject) || (pc & 3U) || !uy_user_range(pc, 4))
+            return -1;
+    }
     if (uro_decode(opcode, &model, &load)) {
         uint32_t alias = uy_unprivileged_alias(opcode);
 
@@ -3890,6 +4159,12 @@ static void uy_abort_before(hook_fargs4_t *args, void *udata)
         if (rp && rp->pc != regs->pc) uy_replay_cancel();
     }
     ap_read = ec == UY_EC_DABT_LOW && !(esr & (UY_ESR_WNR | UY_ESR_CM));
+    /* A registered read is the only fault that may interrupt a native replay:
+     * it is committed and the step is re-armed.  Anything else (a write, an
+     * instruction abort or a read outside the session) ends the replay. */
+    if (__atomic_load_n(&g_step_active, __ATOMIC_ACQUIRE) &&
+        !(g_sess.mode == UROV_Y_MODE_PAGE_AP && ap_read))
+        uy_step_cancel();
     ref = session_get();
     if (!ref) {
         void *reader = mm_of_task(current);
@@ -3992,11 +4267,15 @@ serve:
         int emulated = -1;
 
         memset(&llsc, 0, sizeof(llsc));
-        if (!page || !__atomic_load_n(&page->armed, __ATOMIC_ACQUIRE)) goto out;
+        if (!page || !__atomic_load_n(&page->armed, __ATOMIC_ACQUIRE)) {
+            uy_step_cancel();
+            goto out;
+        }
         /* LSE atomics (LDADD/SWP/CAS/...) are reported as a read fault on
          * this CPU even though they also write.  Complete the RMW before the
          * generic load decoder can reject the encoding. */
         if (!uy_atomic_emulate(regs, far, mm)) {
+            uy_step_cancel();
             args->ret = 0;
             args->skip_origin = 1;
             goto out;
@@ -4020,9 +4299,16 @@ serve:
          * the bridge only restores an outcome the native sequence would have
          * had.  It is attempted after the load committed, and only when the
          * load succeeded. */
-        if (!emulated) {
+        if (!emulated && uy_step_current()) {
+            (void)uy_step_resume(regs);
+        } else if (!emulated) {
             uy_llsc_walk(regs, fault_pc, &llsc);
-            uy_llsc_commit(regs, fault_pc, &llsc);
+            if (llsc.win)
+                uy_llsc_commit(regs, fault_pc, &llsc);
+            else
+                (void)uy_step_begin(regs, &llsc);
+        } else {
+            uy_step_cancel();
         }
     } else if (g_sess.mode == UROV_Y_MODE_PAGE_UXN && ec == UY_EC_IABT_LOW &&
                far == regs->pc && armed_site_page(page_base(far))) {
@@ -6482,3 +6768,6 @@ long urov_y_status_get(struct uy_status *out)
     ctrl_unlock();
     return 0;
 }
+
+
+

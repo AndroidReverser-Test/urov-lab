@@ -1,0 +1,38 @@
+--------- beginning of main
+10-05 15:02:24.130 23655 23680 I urovdetect: CONTEXT pid=23655 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 15:02:24.130 23655 23680 I urovdetect: BEGIN mode=read-defense-v222-uxn-all repeats=32
+10-05 15:02:25.842 23655 23680 I urovdetect: READ_DEFENSE_V222 stage=clean n=32 split=0 trap=0 unknown=0 changed=0 accept=32 business_file=32 scalar_file=32 kernel_file=32 execute=1234 triplets=3072 target_failed=0 control_failed=0 retries=0 mean_ns=53057738 max_ns=92643433
+10-05 15:02:25.842 23655 23680 I urovdetect: READ_DEFENSE_KEYLESS stage=clean n=32 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=3072 csel_retries=0 site_code=0 site_fetch=0 guarded=32
+10-05 15:02:25.842 23655 23680 I urovdetect: READ_DEFENSE_KEYLESS2 stage=clean n=32 load=0 store=0 branch=0 xload=0 unknown=0 value=128 value_ok=128 clrex_bad=0 clrex_done=32 svc_bad=0 svc_done=32
+10-05 15:02:25.842 23655 23680 I urovdetect: READ_DEFENSE_V222_POLICY stage=clean n=32 pre_alu=0 fp=0 ap=0 ap_unknown=0 triplets=6144 target_failed=0 control_failed=0 split=0 evidence=0 changed=0 unknown=0 accepted=32 mean_ns=25002875 max_ns=54558268 baseline_ok=32 pre_gpr=0 simd=0 simd_value=32
+10-05 15:02:25.842 23655 23680 I urovdetect: READ_DEFENSE_V222_RESIDUAL stage=clean n=32 leaf_call=0 permute=0 trials=6144 target_failed=0 control_failed=0 mean_ns=6932384
+10-05 15:02:27.536 23655 23680 I urovdetect: READ_DEFENSE_V222 stage=identity n=32 split=0 trap=0 unknown=0 changed=0 accept=32 business_file=32 scalar_file=32 kernel_file=32 execute=1234 triplets=3072 target_failed=0 control_failed=0 retries=0 mean_ns=52811629 max_ns=55607137
+10-05 15:02:27.536 23655 23680 I urovdetect: READ_DEFENSE_KEYLESS stage=identity n=32 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=3072 csel_retries=0 site_code=0 site_fetch=1 guarded=0
+10-05 15:02:27.536 23655 23680 I urovdetect: READ_DEFENSE_KEYLESS2 stage=identity n=32 load=0 store=0 branch=0 xload=0 unknown=0 value=128 value_ok=128 clrex_bad=0 clrex_done=32 svc_bad=0 svc_done=32
+10-05 15:02:27.536 23655 23680 I urovdetect: READ_DEFENSE_V222_POLICY stage=identity n=32 pre_alu=0 fp=0 ap=0 ap_unknown=0 triplets=6144 target_failed=0 control_failed=0 split=0 evidence=32 changed=0 unknown=0 accepted=0 mean_ns=24522965 max_ns=25622234 baseline_ok=32 pre_gpr=0 simd=0 simd_value=32
+10-05 15:02:27.536 23655 23680 I urovdetect: READ_DEFENSE_V222_RESIDUAL stage=identity n=32 leaf_call=0 permute=0 trials=6144 target_failed=0 control_failed=0 mean_ns=6894312
+10-05 15:02:27.537 23655 23680 I urovdetect: DOBBY_HOOK address=0x76356c3000 original=1234 hooked=1235
+10-05 15:02:29.291 23655 23680 I urovdetect: READ_DEFENSE_V222 stage=patch_only n=32 split=0 trap=0 unknown=0 changed=32 accept=0 business_file=0 scalar_file=0 kernel_file=0 execute=1235 triplets=3072 target_failed=0 control_failed=0 retries=0 mean_ns=54692905 max_ns=57641967
+10-05 15:02:29.291 23655 23680 I urovdetect: READ_DEFENSE_KEYLESS stage=patch_only n=32 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=3072 csel_retries=0 site_code=0 site_fetch=0 guarded=0
+10-05 15:02:29.291 23655 23680 I urovdetect: READ_DEFENSE_KEYLESS2 stage=patch_only n=32 load=0 store=0 branch=0 xload=0 unknown=0 value=128 value_ok=128 clrex_bad=0 clrex_done=32 svc_bad=0 svc_done=32
+10-05 15:02:29.291 23655 23680 I urovdetect: READ_DEFENSE_V222_POLICY stage=patch_only n=32 pre_alu=0 fp=0 ap=0 ap_unknown=0 triplets=6144 target_failed=0 control_failed=0 split=0 evidence=0 changed=32 unknown=0 accepted=0 mean_ns=25406570 max_ns=26949341 baseline_ok=32 pre_gpr=0 simd=0 simd_value=32
+10-05 15:02:29.291 23655 23680 I urovdetect: READ_DEFENSE_V222_RESIDUAL stage=patch_only n=32 leaf_call=0 permute=0 trials=6144 target_failed=0 control_failed=0 mean_ns=7156205
+10-05 15:02:31.047 23655 23680 I urovdetect: READ_DEFENSE_V222 stage=overlay n=32 split=32 trap=0 unknown=0 changed=0 accept=0 business_file=32 scalar_file=0 kernel_file=32 execute=1235 triplets=3072 target_failed=0 control_failed=0 retries=0 mean_ns=54729943 max_ns=56730835
+10-05 15:02:31.047 23655 23680 I urovdetect: READ_DEFENSE_KEYLESS stage=overlay n=32 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=3072 csel_retries=0 site_code=0 site_fetch=1 guarded=0
+10-05 15:02:31.047 23655 23680 I urovdetect: READ_DEFENSE_KEYLESS2 stage=overlay n=32 load=0 store=0 branch=0 xload=0 unknown=0 value=128 value_ok=128 clrex_bad=0 clrex_done=32 svc_bad=0 svc_done=32
+10-05 15:02:31.047 23655 23680 I urovdetect: READ_DEFENSE_V222_POLICY stage=overlay n=32 pre_alu=0 fp=0 ap=0 ap_unknown=0 triplets=6144 target_failed=0 control_failed=0 split=32 evidence=32 changed=0 unknown=0 accepted=0 mean_ns=25450122 max_ns=26873454 baseline_ok=32 pre_gpr=0 simd=0 simd_value=32
+10-05 15:02:31.047 23655 23680 I urovdetect: READ_DEFENSE_V222_RESIDUAL stage=overlay n=32 leaf_call=0 permute=0 trials=6144 target_failed=0 control_failed=1 mean_ns=7155907
+10-05 15:02:31.049 23655 23680 I urovdetect: READ_DEFENSE_V222_FALLBACK shape=1 reference=1 execute=1234
+10-05 15:02:31.049 23655 23680 I urovdetect: READ_DEFENSE_V222_STATUS parent_active=1 callers=0
+10-05 15:02:32.806 23655 23680 I urovdetect: READ_DEFENSE_V222 stage=deactivated n=32 split=0 trap=0 unknown=0 changed=32 accept=0 business_file=0 scalar_file=0 kernel_file=0 execute=1235 triplets=3072 target_failed=0 control_failed=0 retries=0 mean_ns=54761994 max_ns=57878947
+10-05 15:02:32.806 23655 23680 I urovdetect: READ_DEFENSE_KEYLESS stage=deactivated n=32 csel=0 csel_unknown=0 csel_failed=0 csel_triplets=3072 csel_retries=0 site_code=0 site_fetch=0 guarded=0
+10-05 15:02:32.806 23655 23680 I urovdetect: READ_DEFENSE_KEYLESS2 stage=deactivated n=32 load=0 store=0 branch=0 xload=0 unknown=0 value=128 value_ok=128 clrex_bad=0 clrex_done=32 svc_bad=0 svc_done=32
+10-05 15:02:32.806 23655 23680 I urovdetect: READ_DEFENSE_V222_POLICY stage=deactivated n=32 pre_alu=0 fp=0 ap=0 ap_unknown=0 triplets=6144 target_failed=0 control_failed=0 split=0 evidence=0 changed=32 unknown=0 accepted=0 mean_ns=25414927 max_ns=26860230 baseline_ok=32 pre_gpr=0 simd=0 simd_value=32
+10-05 15:02:32.806 23655 23680 I urovdetect: READ_DEFENSE_V222_RESIDUAL stage=deactivated n=32 leaf_call=0 permute=0 trials=6144 target_failed=0 control_failed=0 mean_ns=7151313
+10-05 15:02:32.807 23655 23680 I urovdetect: READ_DEFENSE_GUARD shape=1 errno=22 execute=1234 inactive=1
+10-05 15:02:32.809 23655 23680 I urovdetect: READ_DEFENSE_V222_GUARD shape=1 errno=22 inactive=1 reference=1 execute=1234
+10-05 15:02:32.811 23655 23680 I urovdetect: READ_DEFENSE_KEYLESS_GUARD shape=1 errno=22 inactive=1 intact=1
+10-05 15:02:32.812 23655 23680 I urovdetect: READ_DEFENSE_BUSINESS ops=1761152 errors=0
+10-05 15:02:32.812 23655 23680 I urovdetect: CONTEXT pid=23655 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-05 15:02:32.812 23655 23680 I urovdetect: NATIVE_RESULT PASS cases=5 assertions=368 failures=0 mode=read-defense-v222-uxn-all
+10-05 15:02:32.825 23655 23655 I urovdetect: DETECT_RESULT PASS mode=read-defense-v222-uxn-all worker_ms=8682 ui_ticks=940 ui_max_gap_ms=21 native=PASS cases=5 assertions=368 failures=0
