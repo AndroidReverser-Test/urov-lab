@@ -238,9 +238,11 @@ static bool g_read_defense_221_guarded;
 static bool g_read_defense_222;
 static bool g_read_defense_223;
 static bool g_read_defense_224;
+static bool g_read_defense_225;
 
 static const char *read_defense_version_tag(void)
 {
+    if (g_read_defense_225) return "V225";
     if (g_read_defense_224) return "V224";
     if (g_read_defense_223) return "V223";
     if (g_read_defense_222) return "V222";
@@ -327,6 +329,25 @@ struct read_defense_boundary_stats {
     uint64_t elapsed_ns, max_ns;
 };
 
+static enum ud_verdict read_defense_ap_sample(window_probe_fn probe, const uint8_t *text,
+                                              const struct page *reference,
+                                              struct read_defense_boundary_stats *stats)
+{
+    struct ud_exclusive_observation result;
+    uint64_t begin = now_ns();
+    window_probe(probe, text, reference->address + reference->entry, reference,
+                 reference->file_offset + reference->entry, &result);
+    uint64_t ns = now_ns() - begin;
+    stats->elapsed_ns += ns;
+    if (ns > stats->max_ns) stats->max_ns = ns;
+    stats->ap += result.reservation_loss == UD_MATCH;
+    stats->ap_unknown += result.reservation_loss == UD_UNKNOWN;
+    stats->triplets += result.accepted;
+    stats->target_failed += result.target_failed;
+    stats->control_failed += result.control_failed;
+    return result.reservation_loss;
+}
+
 struct read_defense_v220_stats {
     struct read_defense_decisions decision;
     unsigned pre_alu, fp, ap, ap_unknown, triplets, target_failed, control_failed;
@@ -337,6 +358,13 @@ struct read_defense_v220_stats {
     int self_err, neon_err;
     unsigned split;
     uint64_t elapsed_ns, max_ns, residual_ns;
+    /* 2.25.0: sampled-access shapes and pre-load classes.  `v225_bad` is the
+     * MATCH count for variant i; `v225_done` counts completed observations and
+     * `v225_unknown` the inconclusive ones.  xldr_* covers the LDXR read of the
+     * sampled page, which 2.24.0 answered with a SIGSEGV. */
+    unsigned v225_bad[9], v225_done[9], v225_unknown, v225_trials;
+    unsigned xldr_bad, xldr_done;
+    uint64_t v225_ns;
 };
 
 /* Observe and gate the integrity result without a key, kernel-assisted copy,
@@ -345,6 +373,7 @@ static void read_defense_v220_sample(const uint8_t *text, const struct page *ref
                                     enum ud_verdict site_code, enum ud_verdict site_fetch,
                                     struct read_defense_v220_stats *stats,
                                     struct read_defense_boundary_stats *boundary,
+                                    struct read_defense_boundary_stats *pair_load,
                                     bool deep_window)
 {
     const uint8_t *control = reference->address + reference->entry;
@@ -431,20 +460,37 @@ static void read_defense_v220_sample(const uint8_t *text, const struct page *ref
     if (ns > stats->max_ns) stats->max_ns = ns;
 
     if (g_read_defense_223) {
-        struct ud_exclusive_observation overwritten;
-
-        begin = now_ns();
-        window_probe(ud_observe_ap_overwrite_ldxr, text, control, reference, offset, &overwritten);
-        ns = now_ns() - begin;
-        boundary->elapsed_ns += ns;
-        if (ns > boundary->max_ns) boundary->max_ns = ns;
-        boundary->ap += overwritten.reservation_loss == UD_MATCH;
-        boundary->ap_unknown += overwritten.reservation_loss == UD_UNKNOWN;
-        boundary->triplets += overwritten.accepted;
-        boundary->target_failed += overwritten.target_failed;
-        boundary->control_failed += overwritten.control_failed;
-        read_defense_classify(split, views.file_diff, overwritten.reservation_loss, site_code,
+        enum ud_verdict overwritten = read_defense_ap_sample(ud_observe_ap_overwrite_ldxr,
+                                                            text, reference, boundary);
+        read_defense_classify(split, views.file_diff, overwritten, site_code,
                               site_fetch, &boundary->decision);
+    }
+    if (g_read_defense_224) {
+        enum ud_verdict paired = read_defense_ap_sample(ud_observe_ap_pair_load, text,
+                                                       reference, pair_load);
+        read_defense_classify(split, views.file_diff, paired, site_code,
+                              site_fetch, &pair_load->decision);
+    }
+    if (g_read_defense_225) {
+        /* 2.25.0 sampled-access shapes and pre-load classes.  Every variant
+         * samples the same file byte through a legal read of the registered
+         * page, so the native STXR succeeds and a MATCH is a read-trap
+         * feature.  The variant order is documented in urov_observe.h. */
+        uint64_t begin225 = now_ns();
+        unsigned variant, count = ud_observe_ap_v225_count();
+
+        for (variant = 0; variant < count; ++variant) {
+            struct ud_exclusive_observation result;
+
+            ud_observe_ap_v225(text, control, reference->fd, offset, variant, &result);
+            for (unsigned retry = 0; retry < 2 && result.error == EAGAIN; ++retry)
+                ud_observe_ap_v225(text, control, reference->fd, offset, variant, &result);
+            stats->v225_bad[variant] += result.reservation_loss == UD_MATCH;
+            stats->v225_unknown += result.reservation_loss == UD_UNKNOWN;
+            stats->v225_done[variant] += result.error == 0;
+            stats->v225_trials += result.accepted;
+        }
+        stats->v225_ns += now_ns() - begin225;
     }
 }
 
@@ -468,6 +514,7 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
     unsigned window_unknown = 0, window_value = 0, window_value_ok = 0;
     struct read_defense_v220_stats policy = {0};
     struct read_defense_boundary_stats boundary = {0};
+    struct read_defense_boundary_stats pair_load = {0};
     unsigned clrex_bad = 0, clrex_done = 0, svc_bad = 0, svc_done = 0;
     bool window = g_read_defense_window;
     enum ud_verdict site_code = UD_NO_MATCH, site_fetch = UD_NO_MATCH;
@@ -481,7 +528,8 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
         struct ud_exclusive_observation alu, csel = { .reservation_loss = UD_NO_MATCH };
         uint64_t begin = now_ns();
         if (window) read_defense_v220_sample(text, reference, site_code, site_fetch, &policy,
-                                             &boundary, g_read_defense_224 && ap);
+                                             &boundary, &pair_load,
+                                             (g_read_defense_224 || g_read_defense_225) && ap);
         ud_observe_live(text, DOBBY_CRC_BYTES, reference->fd, offset, crc_copy_window, &business);
         ud_observe_live(text, DOBBY_CRC_BYTES, reference->fd, offset, copy_scalar, &scalar);
         ud_observe_ap_alu(text, control, reference->fd, offset, &alu);
@@ -540,6 +588,20 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
             clrex_bad += clrex.unexpected_stores;
             svc_done += svc.error == 0;
             svc_bad += svc.unexpected_stores;
+        }
+        if (g_read_defense_225) {
+            /* A legal LDXR read of the registered page.  It must return the
+             * same byte an ordinary load of that address returns, and it must
+             * not raise a signal: 2.24.0 only decoded non-exclusive loads and
+             * faulted this read. */
+            unsigned exclusive_byte = 0;
+            unsigned plain_byte = *(volatile const uint8_t *)(text);
+            uint64_t xbegin = now_ns();
+            int xerror = ud_read_exclusive_byte(text, &exclusive_byte);
+
+            policy.v225_ns += now_ns() - xbegin;
+            policy.xldr_done += xerror == 0;
+            policy.xldr_bad += xerror != 0 || exclusive_byte != plain_byte;
         }
         uint64_t ns = now_ns() - begin;
         elapsed += ns;
@@ -703,7 +765,7 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
     if (g_read_defense_223) {
         const struct read_defense_decisions *decision = &boundary.decision;
         unsigned trials = UD_OBSERVE_EPOCHS * UD_OBSERVE_TRIALS;
-        unsigned want_boundary_evidence = g_read_defense_224 ?
+        unsigned want_boundary_evidence = (g_read_defense_224 || g_read_defense_225) ?
             (!ap ? (mode ? n : 0U) :
              (mode && !original && !all_callers ? n : 0U)) : (mode ? n : 0U);
 
@@ -715,7 +777,7 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
             decision->unknown, decision->accepted, boundary.triplets, boundary.target_failed,
             boundary.control_failed, (unsigned long long)(boundary.elapsed_ns / n),
             (unsigned long long)boundary.max_ns);
-        if (g_read_defense_224) {
+        if (g_read_defense_224 || g_read_defense_225) {
             /* 2.24.0 completes the read-back that overwrites the LDXR
              * destination and never fabricates an STXR success after a store
              * that cleared the reservation.  The boundary probe must be silent
@@ -742,6 +804,51 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
                     name, boundary.ap, n, decision->evidence, decision->unknown,
                     decision->changed, decision->accepted);
         }
+    }
+    if (g_read_defense_224) {
+        const struct read_defense_decisions *decision = &pair_load.decision;
+        unsigned trials = n * UD_OBSERVE_EPOCHS * UD_OBSERVE_TRIALS;
+
+        LOG("READ_DEFENSE_V224_LDP stage=%s n=%u ap=%u ap_unknown=%u evidence=%u "
+            "changed=%u unknown=%u accepted=%u triplets=%u target_failed=%u control_failed=%u "
+            "mean_ns=%llu max_ns=%llu",
+            name, n, pair_load.ap, pair_load.ap_unknown, decision->evidence, decision->changed,
+            decision->unknown, decision->accepted, pair_load.triplets, pair_load.target_failed,
+            pair_load.control_failed, (unsigned long long)(pair_load.elapsed_ns / n),
+            (unsigned long long)pair_load.max_ns);
+        REQUIRE(pair_load.ap == (ap ? n : 0U) && !pair_load.ap_unknown &&
+                pair_load.triplets == trials && pair_load.target_failed == (ap ? trials : 0U) &&
+                decision->evidence == (mode ? n : 0U) && !decision->unknown &&
+                decision->changed == (!mode && !original ? n : 0U) &&
+                decision->accepted == (!mode && original ? n : 0U),
+                "v224 LDP %s ap=%u/%u evidence=%u unknown=%u changed=%u accepted=%u",
+                name, pair_load.ap, n, decision->evidence, decision->unknown,
+                decision->changed, decision->accepted);
+    }
+    if (g_read_defense_225) {
+        /* Sampled-access shapes and pre-load classes added in 2.25.0.  Every
+         * variant is a legal read of the registered page whose exclusive
+         * store must succeed natively, so all of them have to stay silent.
+         * The LDXR read additionally proves that the exclusive access form is
+         * decoded at all: 2.24.0 turned it into SIGSEGV. */
+        unsigned variant, bad = 0, done_ok = 1;
+
+        for (variant = 0; variant < ud_observe_ap_v225_count(); ++variant) {
+            bad += policy.v225_bad[variant];
+            done_ok = done_ok && policy.v225_done[variant] == n;
+        }
+        LOG("READ_DEFENSE_V225_PROBE stage=%s n=%u pair=%u vec=%u multi=%u pre_fp=%u "
+            "pre_load=%u pre_store=%u pre_lse=%u pre_ext=%u pair_gap=%u unknown=%u "
+            "trials=%u xldr_bad=%u xldr_done=%u mean_ns=%llu",
+            name, n, policy.v225_bad[0], policy.v225_bad[1], policy.v225_bad[2],
+            policy.v225_bad[3], policy.v225_bad[4], policy.v225_bad[5], policy.v225_bad[6],
+            policy.v225_bad[7], policy.v225_bad[8], policy.v225_unknown,
+            policy.v225_trials, policy.xldr_bad, policy.xldr_done,
+            (unsigned long long)(policy.v225_ns / n));
+        REQUIRE(!bad && !policy.v225_unknown && done_ok && policy.xldr_bad == 0 &&
+                policy.xldr_done == n,
+                "v225 probe %s bad=%u unknown=%u done=%u xldr=%u/%u", name, bad,
+                policy.v225_unknown, done_ok, policy.xldr_bad, policy.xldr_done);
     }
     /* The unprivileged LDTRB form is outside the ordinary decoder set; 2.22.0
      * completes it through the equivalent LDUR encoding.  Run it on the live
@@ -879,27 +986,29 @@ static void read_defense_fixture(const char *name, const char *key, int repeats)
     bool v222 = !strncmp(shape, "v222-", sizeof("v222-") - 1);
     bool v223 = !strncmp(shape, "v223-", sizeof("v223-") - 1);
     bool v224 = !strncmp(shape, "v224-", sizeof("v224-") - 1);
-    bool modern = v216 || v218 || v219 || v220 || v221 || v222 || v223 || v224;
+    bool v225 = !strncmp(shape, "v225-", sizeof("v225-") - 1);
+    bool modern = v216 || v218 || v219 || v220 || v221 || v222 || v223 || v224 || v225;
     if (modern) shape += sizeof("v216-") - 1;
-    g_read_defense_fixed = v219 || v220 || v221 || v222 || v223 || v224;
-    g_read_defense_window = v220 || v221 || v222 || v223 || v224;
+    g_read_defense_fixed = v219 || v220 || v221 || v222 || v223 || v224 || v225;
+    g_read_defense_window = v220 || v221 || v222 || v223 || v224 || v225;
     g_read_defense_221 = v221;
     g_read_defense_221_guarded = (v221 &&
-        !strncmp(shape, "guarded-", sizeof("guarded-") - 1)) || v222 || v223 || v224;
-    g_read_defense_222 = v222 || v223 || v224;
-    g_read_defense_223 = v223 || v224;
+        !strncmp(shape, "guarded-", sizeof("guarded-") - 1)) || v222 || v223 || v224 || v225;
+    g_read_defense_222 = v222 || v223 || v224 || v225;
+    g_read_defense_223 = v223 || v224 || v225;
     g_read_defense_224 = v224;
+    g_read_defense_225 = v225;
     if (v221 && !strncmp(shape, "guarded-", sizeof("guarded-") - 1))
         shape += sizeof("guarded-") - 1;
     void (*stage)(const char *, const uint8_t *, const struct page *, const uint8_t *,
                   const uint8_t *, unsigned, bool, int) =
-        (v218 || v219 || v220 || v221 || v222 || v223 || v224) ?
+        (v218 || v219 || v220 || v221 || v222 || v223 || v224 || v225) ?
         read_defense_v218_stage : read_defense_v216_stage;
     bool hardened = strstr(shape, "-hard") != NULL;
     bool ap_all = !strcmp(shape, "ap-all") || !strcmp(shape, "ap-all-hard");
-    bool brk_all = (v218 || v219 || v220 || v221 || v222 || v223 || v224) &&
+    bool brk_all = (v218 || v219 || v220 || v221 || v222 || v223 || v224 || v225) &&
                    !strcmp(shape, "brk-all");
-    bool uxn_all = (v218 || v219 || v220 || v221 || v222 || v223 || v224) &&
+    bool uxn_all = (v218 || v219 || v220 || v221 || v222 || v223 || v224 || v225) &&
                    !strcmp(shape, "uxn-all");
     bool all_callers = ap_all || brk_all || uxn_all;
     if (ap_all || !strcmp(shape, "ap") || !strcmp(shape, "ap-hard")) mode = UROV_Y_MODE_PAGE_AP;
@@ -969,7 +1078,7 @@ static void read_defense_fixture(const char *name, const char *key, int repeats)
     if (error) goto close_reference;
     if (modern) {
         stage("overlay", text, &reference, file, patched, mode, all_callers, repeats);
-        if (v220 || v221 || v222 || v223 || v224)
+        if (v220 || v221 || v222 || v223 || v224 || v225)
             read_defense_exec_guard(NULL, &reference, file, (size_t)page_size, mode, all_callers);
         bool still_active = !uy_status(&ctx, &status) && status.state == UROV_Y_ACTIVE && !status.failures;
         REQUIRE(still_active, "read-defense parent session was changed by the probes");
@@ -979,9 +1088,9 @@ static void read_defense_fixture(const char *name, const char *key, int repeats)
         REQUIRE(!uy_deactivate(&ctx), "read-defense deactivate errno=%d", errno);
         stage("deactivated", text, &reference, file, patched, 0, false, repeats);
         read_defense_anonymous_guard(&ctx, file, (size_t)page_size, mode, all_callers);
-        if (v218 || v219 || v220 || v221 || v222 || v223 || v224)
+        if (v218 || v219 || v220 || v221 || v222 || v223 || v224 || v225)
             read_defense_exec_guard(&ctx, &reference, file, (size_t)page_size, mode, all_callers);
-        if (v219 || v220 || v221 || v222 || v223 || v224)
+        if (v219 || v220 || v221 || v222 || v223 || v224 || v225)
             read_defense_reference_guard(&ctx, &reference, file, patched, mode, all_callers);
         goto close_reference;
     }

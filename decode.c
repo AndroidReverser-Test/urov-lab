@@ -3,6 +3,15 @@
 
 #define URO_U64_MAX (~(uint64_t)0)
 
+/* AArch64 load-exclusive encodings (ARM ARM C6.2): the access size is [31:30],
+ * [29:21] and [15:10] are fixed apart from the acquire bit 15, and Rn/Rt (plus
+ * Rt2 for the pair form) carry the registers. */
+#define URO_EXCL_LD_MASK 0x3ffffc00U
+#define URO_EXCL_LDXR 0x085f7c00U
+#define URO_EXCL_LDAXR 0x085ffc00U
+#define URO_EXCL_LDP_MASK 0x3f600000U
+#define URO_EXCL_LDP 0x08600000U
+
 static int add_magnitude(uint64_t base, uint64_t magnitude, int negative,
                          uint64_t *result)
 {
@@ -234,6 +243,34 @@ int uro_decode(uint32_t insn, const struct uro_regs *regs, struct uro_load *out)
             if (!load.writeback)
                 load.wb = 0;
         }
+    } else if ((insn & URO_EXCL_LD_MASK) == URO_EXCL_LDXR ||
+               (insn & URO_EXCL_LD_MASK) == URO_EXCL_LDAXR) {
+        /* Load-exclusive: an ordinary load that also creates a reservation on
+         * the address it reads.  A trapped read has to reproduce that
+         * reservation, so the decoder reports it like any other load. */
+        unsigned log2 = insn >> 30;
+
+        load.size = 1U << log2;
+        load.count = 1;
+        load.dest_bits = log2 == 3U ? 64 : 32;
+        load.excl = 1;
+        load.acquire = (insn >> 15) & 1U;
+        if (base_value(regs, load.rn, &base))
+            return -1;
+        load.address = base;
+    } else if ((insn & URO_EXCL_LDP_MASK) == URO_EXCL_LDP) {
+        /* Load-exclusive pair: two elements under one reservation. */
+        unsigned log2 = insn >> 30;
+
+        load.size = 1U << log2;
+        load.count = 2;
+        load.dest_bits = log2 == 3U ? 64 : 32;
+        load.rt2 = (insn >> 10) & 31U;
+        load.excl = 2;
+        load.acquire = (insn >> 15) & 1U;
+        if (base_value(regs, load.rn, &base))
+            return -1;
+        load.address = base;
     } else if ((insn & 0x3f000000U) == 0x18000000U) {
         /* GPR literal loads, signed imm19 scaled by four. */
         opc = insn >> 30;

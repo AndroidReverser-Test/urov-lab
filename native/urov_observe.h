@@ -190,6 +190,35 @@ void ud_observe_ap_v223(const void *address, const void *reference, int backing_
 void ud_observe_ap_overwrite_ldxr(const void *address, const void *reference, int backing_fd,
                                   off_t offset, struct ud_exclusive_observation *out);
 
+/* LDXR; LDP Wt,Wt2; STXR. Y 2.24.0 can emulate the pair load without
+ * repairing the exclusive reservation. Both addresses must be 8-byte aligned
+ * in stable RX and R-only aliases of the same file offset, respectively.
+ * MATCH requires every target STXR to fail with successful bracketing controls. */
+void ud_observe_ap_pair_load(const void *address, const void *reference, int backing_fd,
+                             off_t offset, struct ud_exclusive_observation *out);
+
+/* 2.25.0 sampled-access shapes and pre-load classes, indexed by variant:
+ *   0 LDP Wt,Wt2        4 LDR from private storage before the sampled load
+ *   1 LDR Q (128-bit)   5 STR to private storage before the sampled load
+ *   2 LD1 two structures 6 LDADD on private storage before the sampled load
+ *   3 FADD before load  7 ADD (extended register) before the sampled load
+ *   8 LDXP; LDRB; ADD; STXP
+ * Every variant samples the same file byte through a legal read of the
+ * registered page and retires every instruction before the STXR without
+ * clearing the local monitor, so the native STXR succeeds. NO_MATCH is the
+ * expected result while the module serves the page; MATCH is a read-trap
+ * feature, not a value difference. Same mapping, worker and lifetime contract
+ * as ud_observe_ap_reservation. */
+unsigned ud_observe_ap_v225_count(void);
+void ud_observe_ap_v225(const void *address, const void *reference, int backing_fd,
+                        off_t offset, unsigned variant,
+                        struct ud_exclusive_observation *out);
+
+/* Read one byte with LDXR and immediately CLREX the reservation.  Returns 0 and
+ * the byte through *out; a module that does not decode the exclusive load turns
+ * this into SIGSEGV. Only for a retained, readable, app-owned page. */
+int ud_read_exclusive_byte(const void *address, unsigned *out);
+
 /* Same contract as ud_observe_ap_reservation. CSEL reads NZCV and preserves
  * the scratch value. The UROV-Y 2.19.0 single LL/SC bridge declines this gap. */
 void ud_observe_ap_csel(const void *address, const void *reference, int backing_fd,

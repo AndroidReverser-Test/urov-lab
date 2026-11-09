@@ -52,7 +52,9 @@ def main():
     matrix.add_argument("--read-defense-v223", action="store_true",
                         help="test the keyless LDXR precheck probe and guard against urov-y 2.23.0")
     matrix.add_argument("--read-defense-v224", action="store_true",
-                        help="test the no-residual read window and store-watchpoint policy of urov-y 2.24.0")
+                        help="compare the older LL/SC probes with the pair-load probe for urov-y 2.24.0")
+    matrix.add_argument("--read-defense-v225", action="store_true",
+                        help="verify every sampled-access shape and pre-load class against urov-y 2.25.0")
     parser.add_argument("--repeats", type=int, default=15)
     parser.add_argument("--cycles", type=int, default=3)
     args = parser.parse_args()
@@ -72,6 +74,9 @@ def main():
         modes = tuple(f"{prefix}-{shape}" for shape in ("brk", "brk-all", "uxn", "uxn-all", "ap", "ap-all"))
     elif args.read_defense_v224:
         prefix = "read-defense-v224"
+        modes = tuple(f"{prefix}-{shape}" for shape in ("brk", "brk-all", "uxn", "uxn-all", "ap", "ap-all"))
+    elif args.read_defense_v225:
+        prefix = "read-defense-v225"
         modes = tuple(f"{prefix}-{shape}" for shape in ("brk", "brk-all", "uxn", "uxn-all", "ap", "ap-all"))
     elif args.read_defense_v220:
         prefix = "read-defense-v220"
@@ -133,9 +138,10 @@ def main():
         v222 = mode.startswith("read-defense-v222-")
         v223 = mode.startswith("read-defense-v223-")
         v224 = mode.startswith("read-defense-v224-")
-        window_mode = v220 or v221 or v222 or v223 or v224
+        v225 = mode.startswith("read-defense-v225-")
+        window_mode = v220 or v221 or v222 or v223 or v224 or v225
         modern_defense = v218 or v219 or window_mode or mode.startswith("read-defense-v216-")
-        defense_tag = "V224" if v224 else "V223" if v223 else "V222" if v222 else "V221" if v221 else "V220" if v220 else "V219" if v219 else "V218" if v218 else "V216"
+        defense_tag = "V225" if v225 else "V224" if v224 else "V223" if v223 else "V222" if v222 else "V221" if v221 else "V220" if v220 else "V219" if v219 else "V218" if v218 else "V216"
         active = mode != f"{prefix}-clean"
         shell("am", "force-stop", PACKAGE)
         argv = ["am", "start", "-W", "-n", ACTIVITY, "--es", "mode", mode,
@@ -230,13 +236,13 @@ def main():
                           re.findall(rf"READ_DEFENSE_{defense_tag}_POLICY [^\n]+", logs)]
                 if [s["stage"] for s in policy] != expected:
                     raise IncompleteLog(f"{label}: missing policy records in {log_path.name}")
-                if args.read_defense_v221_guarded or v222 or v223 or v224:
+                if args.read_defense_v221_guarded or v222 or v223 or v224 or v225:
                     ap_mode = mode.endswith(("-ap", "-ap-all"))
                     ap_all = mode.endswith("-ap-all")
                     for s in policy:
                         n = s["n"]
                         covered = s["stage"] in ("identity", "overlay")
-                        if v223 or v224:
+                        if v223 or v224 or v225:
                             ap = "0"
                             evidence = n if covered and (
                                 not ap_mode or (s["stage"] == "overlay" and not ap_all)) else "0"
@@ -250,7 +256,7 @@ def main():
                                     s["ap_unknown"] != "0" or s["unknown"] != "0" or
                                     s["evidence"] != evidence or s["accepted"] != accepted or
                                     s["split"] != split or s["changed"] != changed):
-                                raise RuntimeError(f"{label}: {'v224' if v224 else 'v223'} policy mismatch at {s['stage']}")
+                                raise RuntimeError(f"{label}: {defense_tag.lower()} policy mismatch at {s['stage']}")
                         elif v222:
                             ap = n if covered and ap_mode else "0"
                             evidence = n if covered else "0"
@@ -274,21 +280,21 @@ def main():
                     if v222 and ap_all and not re.search(
                             r"READ_DEFENSE_V222_LDTR byte=([0-9a-f]{2}) want=\1", logs):
                         raise IncompleteLog(f"{label}: missing v222 unprivileged-load result")
-                if v222 or v223 or v224:
-                    tag = "V224" if v224 else "V223" if v223 else "V222"
+                if v222 or v223 or v224 or v225:
+                    tag = "V225" if v225 else "V224" if v224 else "V223" if v223 else "V222"
                     residual = [dict(KV.findall(line)) for line in
                                 re.findall(rf"READ_DEFENSE_{tag}_RESIDUAL [^\n]+", logs)]
                     if [s["stage"] for s in residual] != expected:
                         raise IncompleteLog(f"{label}: missing {tag.lower()} residual probe records")
                     for decision, probes in zip(policy, residual):
-                        ap = "0" if (v223 or v224) else decision["ap"]
+                        ap = "0" if (v223 or v224 or v225) else decision["ap"]
                         ok = (probes["n"] == decision["n"] and probes["leaf_call"] == ap and
                               probes["permute"] == ap and
                               int(probes["trials"]) == int(probes["n"]) * 2 * 3 * 32 and
                               int(probes["target_failed"]) == int(ap) * 2 * 3 * 32)
-                        if v223 or v224:
+                        if v223 or v224 or v225:
                             ok = ok and probes.get("fp_arith") == "0"
-                        if v224:
+                        if v224 or v225:
                             ok = ok and probes.get("pre_mov") == "0" and \
                                 probes.get("pre_long") == "0"
                             covered = probes["stage"] in ("identity", "overlay")
@@ -301,15 +307,15 @@ def main():
                                 ok = ok and probes.get("deep_done") == "0"
                         if not ok:
                             raise RuntimeError(f"{label}: {tag.lower()} residual probes disagree at {probes['stage']}")
-                if v223 or v224:
-                    boundary_tag = "V224" if v224 else "V223"
+                if v223 or v224 or v225:
+                    boundary_tag = "V225" if v225 else "V224" if v224 else "V223"
                     boundary = [dict(KV.findall(line)) for line in
                                 re.findall(rf"READ_DEFENSE_{boundary_tag}_BOUNDARY [^\n]+", logs)]
                     if [s["stage"] for s in boundary] != expected:
                         raise IncompleteLog(f"{label}: missing LDXR precheck probe records")
                     for s in boundary:
                         covered = s["stage"] in ("identity", "overlay")
-                        if v224:
+                        if v224 or v225:
                             ap = 0
                             evidence = args.repeats if covered and (
                                 not ap_mode or (s["stage"] == "overlay" and not ap_all)) else 0
@@ -331,6 +337,38 @@ def main():
                                                       ("patch_only", "deactivated") else 0) or
                                 int(s["accepted"]) != accepted):
                             raise RuntimeError(f"{label}: {boundary_tag.lower()} LDXR precheck mismatch at {s['stage']}")
+                if v224:
+                    pair_load = [dict(KV.findall(line)) for line in
+                                 re.findall(r"READ_DEFENSE_V224_LDP [^\n]+", logs)]
+                    if [s["stage"] for s in pair_load] != expected:
+                        raise IncompleteLog(f"{label}: missing pair-load probe records")
+                    for s in pair_load:
+                        stage = s["stage"]
+                        n = args.repeats
+                        covered = stage in ("identity", "overlay")
+                        ap = n if covered and ap_mode else 0
+                        if (int(s["n"]) != n or int(s["ap"]) != ap or
+                                s["ap_unknown"] != "0" or s["unknown"] != "0" or
+                                int(s["triplets"]) != n * 3 * 32 or
+                                int(s["target_failed"]) != ap * 3 * 32 or
+                                int(s["evidence"]) != (n if covered else 0) or
+                                int(s["changed"]) != (n if stage in ("patch_only", "deactivated") else 0) or
+                                int(s["accepted"]) != (n if stage == "clean" else 0)):
+                            raise RuntimeError(f"{label}: v224 pair-load policy mismatch at {stage}")
+                if v225:
+                    probes = [dict(KV.findall(line)) for line in
+                              re.findall(r"READ_DEFENSE_V225_PROBE [^\n]+", logs)]
+                    if [s["stage"] for s in probes] != expected:
+                        raise IncompleteLog(f"{label}: missing 2.25.0 access-shape probe records")
+                    for s in probes:
+                        stage, n = s["stage"], args.repeats
+                        if (int(s["n"]) != n or
+                                any(int(s[key]) != 0 for key in (
+                                    "pair", "vec", "multi", "pre_fp", "pre_load", "pre_store",
+                                    "pre_lse", "pre_ext", "pair_gap", "unknown", "xldr_bad")) or
+                                int(s["trials"]) != n * 9 * 3 * 32 or
+                                int(s["xldr_done"]) != n):
+                            raise RuntimeError(f"{label}: v225 access-shape probe mismatch at {stage}")
                 if active and (f"READ_DEFENSE_{defense_tag}_FALLBACK shape=1 reference=1 "
                                "execute=1234" not in logs):
                     raise IncompleteLog(f"{label}: missing independent read and execution result")
@@ -414,6 +452,8 @@ def main():
                 report["runs"][-1]["residual"] = residual
             if v223 or v224:
                 report["runs"][-1]["boundary"] = boundary
+            if v224:
+                report["runs"][-1]["pair_load"] = pair_load
             if v218 or v219 or window_mode:
                 matches = ", ".join(f"{s['stage']}=split:{s['split']}/trap:{s['trap']}/accept:{s['accept']}"
                                     f" of {s['n']}" for s in stages)
@@ -442,11 +482,15 @@ def main():
                             f"accepted={decision['accepted']}/{decision['n']}")
                 if v224:
                     residual_line = residual[3 if active else 0]
+                    pair_decision = pair_load[3 if active else 0]
                     matches += (f"; pre_mov={residual_line.get('pre_mov')} "
                                 f"pre_long={residual_line.get('pre_long')} "
                                 f"self_bad={residual_line.get('self_bad')} "
                                 f"neon_bad={residual_line.get('neon_bad')} "
-                                f"deep_bad={residual_line.get('deep_bad')}")
+                                f"deep_bad={residual_line.get('deep_bad')}; "
+                                f"LDP ap={pair_decision['ap']}/{pair_decision['n']} "
+                                f"evidence={pair_decision['evidence']}/{pair_decision['n']} "
+                                f"accepted={pair_decision['accepted']}/{pair_decision['n']}")
             print(f"{label}: {matches}", flush=True)
             return
         if defense:

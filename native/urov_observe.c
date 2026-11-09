@@ -231,6 +231,25 @@ static unsigned overwrite_ldxr_once(const void *address, uint64_t *scratch, unsi
 }
 
 __attribute__((noinline))
+static unsigned pair_load_once(const void *address, uint64_t *scratch, unsigned *sample,
+                               uint64_t *aux)
+{
+    (void)aux;
+    uint64_t old;
+    unsigned first, second, failed;
+
+    /* Y 2.24 decodes the LDP, but its LL/SC precheck requires count == 1.
+     * Both exclusive instructions touch only the private scratch word. */
+    __asm__ volatile("ldxr %0, [%4]\n"
+                     "ldp %w1, %w2, [%5]\n"
+                     "stxr %w3, %0, [%4]"
+                     : "=&r"(old), "=&r"(first), "=&r"(second), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "memory");
+    *sample = first ^ second;
+    return failed;
+}
+
+__attribute__((noinline))
 static unsigned spaced_exclusive_once(const void *address, uint64_t *scratch, unsigned *byte,
                                     uint64_t *aux)
 {
@@ -245,6 +264,172 @@ static unsigned spaced_exclusive_once(const void *address, uint64_t *scratch, un
                      : "=&r"(old), "=&r"(value), "=&r"(failed)
                      : "r"(scratch), "r"(address) : "memory");
     *byte = value;
+    return failed;
+}
+
+/* ---------------------------------------------------------------- 2.25.0
+ *
+ * Two families.  The first samples the registered page with an access shape
+ * the 2.24.0 planner refused to plan (vector, multiple-structure, exclusive);
+ * the second puts an instruction class between the LDXR and the sampled load
+ * that the 2.24.0 lookback declined (FP arithmetic, a plain load or store, an
+ * LSE atomic, an extended-register add).  None of them clears the local
+ * monitor on a completed instruction, so the native STXR succeeds and a
+ * module that cannot repair the reservation is visible.
+ */
+
+/* 128-bit SIMD load as the sampled access. */
+__attribute__((noinline))
+static unsigned vec_load_once(const void *address, uint64_t *scratch, unsigned *sample,
+                              uint64_t *aux)
+{
+    uint64_t old;
+    unsigned failed;
+
+    __asm__ volatile("ldxr %0, [%2]\n"
+                     "ldr q0, [%3]\n"
+                     "stxr %w1, %0, [%2]\n"
+                     "str q0, [%4]"
+                     : "=&r"(old), "=&r"(failed)
+                     : "r"(scratch), "r"(address), "r"(aux)
+                     : "v0", "memory");
+    *sample = 0;
+    return failed;
+}
+
+/* Two-structure SIMD load (LD1) as the sampled access. */
+__attribute__((noinline))
+static unsigned multi_load_once(const void *address, uint64_t *scratch, unsigned *sample,
+                                uint64_t *aux)
+{
+    uint64_t old;
+    unsigned failed;
+
+    __asm__ volatile("ldxr %0, [%2]\n"
+                     "ld1 {v0.16b, v1.16b}, [%3]\n"
+                     "stxr %w1, %0, [%2]\n"
+                     "eor v0.16b, v0.16b, v1.16b\n"
+                     "str q0, [%4]"
+                     : "=&r"(old), "=&r"(failed)
+                     : "r"(scratch), "r"(address), "r"(aux)
+                     : "v0", "v1", "memory");
+    *sample = 0;
+    return failed;
+}
+
+/* Scalar FP arithmetic before the sampled load. */
+__attribute__((noinline))
+static unsigned pre_fp_once(const void *address, uint64_t *scratch, unsigned *byte,
+                            uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed;
+
+    (void)aux;
+    __asm__ volatile("fmov d0, xzr\n"
+                     "ldxr %0, [%3]\n"
+                     "fadd d0, d0, d0\n"
+                     "ldrb %w1, [%4]\n"
+                     "stxr %w2, %0, [%3]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "v0", "memory");
+    *byte = sample;
+    return failed;
+}
+
+/* A plain load from private storage before the sampled load. */
+__attribute__((noinline))
+static unsigned pre_load_once(const void *address, uint64_t *scratch, unsigned *byte,
+                              uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed, other;
+
+    __asm__ volatile("ldxr %0, [%4]\n"
+                     "ldr %w3, [%5]\n"
+                     "ldrb %w1, [%6]\n"
+                     "stxr %w2, %0, [%4]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed), "=&r"(other)
+                     : "r"(scratch), "r"(aux), "r"(address) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+/* A plain store to private storage before the sampled load.  A same-PE store
+ * keeps the local monitor on this core, so the native STXR still succeeds. */
+__attribute__((noinline))
+static unsigned pre_store_once(const void *address, uint64_t *scratch, unsigned *byte,
+                               uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed;
+
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     "str %x0, [%4]\n"
+                     "ldrb %w1, [%5]\n"
+                     "stxr %w2, %0, [%3]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(aux), "r"(address) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+/* An LSE atomic read-modify-write on private storage before the sampled load. */
+__attribute__((noinline))
+static unsigned pre_lse_once(const void *address, uint64_t *scratch, unsigned *byte,
+                             uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed, addend = 1, result;
+
+    __asm__ volatile("ldxr %0, [%4]\n"
+                     "ldadd %w5, %w3, [%7]\n"
+                     "ldrb %w1, [%6]\n"
+                     "stxr %w2, %0, [%4]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed), "=&r"(result)
+                     : "r"(scratch), "r"(addend), "r"(address), "r"(aux)
+                     : "memory");
+    *byte = sample;
+    return failed;
+}
+
+/* Extended-register add before the sampled load: integer data processing the
+ * window model itself does not reproduce, but which writes only Rd. */
+__attribute__((noinline))
+static unsigned pre_ext_once(const void *address, uint64_t *scratch, unsigned *byte,
+                             uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed, addend = 3;
+
+    (void)aux;
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     "add %0, %0, %w5, uxtb\n"
+                     "ldrb %w1, [%4]\n"
+                     "stxr %w2, %0, [%3]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(address), "r"(addend) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+/* LDXP/LDAXP; load; one modeled gap instruction; STXP/STLXP.  The 2.24.0 pair
+ * path only accepted NOP/BTI slots. */
+__attribute__((noinline))
+static unsigned pair_gap_once(const void *address, uint64_t *scratch, unsigned *sample,
+                              uint64_t *aux)
+{
+    uint64_t first, second;
+    unsigned value, failed;
+
+    (void)aux;
+    __asm__ volatile("ldxp %w0, %w1, [%4]\n"
+                     "ldrb %w2, [%5]\n"
+                     "add %w0, %w0, #0\n"
+                     "stxp %w3, %w0, %w1, [%4]"
+                     : "=&r"(first), "=&r"(second), "=&r"(value), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "memory");
+    *sample = value;
     return failed;
 }
 
@@ -946,7 +1131,10 @@ enum reservation_probe {
     READ_POST_LOAD_LOAD, READ_POST_LOAD_STORE, READ_POST_LOAD_BRANCH, READ_POST_LOAD_XLOAD,
     READ_POST_LOAD_XPAIR,
     READ_POST_LOAD_CALL, READ_POST_LOAD_PERMUTE, READ_POST_LOAD_FPARITH,
-    READ_OVERWRITE_LDXR, READ_ZERO, READ_NONZERO, EXECUTE_CANARY
+    READ_OVERWRITE_LDXR, READ_PAIR_LOAD,
+    READ_VEC_LOAD, READ_MULTI_LOAD, READ_PRE_FP, READ_PRE_LOAD, READ_PRE_STORE,
+    READ_PRE_LSE, READ_PRE_EXT, READ_PAIR_GAP,
+    READ_ZERO, READ_NONZERO, EXECUTE_CANARY
 };
 
 typedef unsigned (*probe_fn)(const void *, uint64_t *, unsigned *, uint64_t *);
@@ -957,6 +1145,7 @@ static void observe_reservation(const void *address, const void *reference,
 {
     struct sample_identity target, control, after;
     int execute = probe == EXECUTE_CANARY;
+    bool pair_load = probe == READ_PAIR_LOAD;
     bool ap_probe = probe == READ_POST_LOAD_NOP || probe == READ_POST_LOAD_ALU ||
                     probe == READ_PRE_LOAD_ALU || probe == READ_POST_LOAD_FP ||
                     probe == READ_PRE_LOAD_GPR || probe == READ_PRE_MOV ||
@@ -967,15 +1156,20 @@ static void observe_reservation(const void *address, const void *reference,
                     probe == READ_POST_LOAD_XLOAD || probe == READ_POST_LOAD_XPAIR ||
                     probe == READ_POST_LOAD_CALL ||
                     probe == READ_POST_LOAD_PERMUTE || probe == READ_POST_LOAD_FPARITH ||
-                    probe == READ_OVERWRITE_LDXR;
+                    probe == READ_OVERWRITE_LDXR || pair_load ||
+                    probe == READ_VEC_LOAD || probe == READ_MULTI_LOAD ||
+                    probe == READ_PRE_FP || probe == READ_PRE_LOAD ||
+                    probe == READ_PRE_STORE || probe == READ_PRE_LSE ||
+                    probe == READ_PRE_EXT || probe == READ_PAIR_GAP;
     /* The value-producing probes store an input-derived word through the STXR;
      * comparing it with the control run proves the modeled window computed the
      * same registers and memory as the native instructions. */
     bool valued = probe == READ_POST_LOAD_SIMD ||
                   probe == READ_POST_LOAD_CSEL || probe == READ_POST_LOAD_LOAD ||
                   probe == READ_POST_LOAD_STORE || probe == READ_POST_LOAD_BRANCH ||
-                  probe == READ_POST_LOAD_XLOAD;
-    size_t size = execute ? sizeof(uint64_t) : 1U;
+                  probe == READ_POST_LOAD_XLOAD ||
+                  probe == READ_VEC_LOAD || probe == READ_MULTI_LOAD;
+    size_t size = execute || pair_load ? sizeof(uint64_t) : 1U;
     probe_fn sample = exclusive_once;
     if (execute) sample = execution_once;
     if (probe == READ_SPACED) sample = spaced_exclusive_once;
@@ -997,6 +1191,15 @@ static void observe_reservation(const void *address, const void *reference,
     if (probe == READ_POST_LOAD_PERMUTE) sample = post_load_permute_once;
     if (probe == READ_POST_LOAD_FPARITH) sample = post_load_fparith_once;
     if (probe == READ_OVERWRITE_LDXR) sample = overwrite_ldxr_once;
+    if (pair_load) sample = pair_load_once;
+    if (probe == READ_VEC_LOAD) sample = vec_load_once;
+    if (probe == READ_MULTI_LOAD) sample = multi_load_once;
+    if (probe == READ_PRE_FP) sample = pre_fp_once;
+    if (probe == READ_PRE_LOAD) sample = pre_load_once;
+    if (probe == READ_PRE_STORE) sample = pre_store_once;
+    if (probe == READ_PRE_LSE) sample = pre_lse_once;
+    if (probe == READ_PRE_EXT) sample = pre_ext_once;
+    if (probe == READ_PAIR_GAP) sample = pair_gap_once;
     if (probe == READ_ZERO) sample = zero_exclusive_once;
     if (probe == READ_NONZERO) sample = nonzero_exclusive_once;
     /* Keep the scratch away from normal stack writes and compiler spills.
@@ -1017,7 +1220,7 @@ static void observe_reservation(const void *address, const void *reference,
     if (error) { out->error = error; goto done; }
     if (ps <= 0 || (uintptr_t)address / (uintptr_t)ps ==
                    (uintptr_t)reference / (uintptr_t)ps ||
-        (execute && (((uintptr_t)address | (uintptr_t)reference) & 7U))) {
+        (((uintptr_t)address | (uintptr_t)reference) & (size - 1U))) {
         out->error = EINVAL; goto done;
     }
     if (execute) {
@@ -1050,7 +1253,8 @@ static void observe_reservation(const void *address, const void *reference,
             if (valued && !out->value_seen && !before && !tested && !after_control) {
                 /* The store probe keeps its result in the private aux word. */
                 bool aux_value = probe == READ_POST_LOAD_STORE ||
-                                 probe == READ_POST_LOAD_SIMD;
+                                 probe == READ_POST_LOAD_SIMD ||
+                                 probe == READ_VEC_LOAD || probe == READ_MULTI_LOAD;
 
                 out->value_seen = 1;
                 out->control_value = aux_value ? control_aux : control_value;
@@ -1191,6 +1395,68 @@ void ud_observe_ap_overwrite_ldxr(const void *address, const void *reference, in
                                   off_t offset, struct ud_exclusive_observation *out)
 {
     observe_reservation(address, reference, backing_fd, offset, READ_OVERWRITE_LDXR, out);
+}
+
+void ud_observe_ap_pair_load(const void *address, const void *reference,
+                             int backing_fd, off_t offset,
+                             struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_PAIR_LOAD, out);
+}
+
+/* 2.25.0 sampled-access shapes and pre-load classes.  Every variant must stay
+ * silent (NO_MATCH) while the module serves the registered page: the access
+ * shapes are all legal reads of the same bytes and the pre-load instructions
+ * all retire without clearing the local monitor. */
+static const enum reservation_probe g_v225_probes[] = {
+    READ_PAIR_LOAD,     /* LDP Wt,Wt2 */
+    READ_VEC_LOAD,      /* LDR Q */
+    READ_MULTI_LOAD,    /* LD1 two structures */
+    READ_PRE_FP,        /* FADD before the sampled load */
+    READ_PRE_LOAD,      /* LDR before the sampled load */
+    READ_PRE_STORE,     /* STR before the sampled load */
+    READ_PRE_LSE,       /* LDADD before the sampled load */
+    READ_PRE_EXT,       /* ADD extended before the sampled load */
+    READ_PAIR_GAP,      /* LDXP; LDRB; ADD; STXP */
+};
+
+unsigned ud_observe_ap_v225_count(void)
+{
+    return (unsigned)(sizeof(g_v225_probes) / sizeof(g_v225_probes[0]));
+}
+
+void ud_observe_ap_v225(const void *address, const void *reference, int backing_fd,
+                        off_t offset, unsigned variant, struct ud_exclusive_observation *out)
+{
+    if (variant >= ud_observe_ap_v225_count()) {
+        memset(out, 0, sizeof(*out));
+        out->reservation_loss = UD_UNKNOWN;
+        out->error = EINVAL;
+        return;
+    }
+    observe_reservation(address, reference, backing_fd, offset, g_v225_probes[variant], out);
+}
+
+/* Read one byte of the sampled address with LDXR and drop the reservation again
+ * with CLREX, so the probe leaves the page and the monitor untouched.  A module
+ * that only decodes ordinary loads turns this legal read into a SIGSEGV. */
+int ud_read_exclusive_byte(const void *address, unsigned *out)
+{
+    unsigned value = 0;
+    int saved = errno;
+
+    if (!address || !out) {
+        errno = EINVAL;
+        return -1;
+    }
+    __asm__ volatile("ldxr %w0, [%1]\n"
+                     "clrex"
+                     : "=&r"(value)
+                     : "r"(address)
+                     : "memory");
+    *out = value & 0xffU;
+    errno = saved;
+    return 0;
 }
 
 void ud_observe_ap_load(const void *address, const void *reference, int backing_fd,

@@ -108,6 +108,12 @@ static uint64_t uy_win_gpr(const struct uro_regs *model, unsigned reg)
     return reg == 31U ? 0 : model->x[reg];
 }
 
+/* Base register of a memory access: Rn == 31 names SP, never XZR. */
+static uint64_t uy_win_base(const struct uro_regs *model, unsigned reg)
+{
+    return reg == 31U ? model->sp : model->x[reg];
+}
+
 static int64_t uy_win_sx(uint64_t value, unsigned bits)
 {
     uint64_t sign = UINT64_C(1) << (bits - 1U);
@@ -903,6 +909,51 @@ static inline int uy_win_fp_insn(uint32_t insn, int have_fp16)
     }
 }
 
+/* General-register destination of a SIMD&FP instruction, for the pre-load
+ * verifier.  Only the transfers below name a general register; every other
+ * instruction in the SIMD&FP data-processing groups writes vector registers
+ * alone, so 32 is returned for it - including encodings this helper does not
+ * enumerate, because an encoding that traps at EL0 can never appear in an
+ * executed pre-load span.  The GPR destination is always bits[4:0], which is
+ * what makes the returned number trustworthy for this one purpose. */
+static inline int uy_win_fp_gpr_dst(uint32_t insn)
+{
+    unsigned op;
+
+    switch (insn & 0xfffffc00U) {
+    case 0x9e660000U:                    /* FMOV Xd, Dn */
+    case 0x1e260000U:                    /* FMOV Wd, Sn */
+    case 0x1ee60000U:                    /* FMOV Wd, Hn */
+    case 0x9eae0000U:                    /* FMOV Xd, Vn.D[1] */
+        return (int)(insn & 31U);
+    default:
+        break;
+    }
+    if (uy_win_fp_insn(insn, 1)) return 32;
+    /* UMOV/SMOV element to general register (aliases of MOV Wd/Xd, Vn.<T>[i]).
+     * Bit 31 is fixed zero, bit 30 is the Q size, imm5 is [20:16]. */
+    if ((insn & 0xbfe0fc00U) == 0x0e003c00U ||
+        (insn & 0xbfe0fc00U) == 0x0e002c00U)
+        return (int)(insn & 31U);
+    /* Scalar FP -> integer conversion, including the FP16 forms. */
+    if ((insn & 0x5f20fc00U) == 0x1e200000U) {
+        op = (insn >> 16) & 0x1fU;
+        if (op == 2U || op == 3U) return 32;   /* SCVTF / UCVTF */
+        return (int)(insn & 31U);
+    }
+    return 32;
+}
+
+/* True for a SIMD&FP data-processing encoding group (bits[28:25] are 0111 or
+ * 1111): the scalar and vector arithmetic, permutation, immediate, copy and
+ * conversion instructions.  Loads, stores, branches, system instructions and
+ * integer data processing use other groups. */
+static inline int uy_win_fp_group(uint32_t insn)
+{
+    return (insn & 0x1e000000U) == 0x0e000000U ||
+           (insn & 0x1e000000U) == 0x1e000000U;
+}
+
 /* ------------------------------- Advanced SIMD integer data processing
  *
  * 2.21.0 stopped the whole window at the first SIMD/FP data-processing
@@ -1242,6 +1293,31 @@ static inline int uy_win_sysreg_fp(uint32_t insn)
     return ((insn & 0xffff0000U) == 0xd53b0000U ||
             (insn & 0xffff0000U) == 0xd51b0000U) &&
            (key == 0x4400U || key == 0x4420U);
+}
+
+/* Static form of the same whitelist, for the read-before proof.  Every other
+ * system-register encoding traps at EL0, and an instruction that traps delivers
+ * an exception, which clears the local monitor; the proof therefore has to
+ * decline those instead of assuming a register write. */
+static inline int uy_win_sysreg_ok(uint32_t insn)
+{
+    if ((insn & 0xffff0000U) != 0xd53b0000U && (insn & 0xffff0000U) != 0xd51b0000U)
+        return 0;
+    switch (insn & 0x0000ffffU) {
+    case 0x4200U:                        /* NZCV */
+    case 0x4400U:                        /* FPCR */
+    case 0x4420U:                        /* FPSR */
+    case 0xd040U:                        /* TPIDR_EL0 */
+        return 1;                        /* readable and writable at EL0 */
+    case 0xd060U:                        /* TPIDRRO_EL0 */
+    case 0xe000U:                        /* CNTFRQ_EL0 */
+    case 0xe040U:                        /* CNTVCT_EL0 */
+    case 0x0020U:                        /* CTR_EL0 */
+    case 0x00e0U:                        /* DCZID_EL0 */
+        return (insn >> 21) & 1U;        /* read-only */
+    default:
+        return 0;
+    }
 }
 
 #endif

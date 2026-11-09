@@ -47,6 +47,13 @@ struct uro_load {
     unsigned esize;
     unsigned elements;
     unsigned dst[4];
+    /* Load-exclusive forms read like any other load but additionally create a
+     * reservation on `address`.  1 is LDXR/LDAXR (one element of `size`
+     * bytes), 2 is LDXP/LDAXP (`count` is two and the reservation covers
+     * size * 2 bytes).  The urov-y PAGE_AP backend needs this to reproduce the
+     * reservation a trapped read would otherwise have left behind. */
+    unsigned excl;
+    unsigned acquire;
 };
 
 /* Decode only: no memory access or architectural register changes.

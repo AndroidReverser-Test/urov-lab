@@ -153,6 +153,32 @@ static void check_dst(const char *name, uint32_t insn, unsigned want)
     printf("ok   %-30s %u\n", name, got);
 }
 
+static void check_fp_group(const char *name, uint32_t insn, int want)
+{
+    int got = uy_win_fp_group(insn);
+
+    ++cases;
+    if (got != want) {
+        printf("FAIL %-30s fp_group=%d want=%d\n", name, got, want);
+        ++failures;
+        return;
+    }
+    printf("ok   %-30s %d\n", name, got);
+}
+
+static void check_fp_dst(const char *name, uint32_t insn, int want)
+{
+    int got = uy_win_fp_gpr_dst(insn);
+
+    ++cases;
+    if (got != want) {
+        printf("FAIL %-30s fp_dst=%d want=%d\n", name, got, want);
+        ++failures;
+        return;
+    }
+    printf("ok   %-30s %d\n", name, got);
+}
+
 static void check_sysreg(const char *name, uint32_t insn, uint64_t want, int read_nzcv)
 {
     ++cases;
@@ -620,6 +646,48 @@ int main(void)
     check_dst("adds xzr,x1,#1", 0xb100043fU, 32);
     check_dst("nop", UY_NOP, 32);
     check_dst("mrs x0,nzcv", 0xd53b4200U, 34);
+
+    /* SIMD&FP group and general-register transfer classification used by the
+     * pre-load verifier.  These encodings come from the assembler output of
+     * every form the group can write a general register from. */
+    check_fp_group("fadd d0,d0,d0", 0x1e602800U, 1);
+    check_fp_group("add v0.16b,v0.16b,v0.16b", 0x4e208400U, 1);
+    check_fp_group("movi v0.16b,#0xff", 0x4f07e7e0U, 1);
+    check_fp_group("dup v0.16b,w0", 0x4e010c00U, 1);
+    check_fp_group("ldr q0,[x0]", 0x3dc00000U, 0);
+    check_fp_group("add x0,x1,x2", 0x8b020020U, 0);
+    check_fp_group("mrs x0,nzcv", 0xd53b4200U, 0);
+    check_fp_dst("fmov x0,d0", 0x9e660000U, 0);
+    check_fp_dst("fmov w0,s0", 0x1e260000U, 0);
+    check_fp_dst("fmov w0,h0", 0x1ee60000U, 0);
+    check_fp_dst("fmov x0,v0.d[1]", 0x9eae0000U, 0);
+    check_fp_dst("fmov d0,x0", 0x9e670000U, 32);
+    check_fp_dst("umov w0,v0.b[0]", 0x0e013c00U, 0);
+    check_fp_dst("umov x0,v0.d[1]", 0x4e183c00U, 0);
+    check_fp_dst("smov x0,v0.s[2]", 0x4e142c00U, 0);
+    check_fp_dst("dup v0.16b,w0", 0x4e010c00U, 32);
+    check_fp_dst("fcvtzs w0,s0", 0x1e380000U, 0);
+    check_fp_dst("fcvtzs x0,d0", 0x9e780000U, 0);
+    check_fp_dst("fcvtns w0,s0", 0x1e200000U, 0);
+    check_fp_dst("fcvtas w0,s0", 0x1e240000U, 0);
+    check_fp_dst("scvtf s0,w0", 0x1e220000U, 32);
+    check_fp_dst("ucvtf s0,w0", 0x1e230000U, 32);
+    check_fp_dst("fadd d0,d0,d0", 0x1e602800U, 32);
+    /* A base register of a memory access is SP when Rn is 31, never XZR. */
+    reset(0, 0, 0);
+    model.sp = 0x4000;
+    ++cases;
+    if (uy_win_base(&model, 31) != 0x4000 || uy_win_base(&model, 0) != 0 ||
+        uy_win_gpr(&model, 31) != 0) {
+        printf("FAIL %-30s base31=%llx x0=%llx xzr=%llx\n", "base register naming",
+               (unsigned long long)uy_win_base(&model, 31),
+               (unsigned long long)uy_win_base(&model, 0),
+               (unsigned long long)uy_win_gpr(&model, 31));
+        ++failures;
+    } else {
+        printf("ok   %-30s sp=%llx\n", "base register naming",
+               (unsigned long long)uy_win_base(&model, 31));
+    }
 
     /* Pre-load source masks: MOVK/BFM read their destination, XZR is not a
      * register, and a class outside the enumerable set declines. */

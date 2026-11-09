@@ -2,6 +2,231 @@
 
 本文按最新复核在前排列。
 
+## 2.25.0 全采样宽度、读前写集证明与单步生命周期
+
+`urov-y` 2.25.0 把「读值替换」从只支持单个标量采样读，扩展到普通 App 能用的全部
+采样形状：`LDP`/`LDPSW`/`LDP Q`（`count == 2`）、`LDR Q`/`LDP Q`、`LD1..LD4` 多结构、
+以及 `LDXR/LDAXR/LDXP/LDAXP` 本身。读前证明从「整数 ALU 白名单」换成**写集证明**：
+只要一条指令不可能清本地监视器、也不可能写 LDXR 基址寄存器，就接受它。成对预约
+不再要求间隙全是 NOP，`SP` 也可以作独占基址。设计与残余边界见
+[ELIMINATION_2_25_DESIGN.md](ELIMINATION_2_25_DESIGN.md)。
+
+2.24.0 复测自己发现的 `LDP` 特征（本文件下一节）因此消失：
+`--read-defense-v224` 的旧判定在 2.25.0 上不再检出（同一夹具停在
+`v224 LDP ... ap=0/3`），`--read-defense-v225` 则以「全部静默」为期望。
+
+### 读值路径
+
+`REGISTER` 仍只接受文件支持的 `r-x` 映射，保存活页为 `snapshot`、按 `SRC_USER`
+叠加出 `image`。`PAGE_AP` 仍只清目标页叶 PTE 的 `AP[1]`；采样读由异常钩子解码并
+回填。2.25.0 的差别只在预约模型：`decode.c` 现在把独占 load 解码成普通 load 并带上
+`excl`，`uy_llsc_prepare()` 只在故障指令自己就是独占 load 时用它建计划，其余情况
+只从故障指令向前找最近的独占 load。
+[独占解码](decode.c#L243) · [读前证明](urov_y_backend.c#L2790) ·
+[写集分类](urov_y_backend.c#L2659) · [成对完成](urov_y_backend.c#L2584)
+
+### 无密钥探针
+
+夹具为 2.25.0 新增 9 个变体（`READ_DEFENSE_V225_PROBE`，编号见
+[urov_observe.h](native/urov_observe.h#L193)）：
+
+| 变体 | 序列 | 2.24.0 | 2.25.0 |
+| --- | --- | --- | --- |
+| 0 `pair` | `LDXR; LDP Wt,Wt2; STXR` | `STXR` 全失败 | 静默 |
+| 1 `vec` | `LDXR; LDR Q0; STXR` | 全失败 | 静默 |
+| 2 `multi` | `LDXR; LD1 {V0,V1}; STXR` | 全失败 | 静默 |
+| 3 `pre_fp` | `LDXR; FADD D0,D0,D0; LDRB; STXR` | 全失败 | 静默 |
+| 4 `pre_load` | `LDXR; LDR W; LDRB; STXR` | 全失败 | 静默 |
+| 5 `pre_store` | `LDXR; STR W; LDRB; STXR` | 全失败 | 静默 |
+| 6 `pre_lse` | `LDXR; LDADD W; LDRB; STXR` | 全失败 | 静默 |
+| 7 `pre_ext` | `LDXR; ADD Xt,Xn,Wm,UXTB; LDRB; STXR` | 全失败 | 静默 |
+| 8 `pair_gap` | `LDXP W,W; LDRB; ADD; STXP` | 全失败 | 静默 |
+
+另加 `ud_read_exclusive_byte()`：用 `LDXR Wt,[target]; CLREX` 读采样页的一个字节。
+2.24.0 只解码普通 load，这条合法读直接变成 `SIGSEGV/SEGV_ACCERR`；2.25.0 返回与
+普通读相同的字节（`xldr_bad=0`）。所有变体只采样同一文件字节，独占存储只写线程
+私有 scratch，对照页是同文件同偏移的只读别名。
+
+### 阻断与业务隔离
+
+完整性校验、文件摘要、独立执行映射与 seccomp TSYNC 规则不变（见下文 2.24.0 节）。
+2.25.0 没有新增 hook、线程、定时器、PTE/VMA 或代码字，ABI 仍为 v8、`hooks=0xff`。
+
+### 真机结果（2026-11-10）
+
+Pixel 6、Android 16、ARM64、4 KiB、`6.1.134-android14-11`、KernelPatch `c00`。
+App 在 `untrusted_app`，`CapEff=0`、`Seccomp=2`、SELinux Enforcing。
+`/proc/cpuinfo` 无 SVE/SME。模块 `urov-y.kpm` SHA-256
+`1623c6e3eca92ec7f3c8eb5201615f53421cd1d9c96ed92e1f5fe9d5761a7bcc`（重跑构建得到同一
+字节），测试 APK SHA-256 `2abc53ad81d0408c6dd3441ac983baa39f73d859613657178accf85455585367`；
+APK 的 zip 时间戳使重打包不再逐字节相同，其原生库 `liburovdetect.so` 为
+`59789f29ebacfa19017da66b8414b9a8feaed0ce40002f00454e7752b231d627`。
+
+6 种配置 ×3 轮，每阶段 32 次，共 21 次启动：
+
+| 阶段 | 判定次数 | 接管证据 | 内容变化 | 采信 |
+| --- | ---: | ---: | ---: | ---: |
+| 干净页，含空载和卸载后 | 672 | 0 | 0 | 672 |
+| 仅补丁和撤销后保留补丁 | 1,248 | 0 | 1,248 | 0 |
+| 等值接管 | 576 | 0 | 0 | 576 |
+| 伪造读取 | 576 | 480 | 0 | 96 |
+
+伪造读取阶段的 576 次里，480 次来自 BRK/UXN 的读点证据和 AP **调用窗口**的
+`split`（作用域语义），96 次是 AP 全调用者的 `accept`——即全调用者覆盖下
+每一次伪造读都被采信，且没有任何新探针命中。
+
+`READ_DEFENSE_V225_PROBE` 在全部 21 次启动、每个阶段都是
+`pair=vec=multi=pre_fp=pre_load=pre_store=pre_lse=pre_ext=pair_gap=0`、
+`unknown=0`、`xldr_bad=0`、`xldr_done=32`；`READ_DEFENSE_V225_RESIDUAL` 为
+`leaf_call=permute=fp_arith=pre_mov=pre_long=self_bad=neon_bad=deep_bad=0`、
+`self_done=neon_done=deep_done=32`。AP 全调用者 overlay 的
+`READ_DEFENSE_V225_POLICY` 为 `split=0 evidence=0 accepted=32`，
+`READ_DEFENSE_V225_BOUNDARY` 为 `ap=0 ap_unknown=0 evidence=0 accepted=32`。
+BRK/UXN 模式仍按各自语义被检出（`split=32 evidence=32`）。
+[真机矩阵](results/read-defense-v225-20261110-004656/summary.json)
+
+同一夹具对 2.24.0 模块的结果作为对照：`--read-defense-v224` 在 AP 模式停在
+`v224 LDP ... ap=0/3`（旧判定不再检出），而 `--read-defense-v225` 在 `identity`
+阶段直接以 `Fatal signal 11 (SIGSEGV), code 2 (SEGV_ACCERR)` 终止（`LDXR` 采样读）。
+[2.24.0 对照](results/read-defense-v224-20261110-005527) ·
+[2.24.0 SIGSEGV 对照](results/read-defense-v225-20261110-004257)
+
+生产 CRC 7 模式全部通过：`crc-ap-all` 的 `direct`、`window` 与文件摘要三方都是
+`f50bcaf6`，而原映射执行仍是 Dobby 的 `1235`；`crc-ap`（调用窗口）与
+`crc-ap-text`/`crc-ap-libc`/`crc-ap-big`（非文件支持的别名被拒绝）行为不变。
+消除矩阵 3×1（`site_call_ns=507`）、多页 6 场景×1、窗口模型
+`cases=145 failures=0` 全部通过。会话结束 `kpm list` 为空，boot ID 不变，
+增量内核日志无 BUG/WARNING。
+[生产 CRC](results/crc-20261110-005321/summary.json) ·
+[消除](results/eliminate-20261110-005341/summary.json) ·
+[多页](results/multipage-20261110-005458/summary.json)
+
+本轮真机还暴露并修复了一个单步生命周期问题：预约被 `CLREX`/独占 store/异常清掉后，
+2.24.0 仍逐条单步跟随任务直到它下一次执行独占 store。新探针制造的大量这种尾巴在
+持续高强度矩阵下触发过内核 panic（产测镜像 `softlockup_panic=1`）。现在
+`uy_step_prev()` 发现预约已失效就立即结束单步；修复后 21 次启动连续通过。
+[设计 §6.1](ELIMINATION_2_25_DESIGN.md#61-单步生命周期修复实测发现)
+
+在 `kpms/urov-lab` 目录复跑。
+
+```powershell
+.\build.ps1
+.\apps\urov-detect\build.ps1
+adb push .\out\urov_window_test /data/local/tmp/
+adb shell /data/local/tmp/urov_window_test
+python .\tools\run_crc_device.py --serial $Serial --key $KpKey --read-defense-v225 --repeats 32 --cycles 3
+python .\tools\run_crc_device.py --serial $Serial --key $KpKey --repeats 3 --cycles 1
+python .\tools\run_elimination_device.py --serial $Serial --key $KpKey --skip-x-control --repeats 3 --cycles 1
+python .\tools\run_multipage_device.py --serial $Serial --key $KpKey --repeats 3 --cycles 1
+```
+
+## 2.24.0 普通 App 成对读取复测
+
+### 从登记到读值替换
+
+`urov-y` 通过 ABI v8 接收带 MAC 的请求，一次服务一个调用进程的 `mm`。`REGISTER`
+验证目标是文件支持的 `r-x` 映射，保存活页为 `snapshot`，用调用者提供的 `SRC_USER`
+字节叠加出 `image`。模块检查 LR 和帧链来选择视图。调用窗口内返回 `image`，窗口外
+返回 `snapshot`，`caller_count=0` 时所有读者都在窗口内。
+[登记](urov_y_backend.c#L4600) · [镜像](urov_y_backend.c#L4586) ·
+[调用窗口](urov_y_backend.c#L1710)
+
+| 模式 | 读值如何改变 | 普通 App 可取的证据 |
+| --- | --- | --- |
+| `SITE_BRK` | 通过私有 COW 将登记的读指令改为 `BRK`，陷入内核后模拟原 load | 复核已知读点的发布指令字，或对比业务读者和独立读者 |
+| `PAGE_UXN` | 设置读点页叶 PTE 的 UXN，接管取指异常并模拟已知指令 | 对已知的 `BTI; RET` canary 做取指预约对照，或比较读视图 |
+| `PAGE_AP` | 清目标页叶 PTE 的 `AP[1]`。CPU 仍从活页取指，EL0 数据读由异常钩子解码并回填寄存器、推进 PC | 调用窗口模式可比较读视图。全调用者模式可用下述 `LDP` 探针 |
+
+`process_vm_readv`、`/proc/*/mem`、ptrace、GUP/`vmsplice` 及 fork 继承的目标页均有
+相应覆盖路径。`/proc/self/maps` 提供映射身份，无法直接读出叶 PTE 的 `AP[1]`。
+2.24.0 的线性读前证明和原生单步补齐了许多以标量 load 为采样指令的旧探针。
+[异常入口](urov_y_backend.c#L4096) · [读者钩子](urov_y_backend.c#L6473) ·
+[2.24.0 设计](ELIMINATION_2_24_DESIGN.md)
+
+### 无密钥探针
+
+普通 `LDP Wt,Wt2` 在解码器里令 `load.count=2`，可以正常返回伪造值。
+`uy_llsc_prepare()` 要求 `count == 1` 才建立预约计划，后续字节模型和原生单步都依赖
+该计划。即使两个读视图返回相同字节，目标 `LDP` 经同步异常返回后，在本机仍会使
+`STXR` 失败。该分支发生在 2.24.0 新增的线性证明之前。
+[LDP 解码](decode.c#L250) · [读前门槛](urov_y_backend.c#L2807) ·
+[单步入口](urov_y_backend.c#L3807)
+
+```asm
+ldxr x9, [x1]        // x1 = thread-private scratch
+ldp  w10, w11, [x0]  // x0 = target or read-only reference
+stxr w8, x9, [x1]    // on success write back the same scratch value
+```
+
+选择自有、稳定的文件 RX 页和同一 fd、同偏移的独立 `r--` 别名，预热 8 字节对齐的
+采样范围。每轮用同一指令序列做 32 组「对照、目标、对照」，只统计两侧 `STXR` 均成功
+的组。三轮共 96 组全失败才记录 `MATCH`，全部成功记 `NO_MATCH`。混合结果、对照失败
+过多、映射身份变化或样本不足记 `UNKNOWN`。探针只对目标做数据读取，成功的独占存储
+也只写回线程私有 scratch。普通 App 侧判定只用 `STXR` 状态、映射、发布参考和独立读
+视图。密钥用于布置和核对实验真值，耗时用于度量开销。
+[探针](native/urov_observe.c#L1217) · [测试 App 判定](apps/urov-detect/read_defense_fixture.inc#L308)
+
+### 阻断与业务隔离
+
+- 完整性校验在后台运行。出现读接管证据、内容变化或 `UNKNOWN` 时，把该页的活内存
+  CRC 标成未验证。文件完整性另用保留的常规文件 fd 和签名清单摘要核对。文件校验
+  的结论只适用于发布文件。采样页应避开 JIT、可卸载 SO 和合法热补丁。
+- 可独立运行的 PIC 校验例程使用新建的文件 `PROT_EXEC` 映射，数据参考使用 `PROT_READ`
+  别名。`validate_target_vma()` 同时要求 `VM_READ | VM_EXEC` 和 `vm_file`，所以这两种
+  别名及匿名 RX 映射均被拒绝为目标。执行别名需使用无需从指令页取数据的自包含例程。
+  该隔离依赖 `urov-y` 的 VMA 检查。Android 的系统级 XOM 有独立的支持范围。
+  [目标验证](urov_y_backend.c#L1279) · [执行别名测试](apps/urov-detect/read_defense_fixture.inc#L851) ·
+  [AOSP XOM 文档](https://source.android.com/docs/security/test/execute-only-memory)
+- 对需要在原 RX 映射上预防新登记的专用进程，可在会话建立前安装现有的 seccomp TSYNC
+  规则。ARM64 下仅固定 magic、`REGISTER`、288 字节长度都匹配的 `prctl` 返回 `EPERM`。
+  该规则只适用于已同步过滤的线程，新线程继承。`NoNewPrivs` 和过滤器在进程生命周期
+  内持续生效，应作为专用进程的显式策略。活动会话仍需授权撤销或由管理员卸载模块。
+  [登记过滤器](apps/urov-detect/dobby_crc_fixture.inc#L157) ·
+  [Linux seccomp 文档](https://docs.kernel.org/userspace-api/seccomp_filter.html)
+
+探针结果只覆盖当前采样的页和执行时点。空载模块、其他 `mm` 和未采样页需要分别对待。
+针对本版 `urov-y` 的这些检查和登记限制由当前内核执行。对内核任意改写的信任判断需要
+独立于 App 的可信边界。已有普通 `.text` 的活动 `PAGE_AP` 覆盖可跨锁页、保护切换、等长
+重映射和 fork 维持。业务运行期间适合隔离校验结论或使用独立映射，撤销原页覆盖需要
+授权控制。[映射门控](urov_y_backend.c#L5812)
+
+### 真机结果（2026-11-09）
+
+Pixel 6、Android 16、ARM64、4 KiB、`6.1.134-android14-11`、KernelPatch `c00`。
+原版 2.24.0 KPM 配合重建的检测 APK。测试 App 运行在 `untrusted_app`，`CapEff=0`，
+`Seccomp=2`，SELinux Enforcing。六种配置各启动 3 次，每阶段判定 32 次。
+
+| 阶段 | 判定次数 | 接管证据 | 内容变化 | 采信 |
+| --- | ---: | ---: | ---: | ---: |
+| 干净页，含空载和卸载后 | 672 | 0 | 0 | 672 |
+| 仅补丁和撤销后保留补丁 | 1,248 | 0 | 1,248 | 0 |
+| 等值接管 | 576 | 576 | 0 | 0 |
+| 伪造读取 | 576 | 576 | 0 | 0 |
+
+`UNKNOWN=0`。两个 AP 配置的等值和伪造阶段中，`LDP` 有效三联对照的目标 `STXR`
+共失败 36,864/36,864 次。全调用者伪造阶段中，业务读取、独立标量读和内核读都得到
+文件字节，原映射执行返回 `0x1235`。旧判定采信 96/96，新判定检出 96/96、采信 0/96。
+干净阶段 `LDP` 探针含映射和 fd 复核平均 3.52 ms，最长 4.10 ms。21 次启动中并发业务
+线程执行 53,565,824 次迭代，函数返回和管道 I/O 均无错误。UI 心跳最大间隔 19 ms。
+[检测矩阵](results/read-defense-v224-20261109-233738/summary.json)
+
+18 次活动配置中，独立执行映射均返回 `0x1234`，只读参考均匹配文件。撤销原会话后，
+对 `PROT_EXEC`、`PROT_READ` 和匿名 RX 目标分别尝试登记，各 18/18 次返回 `EINVAL`。
+另做 3 次 TSYNC 复测，过滤器安装前可重登记，安装后调用线程和已有线程各 3/3 次收到
+`EPERM`，状态保持 inactive。七种 CRC 回归通过。每轮结束模块列表为空，boot ID
+一致，增量内核日志无异常。结果覆盖本机的测试页和业务夹具。
+[登记过滤器复测](results/dobby-detect-20261109-234321/summary.json) ·
+[CRC 回归](results/crc-20261109-234337/summary.json)
+
+在 `kpms/urov-lab` 目录复跑。
+
+```powershell
+.\apps\urov-detect\build.ps1
+python .\tools\run_crc_device.py --serial $Serial --key $KpKey --read-defense-v224 --repeats 32 --cycles 3
+python .\tools\run_crc_device.py --serial $Serial --key $KpKey --skip-install --dobby-detection --repeats 12 --cycles 3
+python .\tools\run_crc_device.py --serial $Serial --key $KpKey --skip-install --repeats 6 --cycles 1
+```
+
 ## 2.24.0 线性读前证明与全放行原生单步
 
 [2.24.0 设计](ELIMINATION_2_24_DESIGN.md) 清掉 2.23.0 残余清单中的读前值链（H19）、
@@ -64,9 +289,9 @@ App 在 `untrusted_app`、`CapEff=0`、`Seccomp=2`、SELinux Enforcing。`/proc/
 [消除](results/eliminate-20261109-232321/summary.json) ·
 [多页](results/multipage-20261109-232434/summary.json)
 
-残余只剩计时、caller-window 作用域、root 可见性、跨 PE/异步信号、读前窗口的非整数
-ALU 类别和 SVE/SME 目标页 load（本机无 SVE/SME）等边界，见
-[设计 §5](ELIMINATION_2_24_DESIGN.md#5-残余2240)。
+当时记录的残余包括计时、caller-window 作用域、root 可见性、跨 PE/异步信号、读前窗口的
+非整数 ALU 类别和 SVE/SME 目标页 load（本机无 SVE/SME）。该矩阵的 AP 探针以标量
+load 为采样指令，成对 load 的补测记录见上节。[设计 §5](ELIMINATION_2_24_DESIGN.md#5-残余2240)
 
 ```powershell
 ./kpms/urov-lab/build.ps1

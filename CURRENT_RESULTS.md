@@ -1,6 +1,22 @@
 # UROV-LAB 当前进度
 
-更新于 2026-11-09（Asia/Shanghai）。
+更新于 2026-11-10（Asia/Shanghai）。
+
+> 2026-11-10 补充：`urov-y` 2.25.0 清掉 2.24.0 残余清单里普通 App 可构造的全部读侧
+> 特征，包括 2.24.0 复测自己发现的成对读取（`LDP`）特征。`decode.c` 现在解码
+> `LDXR/LDAXR/LDXP/LDAXP`，`uy_llsc_prepare()` 不再要求采样指令是单个标量 load：
+> `LDP`/`LDR Q`/`LD1..LD4` 与独占 load 采样都建计划；读前证明改为**写集证明**
+> （整数数据处理、普通 load/store、LSE 原子、SIMD&FP 数据处理、`MRS`/`MSR` 白名单、
+> 扩展寄存器加法与进位加法都接受，`CLREX`/独占 store/异常/分支目标/未知编码仍拒绝），
+> 扫描上限 1024→4096；成对预约走同一通道并允许间隙指令，`SP` 可作独占基址。
+> 同时修掉单步生命周期：预约失效后立即结束单步（此前会跟随任务到下一次独占 store，
+> 高强度矩阵下触发过内核 panic，产测镜像 `softlockup_panic=1`）。
+> ABI 仍为 v8、`hooks=0xff`。v225 6 模式 ×3（AP-all overlay `split=0 evidence=0
+> accepted=32`，9 个新探针全静默、`xldr_bad=0`）、生产 CRC 7 模式
+> （`crc-ap-all` `direct=window=file=f50bcaf6`、`execute=1235`）、消除 3×1
+> （`site_call_ns=507`）、多页 6 场景均 PASS；窗口模型 `cases=145 failures=0`。
+> 构建 `urov-y.kpm 1623c6e3...`、`urovdetect.apk 2abc53ad...`。见
+> [ELIMINATION_2_25_DESIGN.md](ELIMINATION_2_25_DESIGN.md)。
 
 > 2026-11-09 补充：`urov-y` 2.23.0 清掉 2.22.0 残余清单里普通 App 可构造的读侧边界。
 > 前向模型新增局部/间接调用与返回（`BL/BLR/BR/RET`）和 SIMD `REV16/REV32/REV64`；
