@@ -1,12 +1,26 @@
 # UROV-LAB
 
+`urov-y` 2.24.0 清掉 2.23.0 残余清单中普通 App 可构造的读侧边界：读前验证改为线性
+基本块证明，不再要求 LDXR 结果到达故障 load，`LDRB` 覆盖 LDXR 目的地不再被拒绝；原生
+单步对除独占存储和异常指令之外的所有指令放行，删除 4096 条上限，并支持窗口内第二次
+`LDXP/STXP`。真机测量表明同 PE 对监视字的普通 store 或 LSE 原子**不**清本地监视器，
+因此不再把这种 store 伪造为失败；只有 `CLREX`、其他独占和异常才清模型预约。目标
+Pixel 6 无 SVE/SME，单步让 CPU 原生执行 SVE/SME 数据处理和存储，不需要解释器。没有
+新增 hook、线程、定时器、PTE/VMA/代码字，ABI 仍为 v8、`hooks=0xff`。v224 6 模式 ×3
+PASS（AP-all overlay `split=evidence=ap=0`、`accepted=32/32`，`pre_mov=pre_long=0`、
+`self_bad=neon_bad=deep_bad=0`），生产 CRC 7 模式 ×3（`crc-ap-all`
+`direct=window=file=f50bcaf6`、`execute=1235`）、消除 3×1、多页 3×1 均 PASS；
+`out/urov_window_test` 121 条差分校验通过。设计与残余见
+[ELIMINATION_2_24_DESIGN.md](ELIMINATION_2_24_DESIGN.md)。构建
+`urov-y.kpm e8faf18e...`、`urovdetect.apk c96020ed...`。
+
 `urov-y` 2.23.0 清掉 2.22.0 残余清单里普通 App 可构造的读侧边界：前向模型新增
 `BL/BLR/BR/RET` 和 SIMD `REV16/REV32/REV64`，并把 FP 算术、SIMD 立即数/置换、SVE
 数据处理、循环、长窗口和“第二次目标页读 + 无关 store + `MRS`”交给原生单步回放。
 回放让 CPU 原生执行窗口，在消费预约的 `STXR` 前由内核完成同一地址/宽度/值的 store，
 因此不重算 FP/SIMD/SVE 数据通路；模型仍优先，只有模型放弃时才进入回放。没有新增
 hook、线程、定时器、PTE/VMA/代码字，ABI 仍为 v8、`hooks=0xff`。v223 6 模式 ×3 PASS
-（AP-all overlay `pre_gpr=simd=leaf_call=permute=fp_arith=ap=0`、`accepted=3/3`），
+（AP-all overlay `pre_gpr=simd=leaf_call=permute=fp_arith=ap=0`、`accepted=32/32`），
 生产 CRC 7 模式 ×3、Dobby 8×1（`ap=0/8`、`accepted_crc_with_ap=8/8`）、消除 3×1、
 多页 3×1 均 PASS；`out/urov_window_test` 的 121 条独立期望值差分校验通过（新增
 BL/BLR/BR/RET 与 REV 用例）。设计与残余见

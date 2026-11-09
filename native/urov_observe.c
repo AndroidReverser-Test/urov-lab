@@ -213,6 +213,24 @@ static unsigned exclusive_once(const void *address, uint64_t *scratch, unsigned 
 }
 
 __attribute__((noinline))
+static unsigned overwrite_ldxr_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                    uint64_t *aux)
+{
+    (void)aux;
+    unsigned value, failed;
+
+    /* The CPU's reservation survives overwriting the LDXR destination.
+     * UROV-Y 2.23 declines the plan when LDRB writes that register. */
+    __asm__ volatile("ldxr %x0, [%2]\n"
+                     "ldrb %w0, [%3]\n"
+                     "stxr %w1, xzr, [%2]\n"
+                     : "=&r"(value), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "memory");
+    *byte = value;
+    return failed;
+}
+
+__attribute__((noinline))
 static unsigned spaced_exclusive_once(const void *address, uint64_t *scratch, unsigned *byte,
                                     uint64_t *aux)
 {
@@ -319,6 +337,50 @@ static unsigned pre_load_gpr_once(const void *address, uint64_t *scratch, unsign
                      "stxr %w2, %0, [%3]"
                      : "=&r"(old), "=&r"(sample), "=&r"(failed)
                      : "r"(scratch), "r"(address) : "x9", "memory");
+    *byte = sample;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned pre_mov_once(const void *address, uint64_t *scratch, unsigned *byte,
+                             uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed;
+
+    (void)aux;
+    /* The pre-window rewrites the LDXR destination with a constant that has no
+     * data dependency on the LDXR result.  The LDXR still executed, so the
+     * native STXR succeeds; a value-chain-only proof would decline. */
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     "mov %0, #0\n"
+                     "ldrb %w1, [%4]\n"
+                     "stxr %w2, %0, [%3]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned pre_long_once(const void *address, uint64_t *scratch, unsigned *byte,
+                              uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed;
+
+    (void)aux;
+    /* 64 register-only instructions between the LDXR and the sampled load:
+     * beyond the old 12-instruction value-chain window, but still a straight
+     * line with no branch target, so the LDXR provably executed. */
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     ".rept 64\n"
+                     "add %0, %0, #1\n"
+                     ".endr\n"
+                     "ldrb %w1, [%4]\n"
+                     "stxr %w2, %0, [%3]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed)
+                     : "r"(scratch), "r"(address) : "memory");
     *byte = sample;
     return failed;
 }
@@ -481,6 +543,26 @@ static unsigned post_load_store_once(const void *address, uint64_t *scratch, uns
     return failed;
 }
 
+__attribute__((noinline))
+static unsigned post_load_xpair_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                     uint64_t *aux)
+{
+    uint64_t old, a = 0, b = 0;
+    unsigned sample, status;
+
+    (void)aux;
+    /* A second, paired reservation in the gap replaces the single one; the
+     * STXP consumes the pair and must still succeed. */
+    __asm__ volatile("ldxr %0, [%5]\n"
+                     "ldrb %w1, [%6]\n"
+                     "ldxp %2, %3, [%5]\n"
+                     "stxp %w4, %2, %3, [%5]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(a), "=&r"(b), "=&r"(status)
+                     : "r"(scratch), "r"(address) : "memory");
+    *byte = sample;
+    return status;
+}
+
 /* A conditional branch in the gap, taken from the sampled byte. Both runs read
  * the same byte, so both must reach the same value. */
 __attribute__((noinline))
@@ -555,6 +637,8 @@ enum unreserved_branch {
     UNRESERVED_CROSS_PAGE,
     UNRESERVED_GAP_CLREX,   /* LDXR executes; CLREX clears it before the STXR */
     UNRESERVED_GAP_SVC,     /* LDXR executes; SVC takes an exception in between */
+    UNRESERVED_GAP_SELF_STORE,      /* a plain store clears the monitored word */
+    UNRESERVED_GAP_NEON_SELF_STORE, /* an opcode outside the scalar decoder does */
 };
 
 /* Keep an unreachable LDXR in the bridge's look-behind and skip it with the
@@ -627,6 +711,26 @@ static int unreserved_store_once(const void *address, uint64_t *scratch,
                          "stxr %w1, %0, [%3]\n"
                          : "+&r"(value), "=&r"(status), "=&r"(*byte)
                          : "r"(scratch), "r"(address) : "memory");
+    } else if (branch == UNRESERVED_GAP_SELF_STORE) {
+        /* The LDXR really executes, then a plain store to the same private
+         * word clears the reservation.  Native sequence: STXR must fail.
+         * A bridge that fakes success would report status 0. */
+        __asm__ volatile("ldxr %0, [%3]\n"
+                         "ldrb %w2, [%4]\n"
+                         "str %0, [%3]\n"
+                         "stxr %w1, %0, [%3]\n"
+                         : "+&r"(value), "=&r"(status), "=&r"(*byte)
+                         : "r"(scratch), "r"(address) : "memory");
+    } else if (branch == UNRESERVED_GAP_NEON_SELF_STORE) {
+        /* Same shape, with a single-lane SIMD store the scalar store decoder
+         * does not necessarily classify.  It must still clear the monitor. */
+        __asm__ volatile("movi v0.16b, #0x5a\n"
+                         "ldxr %0, [%3]\n"
+                         "ldrb %w2, [%4]\n"
+                         "st1 {v0.b}[0], [%3]\n"
+                         "stxr %w1, %0, [%3]\n"
+                         : "+&r"(value), "=&r"(status), "=&r"(*byte)
+                         : "r"(scratch), "r"(address) : "v0", "memory");
     } else {
         __asm__ volatile("clrex\n"
                          "b 1f\n"
@@ -637,6 +741,16 @@ static int unreserved_store_once(const void *address, uint64_t *scratch,
                          : "r"(scratch), "r"(address) : "memory");
     }
     uint64_t observed = *scratch;
+    if (branch == UNRESERVED_GAP_SELF_STORE || branch == UNRESERVED_GAP_NEON_SELF_STORE) {
+        /* Measured on this core: a same-PE store or LSE atomic to the watched
+         * word does not clear the local monitor, so the native STXR succeeds.
+         * A bridge that treats the store as a reservation loss would report a
+         * failure the hardware never produces.  unexpected_stores therefore
+         * counts failures in this shape. */
+        if (status == 0) return 0;
+        if (status == 1) return 1;
+        return -1;
+    }
     if (status == 1 && observed == scratch_initial) return 0;
     if (status == 0 && observed == store_value) return 1;
     return -1;
@@ -666,21 +780,30 @@ static void observe_unreserved_store(const void *address, const void *reference,
     }
     out->error = identity(address, 1, backing_fd, offset, &target);
     if (out->error) goto done;
-    bool exec_reference = branch != UNRESERVED_GAP_CLREX && branch != UNRESERVED_GAP_SVC;
+    bool exec_reference = branch != UNRESERVED_GAP_CLREX && branch != UNRESERVED_GAP_SVC &&
+                          branch != UNRESERVED_GAP_SELF_STORE &&
+                          branch != UNRESERVED_GAP_NEON_SELF_STORE;
 
     out->error = identity_with_exec(reference, 1, backing_fd, offset, exec_reference, &control);
     if (out->error) goto done;
     ssize_t got = pread(backing_fd, &file_byte, 1, offset);
     if (got != 1) { out->error = got < 0 ? errno : EIO; goto done; }
+    bool self_shape = branch == UNRESERVED_GAP_SELF_STORE ||
+                      branch == UNRESERVED_GAP_NEON_SELF_STORE;
 
     for (unsigned i = 0; i < UD_STORE_TRIALS; ++i) {
         unsigned a, b, c;
         int before = unreserved_store_once(reference, &scratch, store_value, branch, &a);
         int tested = unreserved_store_once(address, &scratch, store_value, branch, &b);
         int after_control = unreserved_store_once(reference, &scratch, store_value, branch, &c);
+        /* The self-store shapes observe only the STXR status.  In the
+         * patch_only/deactivated stages the sampled live byte is the patched
+         * one, so comparing it with the file byte is neither expected nor
+         * useful here. */
         if (before != 0 || after_control != 0 || tested < 0 ||
-            a != file_byte || c != file_byte || (i && b != target_byte) ||
-            (store_value != scratch_initial && b != file_byte)) {
+            a != file_byte || c != file_byte ||
+            (!self_shape && ((i && b != target_byte) ||
+                             (store_value != scratch_initial && b != file_byte)))) {
             out->error = EAGAIN;
             goto done;
         }
@@ -759,6 +882,24 @@ void ud_observe_gap_svc_status(const void *address, const void *reference,
                              UNRESERVED_GAP_SVC, out);
 }
 
+void ud_observe_gap_self_store(const void *address, const void *reference,
+                               int backing_fd, off_t offset,
+                               struct ud_store_observation *out)
+{
+    observe_unreserved_store(address, reference, backing_fd, offset,
+                             UINT64_C(0xc3175ed9246ab08f),
+                             UNRESERVED_GAP_SELF_STORE, out);
+}
+
+void ud_observe_gap_neon_self_store(const void *address, const void *reference,
+                                    int backing_fd, off_t offset,
+                                    struct ud_store_observation *out)
+{
+    observe_unreserved_store(address, reference, backing_fd, offset,
+                             UINT64_C(0xc3175ed9246ab08f),
+                             UNRESERVED_GAP_NEON_SELF_STORE, out);
+}
+
 static uint64_t scalar_word(const void *address)
 {
     uint64_t value;
@@ -799,10 +940,13 @@ static unsigned execution_once(const void *address, uint64_t *scratch, unsigned 
 
 enum reservation_probe {
     READ_ADJACENT, READ_SPACED, READ_POST_LOAD_NOP, READ_POST_LOAD_ALU, READ_PRE_LOAD_ALU,
-    READ_POST_LOAD_FP, READ_PRE_LOAD_GPR, READ_POST_LOAD_SIMD, READ_POST_LOAD_CSEL,
+    READ_POST_LOAD_FP, READ_PRE_LOAD_GPR, READ_PRE_MOV, READ_PRE_LONG,
+    READ_POST_LOAD_SIMD,
+    READ_POST_LOAD_CSEL,
     READ_POST_LOAD_LOAD, READ_POST_LOAD_STORE, READ_POST_LOAD_BRANCH, READ_POST_LOAD_XLOAD,
+    READ_POST_LOAD_XPAIR,
     READ_POST_LOAD_CALL, READ_POST_LOAD_PERMUTE, READ_POST_LOAD_FPARITH,
-    READ_ZERO, READ_NONZERO, EXECUTE_CANARY
+    READ_OVERWRITE_LDXR, READ_ZERO, READ_NONZERO, EXECUTE_CANARY
 };
 
 typedef unsigned (*probe_fn)(const void *, uint64_t *, unsigned *, uint64_t *);
@@ -815,11 +959,15 @@ static void observe_reservation(const void *address, const void *reference,
     int execute = probe == EXECUTE_CANARY;
     bool ap_probe = probe == READ_POST_LOAD_NOP || probe == READ_POST_LOAD_ALU ||
                     probe == READ_PRE_LOAD_ALU || probe == READ_POST_LOAD_FP ||
-                    probe == READ_PRE_LOAD_GPR || probe == READ_POST_LOAD_SIMD ||
+                    probe == READ_PRE_LOAD_GPR || probe == READ_PRE_MOV ||
+                    probe == READ_PRE_LONG ||
+                    probe == READ_POST_LOAD_SIMD ||
                     probe == READ_POST_LOAD_CSEL || probe == READ_POST_LOAD_LOAD ||
                     probe == READ_POST_LOAD_STORE || probe == READ_POST_LOAD_BRANCH ||
-                    probe == READ_POST_LOAD_XLOAD || probe == READ_POST_LOAD_CALL ||
-                    probe == READ_POST_LOAD_PERMUTE || probe == READ_POST_LOAD_FPARITH;
+                    probe == READ_POST_LOAD_XLOAD || probe == READ_POST_LOAD_XPAIR ||
+                    probe == READ_POST_LOAD_CALL ||
+                    probe == READ_POST_LOAD_PERMUTE || probe == READ_POST_LOAD_FPARITH ||
+                    probe == READ_OVERWRITE_LDXR;
     /* The value-producing probes store an input-derived word through the STXR;
      * comparing it with the control run proves the modeled window computed the
      * same registers and memory as the native instructions. */
@@ -836,15 +984,19 @@ static void observe_reservation(const void *address, const void *reference,
     if (probe == READ_PRE_LOAD_ALU) sample = pre_load_alu_once;
     if (probe == READ_POST_LOAD_FP) sample = post_load_fp_once;
     if (probe == READ_PRE_LOAD_GPR) sample = pre_load_gpr_once;
+    if (probe == READ_PRE_MOV) sample = pre_mov_once;
+    if (probe == READ_PRE_LONG) sample = pre_long_once;
     if (probe == READ_POST_LOAD_SIMD) sample = post_load_simd_once;
     if (probe == READ_POST_LOAD_CSEL) sample = post_load_csel_once;
     if (probe == READ_POST_LOAD_LOAD) sample = post_load_load_once;
     if (probe == READ_POST_LOAD_STORE) sample = post_load_store_once;
     if (probe == READ_POST_LOAD_BRANCH) sample = post_load_branch_once;
     if (probe == READ_POST_LOAD_XLOAD) sample = post_load_xload_once;
+    if (probe == READ_POST_LOAD_XPAIR) sample = post_load_xpair_once;
     if (probe == READ_POST_LOAD_CALL) sample = post_load_call_once;
     if (probe == READ_POST_LOAD_PERMUTE) sample = post_load_permute_once;
     if (probe == READ_POST_LOAD_FPARITH) sample = post_load_fparith_once;
+    if (probe == READ_OVERWRITE_LDXR) sample = overwrite_ldxr_once;
     if (probe == READ_ZERO) sample = zero_exclusive_once;
     if (probe == READ_NONZERO) sample = nonzero_exclusive_once;
     /* Keep the scratch away from normal stack writes and compiler spills.
@@ -1000,11 +1152,32 @@ void ud_observe_ap_v222(const void *address, const void *reference, int backing_
                    out->leaf_call.reservation_loss : UD_UNKNOWN;
 }
 
+unsigned ud_deep_window_status(const void *address, uint64_t *scratch, unsigned *byte)
+{
+    uint64_t old, count = 6000;
+    unsigned sample, failed;
+
+    __asm__ volatile("ldxr %0, [%4]\n"
+                     "ldrb %w1, [%5]\n"
+                     "1:\n"
+                     "subs %3, %3, #1\n"
+                     "b.ne 1b\n"
+                     "stxr %w2, %0, [%4]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed), "+r"(count)
+                     : "r"(scratch), "r"(address) : "memory", "cc");
+    *byte = sample;
+    return failed;
+}
+
 void ud_observe_ap_v223(const void *address, const void *reference, int backing_fd,
                         off_t offset, struct ud_ap_v223_observation *out)
 {
     observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_FPARITH,
                         &out->fparith);
+    observe_reservation(address, reference, backing_fd, offset, READ_PRE_MOV, &out->pre_mov);
+    observe_reservation(address, reference, backing_fd, offset, READ_PRE_LONG, &out->pre_long);
+    ud_observe_gap_self_store(address, reference, backing_fd, offset, &out->self_store);
+    ud_observe_gap_neon_self_store(address, reference, backing_fd, offset, &out->neon_self);
     out->verdict = out->fparith.reservation_loss;
 }
 
@@ -1012,6 +1185,12 @@ void ud_observe_ap_csel(const void *address, const void *reference, int backing_
                         off_t offset, struct ud_exclusive_observation *out)
 {
     observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_CSEL, out);
+}
+
+void ud_observe_ap_overwrite_ldxr(const void *address, const void *reference, int backing_fd,
+                                  off_t offset, struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_OVERWRITE_LDXR, out);
 }
 
 void ud_observe_ap_load(const void *address, const void *reference, int backing_fd,
@@ -1036,6 +1215,12 @@ void ud_observe_ap_xload(const void *address, const void *reference, int backing
                          off_t offset, struct ud_exclusive_observation *out)
 {
     observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_XLOAD, out);
+}
+
+void ud_observe_ap_xpair(const void *address, const void *reference, int backing_fd,
+                         off_t offset, struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_POST_LOAD_XPAIR, out);
 }
 
 void ud_observe_zero_exclusive(const void *address, const void *reference,

@@ -1,0 +1,477 @@
+[ 4447.162618] type=1400 audit(1759725833.240:968): avc:  denied  { getopt } for  comm="binder:1299_1A" scontext=u:r:system_server:s0 tcontext=u:r:shell:s0 tclass=unix_stream_socket permissive=0
+[ 4448.237272] [04:43:54.320198][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4448.328182] logbuffer_pcie1: [ 5941] OC Initial Status check: 0x5FC(0xf0)
+[ 4448.328402] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4448.361472] logbuffer_pcie1: [ 5942] D state: 0, LTSSM: 0
+[ 4448.361790] logbuffer_pcie1: [ 5943] L0(0x11)
+[ 4448.365760] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4448.366200] [04:43:54.449131][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4448.979296] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4449.116417] [04:43:55.199346][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4449.879514] logbuffer_pcie1: [ 5944] OC Initial Status check: 0x5FC(0xf0)
+[ 4449.879696] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4449.912313] logbuffer_pcie1: [ 5945] D state: 0, LTSSM: 0
+[ 4449.912622] logbuffer_pcie1: [ 5946] L0(0x11)
+[ 4449.916888] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4449.917312] [04:43:56.000243][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4452.019502] [04:43:58.102431][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4452.327729] logbuffer_pcie1: [ 5947] OC Initial Status check: 0x5FC(0xf0)
+[ 4452.328165] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4452.361172] logbuffer_pcie1: [ 5948] D state: 0, LTSSM: 0
+[ 4452.361488] logbuffer_pcie1: [ 5949] L0(0x11)
+[ 4452.366744] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4452.367184] [04:43:58.450116][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4453.950183] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4454.369311] [04:44:00.452235][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4454.387036] logbuffer_pcie1: [ 5950] OC Initial Status check: 0x5FC(0xf0)
+[ 4454.387240] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4454.420300] logbuffer_pcie1: [ 5951] D state: 0, LTSSM: 0
+[ 4454.420617] logbuffer_pcie1: [ 5952] L0(0x11)
+[ 4454.425062] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4454.425476] [04:44:00.508407][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4454.715630] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4455.199418] [04:44:01.282346][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4455.431575] logbuffer_pcie1: [ 5953] OC Initial Status check: 0x5FC(0xf0)
+[ 4455.431752] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4455.464737] logbuffer_pcie1: [ 5954] D state: 0, LTSSM: 0
+[ 4455.465099] logbuffer_pcie1: [ 5955] L0(0x11)
+[ 4455.468997] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4455.469408] [04:44:01.552338][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4456.948598] [04:44:03.031527][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4457.397740] servicemanager: Caller(pid=1299,uid=1000,sid=u:r:system_server:s0) Since 'artd' could not be found trying to start it as a lazy AIDL service. (if it's not configured to be a lazy service, it may be stuck starting or still starting).
+[ 4457.400906] init: starting service 'artd'...
+[ 4457.405454] init: Activation of cgroup controller +memory failed in path /sys/fs/cgroup/system/uid_1082: Invalid argument
+[ 4457.410324] init: ... started service 'artd' has pid 12221
+[ 4457.410452] init: Control message: Processed ctl.interface_start for 'aidl/artd' from pid: 557 (/system/bin/servicemanager)
+[ 4457.426774] logbuffer_pcie1: [ 5956] OC Initial Status check: 0x5FC(0xf0)
+[ 4457.426875] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4457.442048] servicemanager: Notifying artd they do (previously: don't) have clients when service is guaranteed to be in use
+[ 4457.442139] libbinder.BpBinder: onLastStrongRef automatically unlinking death recipients: 
+[ 4457.459301] logbuffer_pcie1: [ 5957] D state: 0, LTSSM: 0
+[ 4457.459391] logbuffer_pcie1: [ 5958] L0(0x11)
+[ 4457.462608] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4457.462782] [04:44:03.545721][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4457.606884] logd: start watching /data/system/packages.list ...
+[ 4457.622082] logd: ReadPackageList, total packages: 292
+[ 4457.667346] type=1400 audit(1759725843.744:969): avc:  denied  { getopt } for  comm="binder:1299_1A" scontext=u:r:system_server:s0 tcontext=u:r:shell:s0 tclass=unix_stream_socket permissive=0
+[ 4457.667502] type=1400 audit(1759725843.744:970): avc:  denied  { getopt } for  comm="binder:1299_1A" scontext=u:r:system_server:s0 tcontext=u:r:shell:s0 tclass=unix_stream_socket permissive=0
+[ 4457.667582] type=1400 audit(1759725843.744:971): avc:  denied  { getopt } for  comm="binder:1299_1A" scontext=u:r:system_server:s0 tcontext=u:r:shell:s0 tclass=unix_stream_socket permissive=0
+[ 4457.774585] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4457.854862] servicemanager: Caller(pid=12264,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4457.856597] servicemanager: Caller(pid=12264,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4457.857745] servicemanager: Caller(pid=12264,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found mapper/pixel in device VINTF manifest.
+[ 4457.983229] logd: logdr: UID=2000 GID=2000 PID=12318 n tail=0 logMask=99 pid=12264 start=0ns deadline=0ns
+[ 4458.242750] logd: logdr: UID=2000 GID=2000 PID=12349 n tail=0 logMask=99 pid=12264 start=0ns deadline=0ns
+[ 4458.519886] logd: logdr: UID=2000 GID=2000 PID=12353 n tail=0 logMask=99 pid=12264 start=0ns deadline=0ns
+[ 4458.708071] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4458.814902] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4458.817829] logd: logdr: UID=2000 GID=2000 PID=12357 n tail=0 logMask=99 pid=12264 start=0ns deadline=0ns
+[ 4459.025802] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4459.109972] logd: logdr: UID=2000 GID=2000 PID=12362 n tail=0 logMask=99 pid=12264 start=0ns deadline=0ns
+[ 4459.125192] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4459.225611] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4459.378464] logd: logdr: UID=2000 GID=2000 PID=12366 n tail=0 logMask=99 pid=12264 start=0ns deadline=0ns
+[ 4459.529829] [+] KP D load_module_path: /data/local/tmp/urov-crc-20261109-220930.kpm
+[ 4459.529904] [+] KP D load_module_path: module size: 3c940
+[ 4459.530339] [+] KP D loading module: 
+[ 4459.530350] [+] KP D     name: urov-y
+[ 4459.530358] [+] KP D     version: 2.23.0
+[ 4459.530366] [+] KP D     license: GPL v2
+[ 4459.530372] [+] KP D     author: UROV-Y
+[ 4459.530379] [+] KP D     description: Reader-site trap ARM64 user read overlay: BRK, UXN or AP[1] trap; shadow-GPR pre-chain, modeled BL/RET and REV windows, native-step fallback
+[ 4459.530424] [+] KP I alloc module size: 2c58a
+[ 4459.530454] [+] KP D final section addresses:
+[ 4459.530461] [+] KP D     .text ffffffeba5800008 1cb24
+[ 4459.530486] [+] KP D     .kpm.info ffffffeba581d008 e6
+[ 4459.530493] [+] KP D     .kpm.init ffffffeba581f008 8
+[ 4459.530501] [+] KP D     .kpm.ctl0 ffffffeba581f010 8
+[ 4459.530508] [+] KP D     .kpm.exit ffffffeba581f018 8
+[ 4459.530517] [+] KP D     .rodata.str1.1 ffffffeba581d0ee e92
+[ 4459.530524] [+] KP D     .rodata ffffffeba581df80 3e4
+[ 4459.530531] [+] KP D     .bss ffffffeba581f020 8af8
+[ 4459.530538] [+] KP D     .data ffffffeba5827b18 18
+[ 4459.530545] [+] KP D     .symtab ffffffeba5828008 1ed8
+[ 4459.530554] [+] KP D     .strtab ffffffeba582b48a 1108
+[ 4459.540441] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4459.560078] [+] KP V Wrap func: ffffffe24d81662c, origin: ffffffe24d81662c, replace: ffffffeba55045f0, relocate: ffffffeba55043b8, chain: ffffffeba5504370
+[ 4459.560106] [+] KP V Wrap chain add: ffffffe24d81662c, ffffffeba5802be4, 0 successed
+[ 4459.560138] [+] KP V Wrap func: ffffffe24d81662c succsseed
+[ 4459.560149] [+] KP V Wrap func pointer add: ffffffe24e8311f8, ffffffeba5802dcc, 0 successed
+[ 4459.560159] [+] KP V Wrap func pointer add: ffffffe24e831530, ffffffeba5802f74, ffffffeba5803334 successed
+[ 4459.560164] [+] KP V Wrap func: ffffffe24db11190, origin: ffffffe24db11190, replace: ffffffeba5505e00, relocate: ffffffeba5505bc8, chain: ffffffeba5505b80
+[ 4459.560169] [+] KP V Wrap chain add: ffffffe24db11190, 0, ffffffeba5803a08 successed
+[ 4459.560175] [+] KP V Wrap func: ffffffe24db11190 succsseed
+[ 4459.560180] [+] KP V Wrap func: ffffffe24db072e0, origin: ffffffe24db072e0, replace: ffffffeba55062d0, relocate: ffffffeba5506098, chain: ffffffeba5506050
+[ 4459.560185] [+] KP V Wrap chain add: ffffffe24db072e0, 0, ffffffeba5803ce0 successed
+[ 4459.560190] [+] KP V Wrap func: ffffffe24db072e0 succsseed
+[ 4459.560194] [+] KP V Wrap func: ffffffe24db073c0, origin: ffffffe24db073c0, replace: ffffffeba55067a0, relocate: ffffffeba5506568, chain: ffffffeba5506520
+[ 4459.560198] [+] KP V Wrap chain add: ffffffe24db073c0, 0, ffffffeba5804240 successed
+[ 4459.560203] [+] KP V Wrap func: ffffffe24db073c0 succsseed
+[ 4459.560207] [+] KP V Wrap func: ffffffe24db04c48, origin: ffffffe24db04c48, replace: ffffffeba5506c70, relocate: ffffffeba5506a38, chain: ffffffeba55069f0
+[ 4459.560212] [+] KP V Wrap chain add: ffffffe24db04c48, 0, ffffffeba580465c successed
+[ 4459.560218] [+] KP V Wrap func: ffffffe24db04c48 succsseed
+[ 4459.560226] [+] KP V Wrap func pointer add: ffffffe24e8313d0, ffffffeba5804930, ffffffeba5804f58 successed
+[ 4459.560235] [+] KP V Wrap func pointer add: ffffffe24e831378, ffffffeba5804930, ffffffeba5804f58 successed
+[ 4459.560244] [+] KP V Wrap func pointer add: ffffffe24e831380, ffffffeba5804930, ffffffeba5804f58 successed
+[ 4459.560253] [+] KP V Wrap func pointer add: ffffffe24e8313b0, ffffffeba5804930, ffffffeba5804f58 successed
+[ 4459.560262] [+] KP V Wrap func pointer add: ffffffe24e831408, ffffffeba5804930, ffffffeba5804f58 successed
+[ 4459.560265] [+] KP V Wrap func pointer add: ffffffe24e8313a8, ffffffeba5804930, ffffffeba5804f58 successed
+[ 4459.560273] [+] KP V Wrap func pointer add: ffffffe24e831588, ffffffeba5804930, ffffffeba5804f58 successed
+[ 4459.560281] [+] KP V Wrap func pointer add: ffffffe24e8315c0, ffffffeba5804930, ffffffeba5804f58 successed
+[ 4459.560290] [+] KP V Wrap func pointer add: ffffffe24e831410, ffffffeba5804930, ffffffeba5804f58 successed
+[ 4459.560298] [+] KP V Wrap func pointer add: ffffffe24e8313a0, ffffffeba5805978, 0 successed
+[ 4459.560307] [+] KP V Wrap func pointer add: ffffffe24e831a58, ffffffeba5805978, 0 successed
+[ 4459.560314] [+] KP V Wrap func: ffffffe24d83bbc4, origin: ffffffe24d83bbc4, replace: ffffffeba550a160, relocate: ffffffeba5509f28, chain: ffffffeba5509ee0
+[ 4459.560317] [+] KP V Wrap chain add: ffffffe24d83bbc4, ffffffeba5806064, 0 successed
+[ 4459.560334] [+] KP V Wrap func: ffffffe24d83bbc4 succsseed
+[ 4459.560339] [+] KP V Wrap func: ffffffe24db0f274, origin: ffffffe24db0f274, replace: ffffffeba550a630, relocate: ffffffeba550a3f8, chain: ffffffeba550a3b0
+[ 4459.560343] [+] KP V Wrap chain add: ffffffe24db0f274, ffffffeba58068a8, ffffffeba5806978 successed
+[ 4459.560348] [+] KP V Wrap func: ffffffe24db0f274 succsseed
+[ 4459.560354] [+] KP V Wrap func: ffffffe24d83be18, origin: ffffffe24d83be18, replace: ffffffeba550ab00, relocate: ffffffeba550a8c8, chain: ffffffeba550a880
+[ 4459.560358] [+] KP V Wrap chain add: ffffffe24d83be18, ffffffeba5806d34, 0 successed
+[ 4459.560375] [+] KP V Wrap func: ffffffe24d83be18 succsseed
+[ 4459.560381] [+] KP V Wrap func: ffffffe24e7fbbdc, origin: ffffffe24e7fbbdc, replace: ffffffeba550afd0, relocate: ffffffeba550ad98, chain: ffffffeba550ad50
+[ 4459.560385] [+] KP V Wrap chain add: ffffffe24e7fbbdc, 0, ffffffeba5806f2c successed
+[ 4459.560390] [+] KP V Wrap func: ffffffe24e7fbbdc succsseed
+[ 4459.560395] [+] KP V Wrap func: ffffffe24d8ac540, origin: ffffffe24d8ac540, replace: ffffffeba550b4a0, relocate: ffffffeba550b268, chain: ffffffeba550b220
+[ 4459.560399] [+] KP V Wrap chain add: ffffffe24d8ac540, 0, ffffffeba5807078 successed
+[ 4459.560419] [+] KP V Wrap func: ffffffe24d8ac540 succsseed
+[ 4459.560423] [+] KP I load_module: [urov-y] succeed with [key=<MODULE-KEY>] 
+[ 4459.624767] [+] KP I module_control0: name urov-y, args: status
+[ 4459.624808] [+] KP I module_control0: name: urov-y, rc: 0
+[ 4459.650641] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4459.747214] type=1400 audit(1759725845.824:972): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4459.749295] type=1400 audit(1759725845.824:973): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4459.818304] binder: 2410:1299 cannot find target node
+[ 4459.818316] binder: 1299:2410 transaction async to 0:0 failed 1241349/29189/-22, code 7 size 68-0 line 3359
+[ 4459.861894] servicemanager: Caller(pid=12387,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4459.862495] servicemanager: Caller(pid=12387,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4459.863825] servicemanager: Caller(pid=12387,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found mapper/pixel in device VINTF manifest.
+[ 4459.974024] logd: logdr: UID=2000 GID=2000 PID=12426 n tail=0 logMask=99 pid=12387 start=0ns deadline=0ns
+[ 4460.142479] google_battery: MSC_TTF: est:59966(999min), max_ratio:4789 [0:0,-1086,1500][1:12,-394,1500][2:57,38,1500]
+[ 4460.147478] healthd: battery l=89 v=4221 t=32.3 h=2 st=4 c=-322812 fc=3970000 cc=784 chg=u
+[ 4460.153262] servicemanager: Caller(pid=2050,uid=10230,sid=u:r:platform_app:s0:c512,c768) Found vendor.google.google_battery.IGoogleBattery/default in device VINTF manifest.
+[ 4460.215575] [04:44:06.298514][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4460.246794] logd: logdr: UID=2000 GID=2000 PID=12430 n tail=0 logMask=99 pid=12387 start=0ns deadline=0ns
+[ 4460.453491] logbuffer_pcie1: [ 5959] OC Initial Status check: 0x5FC(0xf0)
+[ 4460.453579] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4460.485899] logbuffer_pcie1: [ 5960] D state: 0, LTSSM: 0
+[ 4460.486053] logbuffer_pcie1: [ 5961] L0(0x11)
+[ 4460.489345] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4460.489541] [04:44:06.572479][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4460.527639] logd: logdr: UID=2000 GID=2000 PID=12435 n tail=0 logMask=99 pid=12387 start=0ns deadline=0ns
+[ 4460.711028] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4460.816843] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4460.848849] logd: logdr: UID=2000 GID=2000 PID=12439 n tail=0 logMask=99 pid=12387 start=0ns deadline=0ns
+[ 4460.916499] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4461.025364] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4461.124923] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4461.132032] logd: logdr: UID=2000 GID=2000 PID=12444 n tail=0 logMask=99 pid=12387 start=0ns deadline=0ns
+[ 4461.224881] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4461.420619] logd: logdr: UID=2000 GID=2000 PID=12448 n tail=0 logMask=99 pid=12387 start=0ns deadline=0ns
+[ 4461.567239] type=1400 audit(1759725847.644:974): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4461.567365] type=1400 audit(1759725847.644:975): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4461.595731] binder: 2410:1299 cannot find target node
+[ 4461.595743] binder: 1299:2410 transaction async to 0:0 failed 1243837/29189/-22, code 7 size 68-0 line 3359
+[ 4461.632531] servicemanager: Caller(pid=12463,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4461.633012] servicemanager: Caller(pid=12463,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4461.633640] servicemanager: Caller(pid=12463,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found mapper/pixel in device VINTF manifest.
+[ 4461.761747] [04:44:07.844685][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4461.768879] logd: logdr: UID=2000 GID=2000 PID=12501 n tail=0 logMask=99 pid=12463 start=0ns deadline=0ns
+[ 4461.796285] google_cpm: gcpm_chg_select_logic: taper_step=1 done=1
+[ 4462.094701] logd: logdr: UID=2000 GID=2000 PID=12505 n tail=0 logMask=99 pid=12463 start=0ns deadline=0ns
+[ 4462.401531] logd: logdr: UID=2000 GID=2000 PID=12509 n tail=0 logMask=99 pid=12463 start=0ns deadline=0ns
+[ 4462.408496] logbuffer_pcie1: [ 5962] OC Initial Status check: 0x5FC(0xf0)
+[ 4462.408592] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4462.440062] logbuffer_pcie1: [ 5963] D state: 0, LTSSM: 0
+[ 4462.440228] logbuffer_pcie1: [ 5964] L0(0x11)
+[ 4462.444135] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4462.444371] [04:44:08.527309][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4462.475551] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4462.586611] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4462.702012] logd: logdr: UID=2000 GID=2000 PID=12516 n tail=0 logMask=99 pid=12463 start=0ns deadline=0ns
+[ 4462.791732] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4462.891911] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4462.966710] logd: logdr: UID=2000 GID=2000 PID=12520 n tail=0 logMask=99 pid=12463 start=0ns deadline=0ns
+[ 4462.991624] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4463.084674] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4463.202439] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4463.224993] logd: logdr: UID=2000 GID=2000 PID=12527 n tail=0 logMask=99 pid=12463 start=0ns deadline=0ns
+[ 4463.303155] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4463.402748] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4463.502114] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4463.503727] logd: logdr: UID=2000 GID=2000 PID=12531 n tail=0 logMask=99 pid=12463 start=0ns deadline=0ns
+[ 4463.614429] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4463.770724] logd: logdr: UID=2000 GID=2000 PID=12535 n tail=0 logMask=99 pid=12463 start=0ns deadline=0ns
+[ 4463.831924] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4463.843865] [+] KP I module_control0: name urov-y, args: status
+[ 4463.843933] [+] KP I module_control0: name: urov-y, rc: 0
+[ 4463.934091] type=1400 audit(1759725850.012:976): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4463.935974] type=1400 audit(1759725850.012:977): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4463.996052] binder: 3403:1299 cannot find target node
+[ 4463.996064] binder: 1299:3403 transaction async to 0:0 failed 1246417/29189/-22, code 7 size 68-0 line 3359
+[ 4464.034766] servicemanager: Caller(pid=12551,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4464.035232] servicemanager: Caller(pid=12551,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4464.035427] servicemanager: Caller(pid=12551,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found mapper/pixel in device VINTF manifest.
+[ 4464.176005] logd: logdr: UID=2000 GID=2000 PID=12589 n tail=0 logMask=99 pid=12551 start=0ns deadline=0ns
+[ 4464.448096] logd: logdr: UID=2000 GID=2000 PID=12593 n tail=0 logMask=99 pid=12551 start=0ns deadline=0ns
+[ 4464.742903] logd: logdr: UID=2000 GID=2000 PID=12597 n tail=0 logMask=99 pid=12551 start=0ns deadline=0ns
+[ 4464.877365] [04:44:10.960300][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4464.889965] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4464.984571] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4465.049609] logd: logdr: UID=2000 GID=2000 PID=12601 n tail=0 logMask=99 pid=12551 start=0ns deadline=0ns
+[ 4465.067000] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4465.125638] logbuffer_pcie1: [ 5965] OC Initial Status check: 0x5FC(0xf0)
+[ 4465.125740] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4465.157710] logbuffer_pcie1: [ 5966] D state: 0, LTSSM: 0
+[ 4465.157990] logbuffer_pcie1: [ 5967] L0(0x11)
+[ 4465.161378] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4465.161561] [04:44:11.244499][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4465.191455] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4465.292469] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4465.331933] logd: logdr: UID=2000 GID=2000 PID=12606 n tail=0 logMask=99 pid=12551 start=0ns deadline=0ns
+[ 4465.392370] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4465.483698] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4465.602169] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4465.623234] logd: logdr: UID=2000 GID=2000 PID=12610 n tail=0 logMask=99 pid=12551 start=0ns deadline=0ns
+[ 4465.702953] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4465.802899] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4465.894161] logd: logdr: UID=2000 GID=2000 PID=12614 n tail=0 logMask=99 pid=12551 start=0ns deadline=0ns
+[ 4465.902308] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4466.180229] logd: logdr: UID=2000 GID=2000 PID=12618 n tail=0 logMask=99 pid=12551 start=0ns deadline=0ns
+[ 4466.225291] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4466.255250] [+] KP I module_control0: name urov-y, args: status
+[ 4466.255302] [+] KP I module_control0: name: urov-y, rc: 0
+[ 4466.342319] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4466.389325] type=1400 audit(1759725852.468:978): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4466.391374] type=1400 audit(1759725852.468:979): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4466.448334] binder: 3396:1299 cannot find target node
+[ 4466.448348] binder: 1299:3396 transaction async to 0:0 failed 1248989/29189/-22, code 7 size 68-0 line 3359
+[ 4466.487221] servicemanager: Caller(pid=12634,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4466.488152] servicemanager: Caller(pid=12634,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4466.490513] servicemanager: Caller(pid=12634,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found mapper/pixel in device VINTF manifest.
+[ 4466.621615] logd: logdr: UID=2000 GID=2000 PID=12672 n tail=0 logMask=99 pid=12634 start=0ns deadline=0ns
+[ 4466.920291] logd: logdr: UID=2000 GID=2000 PID=12676 n tail=0 logMask=99 pid=12634 start=0ns deadline=0ns
+[ 4466.957624] [04:44:13.040561][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4467.216297] logd: logdr: UID=2000 GID=2000 PID=12680 n tail=0 logMask=99 pid=12634 start=0ns deadline=0ns
+[ 4467.327161] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4467.441985] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4467.490585] logbuffer_pcie1: [ 5968] OC Initial Status check: 0x5FC(0xf0)
+[ 4467.490685] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4467.511180] logd: logdr: UID=2000 GID=2000 PID=12685 n tail=0 logMask=99 pid=12634 start=0ns deadline=0ns
+[ 4467.522684] logbuffer_pcie1: [ 5969] D state: 0, LTSSM: 0
+[ 4467.523493] logbuffer_pcie1: [ 5970] L0(0x11)
+[ 4467.526885] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4467.527086] [04:44:13.610025][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4467.646536] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4467.747068] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4467.805018] logd: logdr: UID=2000 GID=2000 PID=12689 n tail=0 logMask=99 pid=12634 start=0ns deadline=0ns
+[ 4467.846998] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4467.938813] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4468.046687] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4468.086717] logd: logdr: UID=2000 GID=2000 PID=12698 n tail=0 logMask=99 pid=12634 start=0ns deadline=0ns
+[ 4468.158578] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4468.258371] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4468.346710] logd: logdr: UID=2000 GID=2000 PID=12702 n tail=0 logMask=99 pid=12634 start=0ns deadline=0ns
+[ 4468.404096] [+] KP I module_control0: name urov-y, args: status
+[ 4468.404130] [+] KP I module_control0: name: urov-y, rc: 0
+[ 4468.483895] [04:44:14.566834][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4468.522446] type=1400 audit(1759725854.600:980): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4468.522768] type=1400 audit(1759725854.600:981): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4468.575082] binder: 3401:1299 cannot find target node
+[ 4468.575113] binder: 1299:3401 transaction async to 0:0 failed 1251642/29189/-22, code 7 size 68-0 line 3359
+[ 4468.614541] logbuffer_pcie1: [ 5971] OC Initial Status check: 0x5FC(0xf0)
+[ 4468.614607] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4468.620594] servicemanager: Caller(pid=12728,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4468.621204] servicemanager: Caller(pid=12728,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4468.621420] servicemanager: Caller(pid=12728,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found mapper/pixel in device VINTF manifest.
+[ 4468.646408] logbuffer_pcie1: [ 5972] D state: 0, LTSSM: 0
+[ 4468.646494] logbuffer_pcie1: [ 5973] L0(0x11)
+[ 4468.649595] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4468.649732] [04:44:14.732671][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4468.778357] logd: logdr: UID=2000 GID=2000 PID=12778 n tail=0 logMask=99 pid=12728 start=0ns deadline=0ns
+[ 4469.064812] logd: logdr: UID=2000 GID=2000 PID=12782 n tail=0 logMask=99 pid=12728 start=0ns deadline=0ns
+[ 4469.360560] logd: logdr: UID=2000 GID=2000 PID=12786 n tail=0 logMask=99 pid=12728 start=0ns deadline=0ns
+[ 4469.472006] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4469.585258] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4469.646464] logd: logdr: UID=2000 GID=2000 PID=12791 n tail=0 logMask=99 pid=12728 start=0ns deadline=0ns
+[ 4469.673498] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4469.779783] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4469.890449] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4469.924907] logd: logdr: UID=2000 GID=2000 PID=12795 n tail=0 logMask=99 pid=12728 start=0ns deadline=0ns
+[ 4469.991659] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4470.190803] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4470.215268] logd: logdr: UID=2000 GID=2000 PID=12799 n tail=0 logMask=99 pid=12728 start=0ns deadline=0ns
+[ 4470.302366] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4470.402507] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4470.493786] logd: logdr: UID=2000 GID=2000 PID=12804 n tail=0 logMask=99 pid=12728 start=0ns deadline=0ns
+[ 4470.502108] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4470.555672] [+] KP I module_control0: name urov-y, args: status
+[ 4470.555711] [+] KP I module_control0: name: urov-y, rc: 0
+[ 4470.653843] [04:44:16.736782][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4470.699896] type=1400 audit(1759725856.776:982): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4470.700045] type=1400 audit(1759725856.776:983): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4470.750381] binder: 2410:1299 cannot find target node
+[ 4470.750393] binder: 1299:2410 transaction async to 0:0 failed 1254285/29189/-22, code 7 size 68-0 line 3359
+[ 4470.800267] servicemanager: Caller(pid=12820,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4470.800757] servicemanager: Caller(pid=12820,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4470.800927] servicemanager: Caller(pid=12820,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found mapper/pixel in device VINTF manifest.
+[ 4470.885369] logbuffer_pcie1: [ 5974] OC Initial Status check: 0x5FC(0xf0)
+[ 4470.885449] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4470.915942] logbuffer_pcie1: [ 5975] D state: 0, LTSSM: 0
+[ 4470.916079] logbuffer_pcie1: [ 5976] L0(0x11)
+[ 4470.919213] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4470.919364] [04:44:17.002304][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4470.927994] logd: logdr: UID=2000 GID=2000 PID=12858 n tail=0 logMask=99 pid=12820 start=0ns deadline=0ns
+[ 4471.202205] logd: logdr: UID=2000 GID=2000 PID=12862 n tail=0 logMask=99 pid=12820 start=0ns deadline=0ns
+[ 4471.471353] logd: logdr: UID=2000 GID=2000 PID=12866 n tail=0 logMask=99 pid=12820 start=0ns deadline=0ns
+[ 4471.641488] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4471.740850] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4471.775638] logd: logdr: UID=2000 GID=2000 PID=12870 n tail=0 logMask=99 pid=12820 start=0ns deadline=0ns
+[ 4471.946476] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4472.046710] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4472.049325] logd: logdr: UID=2000 GID=2000 PID=12875 n tail=0 logMask=99 pid=12820 start=0ns deadline=0ns
+[ 4472.146960] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4472.249530] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4472.316420] logd: logdr: UID=2000 GID=2000 PID=12879 n tail=0 logMask=99 pid=12820 start=0ns deadline=0ns
+[ 4472.356371] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4472.457124] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4472.556842] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4472.597998] logd: logdr: UID=2000 GID=2000 PID=12883 n tail=0 logMask=99 pid=12820 start=0ns deadline=0ns
+[ 4472.614801] [04:44:18.697740][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4472.668546] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4472.768642] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4472.868794] logd: logdr: UID=2000 GID=2000 PID=12896 n tail=0 logMask=99 pid=12820 start=0ns deadline=0ns
+[ 4472.932603] [+] KP I module_control0: name urov-y, args: status
+[ 4472.932664] [+] KP I module_control0: name: urov-y, rc: 0
+[ 4473.055808] type=1400 audit(1759725859.132:984): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4473.055984] type=1400 audit(1759725859.132:985): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4473.103141] binder: 2397:1299 cannot find target node
+[ 4473.103153] binder: 1299:2397 transaction async to 0:0 failed 1257044/29189/-22, code 7 size 68-0 line 3359
+[ 4473.139794] servicemanager: Caller(pid=12912,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4473.140443] servicemanager: Caller(pid=12912,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4473.140627] servicemanager: Caller(pid=12912,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found mapper/pixel in device VINTF manifest.
+[ 4473.271708] logd: logdr: UID=2000 GID=2000 PID=12950 n tail=0 logMask=99 pid=12912 start=0ns deadline=0ns
+[ 4473.555406] logd: logdr: UID=2000 GID=2000 PID=12954 n tail=0 logMask=99 pid=12912 start=0ns deadline=0ns
+[ 4473.844866] logd: logdr: UID=2000 GID=2000 PID=12958 n tail=0 logMask=99 pid=12912 start=0ns deadline=0ns
+[ 4473.989012] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4474.097638] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4474.141393] logd: logdr: UID=2000 GID=2000 PID=12962 n tail=0 logMask=99 pid=12912 start=0ns deadline=0ns
+[ 4474.206756] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4474.300975] google_charger: usbchg=USB_DCP typec=null usbv=4700 usbc=146 usbMv=5000 usbMc=1500 usbOc=146
+[ 4474.302654] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4474.303181] google_battery: MSC_DIN chg_state=5dc109c03010005 f=0x5 chg_s=Charging chg_t=Fast vchg=4252 icl=1500
+[ 4474.303796] google_battery: MSC_DSG vbatt_idx:2->1 vt=4450000 fv_uv=4450000 vb=4252500 ib=-210625 cv_cnt=0 ov_cnt=0
+[ 4474.304216] google_battery: MSC_LOGIC temp_idx:2->2, vbatt_idx:2->1, fv=4450000->4300000, cc_max=3160000, ui=30000 cv_cnt=0 ov_cnt=0
+[ 4474.307108] max77759-charger i2c-max77759chrg: max77759_mode_callback:CC_MAX full=0 raw=0 stby_on=0, dc_on=0, chgr_on=2, buck_on=1, boost_on=0, otg_on=0, uno_on=0 wlc_tx=0 wlc_rx=0 usb_wlc=0 chgin_off=0 wlcin_off=0 frs_on=0 pogo_vout=0 pogo_vin=0
+[ 4474.308565] max77759-charger i2c-max77759chrg: max77759_mode_callback:TCPCI use_case=1->1 CHG_CNFG_00=5->5
+[ 4474.308584] google_charger: MSC_CHG fv_uv=4450000->4300000 cc_max=2260000->3160000 topoff=-1->-1 rc=0
+[ 4474.402650] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4474.410033] logd: logdr: UID=2000 GID=2000 PID=12967 n tail=0 logMask=99 pid=12912 start=0ns deadline=0ns
+[ 4474.502494] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4474.685674] logd: logdr: UID=2000 GID=2000 PID=12971 n tail=0 logMask=99 pid=12912 start=0ns deadline=0ns
+[ 4474.712985] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4474.813384] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4474.832570] logbuffer_pcie1: [ 5977] OC Initial Status check: 0x5FC(0xf0)
+[ 4474.832661] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4474.864800] logbuffer_pcie1: [ 5978] D state: 0, LTSSM: 0
+[ 4474.864950] logbuffer_pcie1: [ 5979] L0(0x11)
+[ 4474.868173] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4474.868354] [04:44:20.951293][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4474.913257] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4475.002286] logd: logdr: UID=2000 GID=2000 PID=12975 n tail=0 logMask=99 pid=12912 start=0ns deadline=0ns
+[ 4475.013647] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4475.124113] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4475.295380] logd: logdr: UID=2000 GID=2000 PID=12979 n tail=0 logMask=99 pid=12912 start=0ns deadline=0ns
+[ 4475.391165] [+] KP I module_control0: name urov-y, args: status
+[ 4475.391230] [+] KP I module_control0: name: urov-y, rc: 0
+[ 4475.449666] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4475.454925] [-] KP E unload_module: name: urov-y
+[ 4475.454945] [+] KP V Wrap func pointer remove: ffffffe24e8313d0, ffffffeba5804930, ffffffeba5804f58
+[ 4475.454956] [+] KP V Unwrap func pointer: ffffffe24e8313d0, ffffffeba5804930, ffffffeba5804f58
+[ 4475.454964] [+] KP V Wrap func pointer remove: ffffffe24e831378, ffffffeba5804930, ffffffeba5804f58
+[ 4475.454973] [+] KP V Unwrap func pointer: ffffffe24e831378, ffffffeba5804930, ffffffeba5804f58
+[ 4475.454980] [+] KP V Wrap func pointer remove: ffffffe24e831380, ffffffeba5804930, ffffffeba5804f58
+[ 4475.454988] [+] KP V Unwrap func pointer: ffffffe24e831380, ffffffeba5804930, ffffffeba5804f58
+[ 4475.454995] [+] KP V Wrap func pointer remove: ffffffe24e8313b0, ffffffeba5804930, ffffffeba5804f58
+[ 4475.455004] [+] KP V Unwrap func pointer: ffffffe24e8313b0, ffffffeba5804930, ffffffeba5804f58
+[ 4475.455011] [+] KP V Wrap func pointer remove: ffffffe24e831408, ffffffeba5804930, ffffffeba5804f58
+[ 4475.455019] [+] KP V Unwrap func pointer: ffffffe24e831408, ffffffeba5804930, ffffffeba5804f58
+[ 4475.455027] [+] KP V Wrap func pointer remove: ffffffe24e8313a8, ffffffeba5804930, ffffffeba5804f58
+[ 4475.455034] [+] KP V Wrap func pointer remove: ffffffe24e831588, ffffffeba5804930, ffffffeba5804f58
+[ 4475.455041] [+] KP V Unwrap func pointer: ffffffe24e831588, ffffffeba5804930, ffffffeba5804f58
+[ 4475.455048] [+] KP V Wrap func pointer remove: ffffffe24e8315c0, ffffffeba5804930, ffffffeba5804f58
+[ 4475.455056] [+] KP V Unwrap func pointer: ffffffe24e8315c0, ffffffeba5804930, ffffffeba5804f58
+[ 4475.455063] [+] KP V Wrap func pointer remove: ffffffe24e831410, ffffffeba5804930, ffffffeba5804f58
+[ 4475.455070] [+] KP V Unwrap func pointer: ffffffe24e831410, ffffffeba5804930, ffffffeba5804f58
+[ 4475.455078] [+] KP V Wrap func pointer remove: ffffffe24e8311f8, ffffffeba5802dcc, 0
+[ 4475.455085] [+] KP V Unwrap func pointer: ffffffe24e8311f8, ffffffeba5802dcc, 0
+[ 4475.455093] [+] KP V Wrap func pointer remove: ffffffe24e831530, ffffffeba5802f74, ffffffeba5803334
+[ 4475.455100] [+] KP V Unwrap func pointer: ffffffe24e831530, ffffffeba5802f74, ffffffeba5803334
+[ 4475.455108] [+] KP V Wrap chain remove: ffffffe24db04c48, 0, ffffffeba580465c
+[ 4475.455117] [+] KP V Unwrap func: ffffffe24db04c48
+[ 4475.455125] [+] KP V Wrap chain remove: ffffffe24db073c0, 0, ffffffeba5804240
+[ 4475.455134] [+] KP V Unwrap func: ffffffe24db073c0
+[ 4475.455141] [+] KP V Wrap chain remove: ffffffe24db11190, 0, ffffffeba5803a08
+[ 4475.455149] [+] KP V Unwrap func: ffffffe24db11190
+[ 4475.455156] [+] KP V Wrap chain remove: ffffffe24db072e0, 0, ffffffeba5803ce0
+[ 4475.455164] [+] KP V Unwrap func: ffffffe24db072e0
+[ 4475.455170] [+] KP V Wrap func pointer remove: ffffffe24e831a58, ffffffeba5805978, 0
+[ 4475.455179] [+] KP V Unwrap func pointer: ffffffe24e831a58, ffffffeba5805978, 0
+[ 4475.455186] [+] KP V Wrap func pointer remove: ffffffe24e8313a0, ffffffeba5805978, 0
+[ 4475.455193] [+] KP V Unwrap func pointer: ffffffe24e8313a0, ffffffeba5805978, 0
+[ 4475.455200] [+] KP V Wrap chain remove: ffffffe24d81662c, ffffffeba5802be4, 0
+[ 4475.455217] [+] KP V Unwrap func: ffffffe24d81662c
+[ 4475.455224] [+] KP V Wrap chain remove: ffffffe24d83bbc4, ffffffeba5806064, 0
+[ 4475.455241] [+] KP V Unwrap func: ffffffe24d83bbc4
+[ 4475.455247] [+] KP V Wrap chain remove: ffffffe24db0f274, ffffffeba58068a8, ffffffeba5806978
+[ 4475.455256] [+] KP V Unwrap func: ffffffe24db0f274
+[ 4475.455262] [+] KP V Wrap chain remove: ffffffe24d8ac540, 0, ffffffeba5807078
+[ 4475.455280] [+] KP V Unwrap func: ffffffe24d8ac540
+[ 4475.455287] [+] KP V Wrap chain remove: ffffffe24e7fbbdc, 0, ffffffeba5806f2c
+[ 4475.455295] [+] KP V Unwrap func: ffffffe24e7fbbdc
+[ 4475.455301] [+] KP V Wrap chain remove: ffffffe24d83be18, ffffffeba5806d34, 0
+[ 4475.455318] [+] KP V Unwrap func: ffffffe24d83be18
+[ 4475.455365] [+] KP I unload_module: name: urov-y, rc: 0
+[ 4475.535112] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4475.589139] type=1400 audit(1759725861.668:986): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4475.589273] type=1400 audit(1759725861.668:987): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4475.638174] binder: 2208:1299 cannot find target node
+[ 4475.638187] binder: 1299:2208 transaction async to 0:0 failed 1259593/29189/-22, code 7 size 68-0 line 3359
+[ 4475.675916] servicemanager: Caller(pid=12998,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4475.676406] servicemanager: Caller(pid=12998,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found android.hardware.graphics.allocator.IAllocator/default in device VINTF manifest.
+[ 4475.676573] servicemanager: Caller(pid=12998,uid=10284,sid=u:r:untrusted_app:s0:c28,c257,c512,c768) Found mapper/pixel in device VINTF manifest.
+[ 4475.818241] logd: logdr: UID=2000 GID=2000 PID=13036 n tail=0 logMask=99 pid=12998 start=0ns deadline=0ns
+[ 4475.827553] [04:44:21.910492][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4475.881241] logbuffer_pcie1: [ 5980] OC Initial Status check: 0x5FC(0xf0)
+[ 4475.881334] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4475.911941] logbuffer_pcie1: [ 5981] D state: 0, LTSSM: 0
+[ 4475.912068] logbuffer_pcie1: [ 5982] L0(0x11)
+[ 4475.915368] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4475.915550] [04:44:21.998489][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4476.089415] logd: logdr: UID=2000 GID=2000 PID=13040 n tail=0 logMask=99 pid=12998 start=0ns deadline=0ns
+[ 4476.370134] logd: logdr: UID=2000 GID=2000 PID=13044 n tail=0 logMask=99 pid=12998 start=0ns deadline=0ns
+[ 4476.520633] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4476.627442] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4476.668620] logd: logdr: UID=2000 GID=2000 PID=13048 n tail=0 logMask=99 pid=12998 start=0ns deadline=0ns
+[ 4476.675797] [04:44:22.758735][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4476.727474] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4476.834438] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4476.901772] logbuffer_pcie1: [ 5983] OC Initial Status check: 0x5FC(0xf0)
+[ 4476.901863] exynos-pcie-rc 14520000.pcie: AFC cal mode set to restart
+[ 4476.932260] logbuffer_pcie1: [ 5984] D state: 0, LTSSM: 0
+[ 4476.932448] logbuffer_pcie1: [ 5985] L0(0x11)
+[ 4476.935609] pcieh 0001:01:00.0: enabling device (0000 -> 0002)
+[ 4476.935775] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4476.935784] [04:44:23.018722][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 1 ret:0
+[ 4476.965210] logd: logdr: UID=2000 GID=2000 PID=13053 n tail=0 logMask=99 pid=12998 start=0ns deadline=0ns
+[ 4477.035640] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4477.118103] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4477.257959] logd: logdr: UID=2000 GID=2000 PID=13057 n tail=0 logMask=99 pid=12998 start=0ns deadline=0ns
+[ 4477.357229] exynos-decon[0]: update decon bts for mode: 1080x2400x90(0:252747)(bts fps:90 mode:90 op:0)
+[ 4477.400240] type=1400 audit(1759725863.480:988): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4477.400377] type=1400 audit(1759725863.480:989): avc:  denied  { search } for  comm="binder:630_2" name="log" dev="dm-53" ino=394 scontext=u:r:hal_graphics_composer_default:s0 tcontext=u:object_r:vendor_log_file:s0 tclass=dir permissive=0
+[ 4477.586876] [04:44:23.669813][dhd][wlan]dhd_plat_l1ss_ctrl: Control L1ss RC side 0 ret:0
+[ 4477.619632] [+] KP I commit_common_su: pid: 13071, tgid: 13071, to_uid: 0, sctx: , via_hook: 1
+[ 4477.732092] binder: 2410:1299 cannot find target node
+[ 4477.732124] binder: 1299:2410 transaction async to 0:0 failed 1262073/29189/-22, code 7 size 68-0 line 3359

@@ -237,6 +237,19 @@ static bool g_read_defense_221;
 static bool g_read_defense_221_guarded;
 static bool g_read_defense_222;
 static bool g_read_defense_223;
+static bool g_read_defense_224;
+
+static const char *read_defense_version_tag(void)
+{
+    if (g_read_defense_224) return "V224";
+    if (g_read_defense_223) return "V223";
+    if (g_read_defense_222) return "V222";
+    if (g_read_defense_221) return "V221";
+    if (g_read_defense_221_guarded) return "V221";
+    if (g_read_defense_window) return "V220";
+    if (g_read_defense_fixed) return "V219";
+    return "V218";
+}
 
 static void read_defense_observe_sites(enum ud_verdict *code, enum ud_verdict *fetch)
 {
@@ -288,11 +301,41 @@ static void window_store_probe(window_store_probe_fn fn, const uint8_t *text,
         fn(text, control, reference->fd, offset, out);
 }
 
+struct read_defense_decisions {
+    unsigned evidence, unknown, changed, accepted;
+};
+
+static void read_defense_classify(enum ud_verdict split, enum ud_verdict file_diff,
+                                  enum ud_verdict ap, enum ud_verdict site_code,
+                                  enum ud_verdict site_fetch, struct read_defense_decisions *out)
+{
+    if (split == UD_MATCH || ap == UD_MATCH || site_code == UD_MATCH || site_fetch == UD_MATCH) {
+        ++out->evidence;
+    } else if (split == UD_UNKNOWN || file_diff == UD_UNKNOWN || ap == UD_UNKNOWN ||
+               site_code == UD_UNKNOWN || site_fetch == UD_UNKNOWN) {
+        ++out->unknown;
+    } else if (file_diff == UD_MATCH) {
+        ++out->changed;
+    } else {
+        ++out->accepted;
+    }
+}
+
+struct read_defense_boundary_stats {
+    struct read_defense_decisions decision;
+    unsigned ap, ap_unknown, triplets, target_failed, control_failed;
+    uint64_t elapsed_ns, max_ns;
+};
+
 struct read_defense_v220_stats {
+    struct read_defense_decisions decision;
     unsigned pre_alu, fp, ap, ap_unknown, triplets, target_failed, control_failed;
     unsigned baseline_ok, pre_gpr, simd, simd_value;
-    unsigned leaf_call, permute, fp_arith, residual_trials, residual_failed, residual_control_failed;
-    unsigned split, evidence, unknown, changed, accepted;
+    unsigned leaf_call, permute, fp_arith, pre_mov, pre_long, residual_trials, residual_failed,
+             residual_control_failed;
+    unsigned self_bad, neon_bad, self_done, neon_done, deep_bad, deep_done;
+    int self_err, neon_err;
+    unsigned split;
     uint64_t elapsed_ns, max_ns, residual_ns;
 };
 
@@ -300,7 +343,9 @@ struct read_defense_v220_stats {
  * payload execution or any of the fixture's ground-truth inputs. */
 static void read_defense_v220_sample(const uint8_t *text, const struct page *reference,
                                     enum ud_verdict site_code, enum ud_verdict site_fetch,
-                                    struct read_defense_v220_stats *stats)
+                                    struct read_defense_v220_stats *stats,
+                                    struct read_defense_boundary_stats *boundary,
+                                    bool deep_window)
 {
     const uint8_t *control = reference->address + reference->entry;
     off_t offset = reference->file_offset + reference->entry;
@@ -352,6 +397,24 @@ static void read_defense_v220_sample(const uint8_t *text, const struct page *ref
             if (arith.fparith.error != EAGAIN) break;
         }
         stats->fp_arith += arith.fparith.reservation_loss == UD_MATCH;
+        stats->pre_mov += arith.pre_mov.reservation_loss == UD_MATCH;
+        stats->pre_long += arith.pre_long.reservation_loss == UD_MATCH;
+        if (deep_window) {
+            uint64_t deep_scratch = 0;
+            unsigned deep_byte = 0;
+
+            /* Only the target is meaningful: the 6000-instruction native
+             * control loop can be preempted and then its STXR legitimately
+             * fails, while the modeled window completes it. */
+            stats->deep_bad += ud_deep_window_status(text, &deep_scratch, &deep_byte) != 0;
+            ++stats->deep_done;
+        }
+        stats->self_bad += arith.self_store.unexpected_stores;
+        stats->neon_bad += arith.neon_self.unexpected_stores;
+        stats->self_done += arith.self_store.error == 0;
+        stats->neon_done += arith.neon_self.error == 0;
+        stats->self_err = arith.self_store.error;
+        stats->neon_err = arith.neon_self.error;
         ap = arith.verdict;
     }
     stats->pre_alu += pre_alu.reservation_loss == UD_MATCH;
@@ -362,19 +425,27 @@ static void read_defense_v220_sample(const uint8_t *text, const struct page *ref
     stats->target_failed += pre_alu.target_failed + fp.target_failed;
     stats->control_failed += pre_alu.control_failed + fp.control_failed;
     stats->split += split == UD_MATCH;
-    if (split == UD_MATCH || ap == UD_MATCH || site_code == UD_MATCH || site_fetch == UD_MATCH) {
-        ++stats->evidence;
-    } else if (split == UD_UNKNOWN || views.file_diff == UD_UNKNOWN || ap == UD_UNKNOWN ||
-               site_code == UD_UNKNOWN || site_fetch == UD_UNKNOWN) {
-        ++stats->unknown;
-    } else if (views.file_diff == UD_MATCH) {
-        ++stats->changed;
-    } else {
-        ++stats->accepted;
-    }
+    read_defense_classify(split, views.file_diff, ap, site_code, site_fetch, &stats->decision);
     uint64_t ns = now_ns() - begin;
     stats->elapsed_ns += ns;
     if (ns > stats->max_ns) stats->max_ns = ns;
+
+    if (g_read_defense_223) {
+        struct ud_exclusive_observation overwritten;
+
+        begin = now_ns();
+        window_probe(ud_observe_ap_overwrite_ldxr, text, control, reference, offset, &overwritten);
+        ns = now_ns() - begin;
+        boundary->elapsed_ns += ns;
+        if (ns > boundary->max_ns) boundary->max_ns = ns;
+        boundary->ap += overwritten.reservation_loss == UD_MATCH;
+        boundary->ap_unknown += overwritten.reservation_loss == UD_UNKNOWN;
+        boundary->triplets += overwritten.accepted;
+        boundary->target_failed += overwritten.target_failed;
+        boundary->control_failed += overwritten.control_failed;
+        read_defense_classify(split, views.file_diff, overwritten.reservation_loss, site_code,
+                              site_fetch, &boundary->decision);
+    }
 }
 
 static void read_defense_v218_stage(const char *name, const uint8_t *text,
@@ -393,9 +464,10 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
     unsigned target_failed = 0, control_failed = 0, triplets = 0, retries = 0;
     unsigned csel_traps = 0, csel_unknown = 0, guarded = 0, csel_retries = 0;
     unsigned csel_failed = 0, csel_triplets = 0;
-    unsigned load_traps = 0, store_traps = 0, branch_traps = 0, xload_traps = 0;
+    unsigned load_traps = 0, store_traps = 0, branch_traps = 0, xload_traps = 0, xpair_traps = 0;
     unsigned window_unknown = 0, window_value = 0, window_value_ok = 0;
     struct read_defense_v220_stats policy = {0};
+    struct read_defense_boundary_stats boundary = {0};
     unsigned clrex_bad = 0, clrex_done = 0, svc_bad = 0, svc_done = 0;
     bool window = g_read_defense_window;
     enum ud_verdict site_code = UD_NO_MATCH, site_fetch = UD_NO_MATCH;
@@ -408,7 +480,8 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
         struct ud_live_observation business, scalar;
         struct ud_exclusive_observation alu, csel = { .reservation_loss = UD_NO_MATCH };
         uint64_t begin = now_ns();
-        if (window) read_defense_v220_sample(text, reference, site_code, site_fetch, &policy);
+        if (window) read_defense_v220_sample(text, reference, site_code, site_fetch, &policy,
+                                             &boundary, g_read_defense_224 && ap);
         ud_observe_live(text, DOBBY_CRC_BYTES, reference->fd, offset, crc_copy_window, &business);
         ud_observe_live(text, DOBBY_CRC_BYTES, reference->fd, offset, copy_scalar, &scalar);
         ud_observe_ap_alu(text, control, reference->fd, offset, &alu);
@@ -432,12 +505,15 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
             struct ud_exclusive_observation store = { .reservation_loss = UD_NO_MATCH };
             struct ud_exclusive_observation branch = { .reservation_loss = UD_NO_MATCH };
             struct ud_exclusive_observation xload = { .reservation_loss = UD_NO_MATCH };
+            struct ud_exclusive_observation xpair = { .reservation_loss = UD_NO_MATCH };
             struct ud_store_observation clrex, svc;
 
             window_probe(ud_observe_ap_load, text, control, reference, offset, &load);
             window_probe(ud_observe_ap_store, text, control, reference, offset, &store);
             window_probe(ud_observe_ap_branch, text, control, reference, offset, &branch);
             window_probe(ud_observe_ap_xload, text, control, reference, offset, &xload);
+            if (g_read_defense_224)
+                window_probe(ud_observe_ap_xpair, text, control, reference, offset, &xpair);
             window_store_probe(ud_observe_gap_clrex_status, text, control, reference, offset,
                                &clrex);
             window_store_probe(ud_observe_gap_svc_status, text, control, reference, offset, &svc);
@@ -445,12 +521,15 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
             store_traps += store.reservation_loss == UD_MATCH;
             branch_traps += branch.reservation_loss == UD_MATCH;
             xload_traps += xload.reservation_loss == UD_MATCH;
+            xpair_traps += xpair.reservation_loss == UD_MATCH;
             window_unknown += load.reservation_loss == UD_UNKNOWN ||
                               store.reservation_loss == UD_UNKNOWN ||
                               branch.reservation_loss == UD_UNKNOWN ||
                               xload.reservation_loss == UD_UNKNOWN ||
+                              xpair.reservation_loss == UD_UNKNOWN ||
                               load.error == EAGAIN || store.error == EAGAIN ||
-                              branch.error == EAGAIN || xload.error == EAGAIN;
+                              branch.error == EAGAIN || xload.error == EAGAIN ||
+                              xpair.error == EAGAIN;
             window_value += load.value_seen + store.value_seen + branch.value_seen +
                             xload.value_seen;
             window_value_ok += (load.value_seen && load.value_match) +
@@ -515,9 +594,7 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
         LOG("READ_DEFENSE_%s stage=%s n=%u split=%u trap=%u unknown=%u changed=%u accept=%u "
         "business_file=%u scalar_file=%u kernel_file=%u execute=%04x "
         "triplets=%u target_failed=%u control_failed=%u retries=%u mean_ns=%llu max_ns=%llu",
-        g_read_defense_223 ? "V223" : g_read_defense_222 ? "V222" :
-        g_read_defense_221 ? "V221" : g_read_defense_window ? "V220" :
-        g_read_defense_fixed ? "V219" : "V218",
+        read_defense_version_tag(),
         name, n, split, traps, unknown, changed, accepted, business_file, scalar_file, kernel_file,
         executed, triplets, target_failed, control_failed, retries,
         (unsigned long long)(elapsed / n), (unsigned long long)max_ns);
@@ -527,7 +604,7 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
         unsigned want_guarded = g_read_defense_221 && !g_read_defense_221_guarded && ap ?
             (original || all_callers ? n : 0U) : (!mode && original ? n : 0U);
         if (window) {
-            guarded = policy.accepted;
+            guarded = policy.decision.accepted;
             if (g_read_defense_223) want_guarded = guarded;
         }
 
@@ -545,18 +622,19 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
     if (window) {
         unsigned want_window = 0U;
 
-        LOG("READ_DEFENSE_KEYLESS2 stage=%s n=%u load=%u store=%u branch=%u xload=%u "
+        LOG("READ_DEFENSE_KEYLESS2 stage=%s n=%u load=%u store=%u branch=%u xload=%u xpair=%u "
             "unknown=%u value=%u value_ok=%u clrex_bad=%u clrex_done=%u svc_bad=%u svc_done=%u",
-            name, n, load_traps, store_traps, branch_traps, xload_traps,
+            name, n, load_traps, store_traps, branch_traps, xload_traps, xpair_traps,
             window_unknown, window_value, window_value_ok, clrex_bad, clrex_done,
             svc_bad, svc_done);
         REQUIRE(load_traps == want_window && store_traps == want_window &&
                 branch_traps == want_window && xload_traps == want_window &&
+                xpair_traps == want_window &&
                 !window_unknown && window_value == 4U * n && window_value_ok == window_value &&
                 !clrex_bad && clrex_done == n && !svc_bad && svc_done == n,
-                "v220 window %s load=%u store=%u branch=%u xload=%u unknown=%u value=%u/%u "
-                "clrex=%u/%u svc=%u/%u", name, load_traps, store_traps, branch_traps,
-                xload_traps, window_unknown, window_value_ok, window_value, clrex_bad,
+                "v220 window %s load=%u store=%u branch=%u xload=%u xpair=%u unknown=%u "
+                "value=%u/%u clrex=%u/%u svc=%u/%u", name, load_traps, store_traps, branch_traps,
+                xload_traps, xpair_traps, window_unknown, window_value_ok, window_value, clrex_bad,
                 clrex_done, svc_bad, svc_done);
 
         unsigned want_old_ap = ap && !g_read_defense_221 && !g_read_defense_222 ? n : 0U;
@@ -574,11 +652,11 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
             "triplets=%u target_failed=%u control_failed=%u split=%u evidence=%u changed=%u "
             "unknown=%u accepted=%u mean_ns=%llu max_ns=%llu baseline_ok=%u pre_gpr=%u simd=%u "
             "simd_value=%u",
-            g_read_defense_223 ? "V223" : g_read_defense_222 ? "V222" :
-            g_read_defense_221 ? "V221" : "V220",
+            read_defense_version_tag(),
             name, n, policy.pre_alu, policy.fp, policy.ap, policy.ap_unknown,
             policy.triplets, policy.target_failed, policy.control_failed, policy.split,
-            policy.evidence, policy.changed, policy.unknown, policy.accepted,
+            policy.decision.evidence, policy.decision.changed, policy.decision.unknown,
+            policy.decision.accepted,
             (unsigned long long)(policy.elapsed_ns / n), (unsigned long long)policy.max_ns,
             policy.baseline_ok, policy.pre_gpr, policy.simd, policy.simd_value);
         REQUIRE(policy.pre_alu == want_old_ap && policy.fp == want_old_ap &&
@@ -589,26 +667,80 @@ static void read_defense_v218_stage(const char *name, const uint8_t *text,
                 policy.baseline_ok == (g_read_defense_221_guarded ? n : 0U) &&
                 !policy.ap_unknown && policy.triplets == n * paired_trials &&
                 policy.target_failed == want_old_ap * paired_trials && policy.split == want_split &&
-                policy.evidence == want_evidence && policy.changed == want_changed && !policy.unknown,
+                policy.decision.evidence == want_evidence &&
+                policy.decision.changed == want_changed && !policy.decision.unknown,
                 "window policy %s pre_alu=%u fp=%u baseline=%u pre_gpr=%u simd=%u ap=%u "
                 "split=%u unknown=%u evidence=%u changed=%u",
                 name, policy.pre_alu, policy.fp, policy.baseline_ok, policy.pre_gpr, policy.simd,
-                policy.ap, policy.split, policy.unknown, policy.evidence, policy.changed);
+                policy.ap, policy.split, policy.decision.unknown, policy.decision.evidence,
+                policy.decision.changed);
         if (g_read_defense_222) {
             LOG("READ_DEFENSE_%s_RESIDUAL stage=%s n=%u leaf_call=%u permute=%u "
-                "fp_arith=%u trials=%u target_failed=%u control_failed=%u mean_ns=%llu",
-                g_read_defense_223 ? "V223" : "V222",
+                "fp_arith=%u pre_mov=%u pre_long=%u self_bad=%u neon_bad=%u self_done=%u neon_done=%u "
+                "deep_bad=%u deep_done=%u self_err=%d neon_err=%d trials=%u target_failed=%u "
+                "control_failed=%u mean_ns=%llu",
+                read_defense_version_tag(),
                 name, n, policy.leaf_call, policy.permute, policy.fp_arith,
+                policy.pre_mov, policy.pre_long, policy.self_bad, policy.neon_bad,
+                policy.self_done, policy.neon_done, policy.deep_bad, policy.deep_done,
+                policy.self_err, policy.neon_err,
                 policy.residual_trials,
                 policy.residual_failed, policy.residual_control_failed,
                 (unsigned long long)(policy.residual_ns / n));
             REQUIRE(policy.leaf_call == want_ap_v222 && policy.permute == want_ap_v222 &&
-                    (!g_read_defense_223 || policy.fp_arith == 0) &&
+                    (!g_read_defense_223 ||
+                     (policy.fp_arith == 0 && policy.pre_mov == 0 && policy.pre_long == 0 &&
+                      (!g_read_defense_224 ||
+                       (policy.deep_bad == 0 && policy.deep_done == (ap ? n : 0U) &&
+                        (!ap || (policy.self_bad == 0 && policy.neon_bad == 0)))))) &&
                     policy.residual_trials == n * paired_trials &&
                     policy.residual_failed == (g_read_defense_223 ? 0U : want_ap_v222) * paired_trials,
                     "v222 residual %s leaf_call=%u permute=%u fp_arith=%u trials=%u target_failed=%u",
                     name, policy.leaf_call, policy.permute, policy.fp_arith,
                     policy.residual_trials, policy.residual_failed);
+        }
+    }
+    if (g_read_defense_223) {
+        const struct read_defense_decisions *decision = &boundary.decision;
+        unsigned trials = UD_OBSERVE_EPOCHS * UD_OBSERVE_TRIALS;
+        unsigned want_boundary_evidence = g_read_defense_224 ?
+            (!ap ? (mode ? n : 0U) :
+             (mode && !original && !all_callers ? n : 0U)) : (mode ? n : 0U);
+
+        LOG("READ_DEFENSE_%s_BOUNDARY stage=%s n=%u ap=%u ap_unknown=%u evidence=%u "
+            "changed=%u unknown=%u accepted=%u triplets=%u target_failed=%u control_failed=%u "
+            "mean_ns=%llu max_ns=%llu",
+            read_defense_version_tag(),
+            name, n, boundary.ap, boundary.ap_unknown, decision->evidence, decision->changed,
+            decision->unknown, decision->accepted, boundary.triplets, boundary.target_failed,
+            boundary.control_failed, (unsigned long long)(boundary.elapsed_ns / n),
+            (unsigned long long)boundary.max_ns);
+        if (g_read_defense_224) {
+            /* 2.24.0 completes the read-back that overwrites the LDXR
+             * destination and never fabricates an STXR success after a store
+             * that cleared the reservation.  The boundary probe must be silent
+             * in every AP mode; only the independent reader split and the
+             * BRK/UXN site evidence still classify a takeover. */
+            unsigned want_accepted = ((original && (!mode || ap)) ||
+                (ap && all_callers && mode && !strcmp(name, "overlay"))) ? n : 0U;
+
+            REQUIRE(boundary.ap == 0 && !boundary.ap_unknown &&
+                    boundary.triplets == n * trials && boundary.target_failed == 0 &&
+                    decision->evidence == want_boundary_evidence && !decision->unknown &&
+                    decision->changed == (!mode && !original ? n : 0U) &&
+                    decision->accepted == want_accepted,
+                    "v224 boundary %s ap=%u/%u evidence=%u unknown=%u changed=%u accepted=%u",
+                    name, boundary.ap, n, decision->evidence, decision->unknown,
+                    decision->changed, decision->accepted);
+        } else {
+            REQUIRE(boundary.ap == (ap ? n : 0U) && !boundary.ap_unknown &&
+                    boundary.triplets == n * trials && boundary.target_failed == (ap ? n * trials : 0U) &&
+                    decision->evidence == (mode ? n : 0U) && !decision->unknown &&
+                    decision->changed == (!mode && !original ? n : 0U) &&
+                    decision->accepted == (!mode && original ? n : 0U),
+                    "v223 boundary %s ap=%u/%u evidence=%u unknown=%u changed=%u accepted=%u",
+                    name, boundary.ap, n, decision->evidence, decision->unknown,
+                    decision->changed, decision->accepted);
         }
     }
     /* The unprivileged LDTRB form is outside the ordinary decoder set; 2.22.0
@@ -701,9 +833,7 @@ static void read_defense_exec_guard(const struct uy_ctx *ctx, const struct page 
         REQUIRE(error == EINVAL && inactive && bytes && executed == DOBBY_ORIGINAL,
                 "v218 execute-only guard errno=%d", error);
         LOG("READ_DEFENSE_%s_GUARD shape=%d errno=%d inactive=%d reference=%d execute=%04x",
-            g_read_defense_223 ? "V223" : g_read_defense_222 ? "V222" :
-            g_read_defense_221 ? "V221" : g_read_defense_window ? "V220" :
-        g_read_defense_fixed ? "V219" : "V218",
+            read_defense_version_tag(),
             shape, error, inactive, bytes, executed);
     } else if (shape) {
         uint8_t from_fd[DOBBY_CRC_BYTES];
@@ -714,8 +844,7 @@ static void read_defense_exec_guard(const struct uy_ctx *ctx, const struct page 
         uint32_t executed = intact ? crc_execute(alias + reference->entry) : 0;
         REQUIRE(intact && executed == DOBBY_ORIGINAL, "v220 independent reference or code changed");
         LOG("READ_DEFENSE_%s_FALLBACK shape=%d reference=%d execute=%04x",
-        g_read_defense_223 ? "V223" : g_read_defense_222 ? "V222" :
-        g_read_defense_221 ? "V221" : "V220", shape, intact, executed);
+        read_defense_version_tag(), shape, intact, executed);
     }
     REQUIRE(!munmap(alias, page_size), "v218 execute-only guard unmap errno=%d", errno);
 }
@@ -749,24 +878,29 @@ static void read_defense_fixture(const char *name, const char *key, int repeats)
     bool v221 = !strncmp(shape, "v221-", sizeof("v221-") - 1);
     bool v222 = !strncmp(shape, "v222-", sizeof("v222-") - 1);
     bool v223 = !strncmp(shape, "v223-", sizeof("v223-") - 1);
-    bool modern = v216 || v218 || v219 || v220 || v221 || v222 || v223;
+    bool v224 = !strncmp(shape, "v224-", sizeof("v224-") - 1);
+    bool modern = v216 || v218 || v219 || v220 || v221 || v222 || v223 || v224;
     if (modern) shape += sizeof("v216-") - 1;
-    g_read_defense_fixed = v219 || v220 || v221 || v222 || v223;
-    g_read_defense_window = v220 || v221 || v222 || v223;
+    g_read_defense_fixed = v219 || v220 || v221 || v222 || v223 || v224;
+    g_read_defense_window = v220 || v221 || v222 || v223 || v224;
     g_read_defense_221 = v221;
     g_read_defense_221_guarded = (v221 &&
-        !strncmp(shape, "guarded-", sizeof("guarded-") - 1)) || v222 || v223;
-    g_read_defense_222 = v222 || v223;
-    g_read_defense_223 = v223;
+        !strncmp(shape, "guarded-", sizeof("guarded-") - 1)) || v222 || v223 || v224;
+    g_read_defense_222 = v222 || v223 || v224;
+    g_read_defense_223 = v223 || v224;
+    g_read_defense_224 = v224;
     if (v221 && !strncmp(shape, "guarded-", sizeof("guarded-") - 1))
         shape += sizeof("guarded-") - 1;
     void (*stage)(const char *, const uint8_t *, const struct page *, const uint8_t *,
                   const uint8_t *, unsigned, bool, int) =
-        (v218 || v219 || v220 || v221 || v222 || v223) ? read_defense_v218_stage : read_defense_v216_stage;
+        (v218 || v219 || v220 || v221 || v222 || v223 || v224) ?
+        read_defense_v218_stage : read_defense_v216_stage;
     bool hardened = strstr(shape, "-hard") != NULL;
     bool ap_all = !strcmp(shape, "ap-all") || !strcmp(shape, "ap-all-hard");
-    bool brk_all = (v218 || v219 || v220 || v221 || v222 || v223) && !strcmp(shape, "brk-all");
-    bool uxn_all = (v218 || v219 || v220 || v221 || v222 || v223) && !strcmp(shape, "uxn-all");
+    bool brk_all = (v218 || v219 || v220 || v221 || v222 || v223 || v224) &&
+                   !strcmp(shape, "brk-all");
+    bool uxn_all = (v218 || v219 || v220 || v221 || v222 || v223 || v224) &&
+                   !strcmp(shape, "uxn-all");
     bool all_callers = ap_all || brk_all || uxn_all;
     if (ap_all || !strcmp(shape, "ap") || !strcmp(shape, "ap-hard")) mode = UROV_Y_MODE_PAGE_AP;
     else if (brk_all || !strcmp(shape, "brk")) mode = UROV_Y_MODE_SITE_BRK;
@@ -835,20 +969,19 @@ static void read_defense_fixture(const char *name, const char *key, int repeats)
     if (error) goto close_reference;
     if (modern) {
         stage("overlay", text, &reference, file, patched, mode, all_callers, repeats);
-        if (v220 || v221 || v222 || v223)
+        if (v220 || v221 || v222 || v223 || v224)
             read_defense_exec_guard(NULL, &reference, file, (size_t)page_size, mode, all_callers);
         bool still_active = !uy_status(&ctx, &status) && status.state == UROV_Y_ACTIVE && !status.failures;
         REQUIRE(still_active, "read-defense parent session was changed by the probes");
         LOG("READ_DEFENSE_%s_STATUS parent_active=%d callers=%u",
-            v223 ? "V223" : v222 ? "V222" : v221 ? "V221" : v220 ? "V220" :
-            v219 ? "V219" : v218 ? "V218" : "V216",
+            read_defense_version_tag(),
             still_active, all_callers ? 0U : 1U);
         REQUIRE(!uy_deactivate(&ctx), "read-defense deactivate errno=%d", errno);
         stage("deactivated", text, &reference, file, patched, 0, false, repeats);
         read_defense_anonymous_guard(&ctx, file, (size_t)page_size, mode, all_callers);
-        if (v218 || v219 || v220 || v221 || v222 || v223)
+        if (v218 || v219 || v220 || v221 || v222 || v223 || v224)
             read_defense_exec_guard(&ctx, &reference, file, (size_t)page_size, mode, all_callers);
-        if (v219 || v220 || v221 || v222 || v223)
+        if (v219 || v220 || v221 || v222 || v223 || v224)
             read_defense_reference_guard(&ctx, &reference, file, patched, mode, all_callers);
         goto close_reference;
     }

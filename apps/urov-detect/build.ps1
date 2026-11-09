@@ -38,10 +38,14 @@ if (!$Observer) {
         (Join-Path $here 'crc_patch_fixture.c') -o (Join-Path $out 'liburov_crc_patch.so')
     if ($LASTEXITCODE -ne 0) { throw 'CRC fixture build failed' }
 }
+$savedEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 & javac -encoding UTF-8 -source 8 -target 8 -Xlint:-options `
     -bootclasspath "$jar;$tools\core-lambda-stubs.jar" -d $classes `
     (Join-Path $here 'MainActivity.java') (Join-Path $here 'ObserverActivity.java')
-if ($LASTEXITCODE -ne 0) { throw 'Java build failed' }
+$javacExit = $LASTEXITCODE
+$ErrorActionPreference = $savedEap
+if ($javacExit -ne 0) { throw 'Java build failed' }
 $classFiles = @(Get-ChildItem -LiteralPath $classes -Recurse -Filter '*.class' | ForEach-Object FullName)
 & "$tools\d8.bat" --lib $jar --min-api 30 --output $dex @classFiles
 if ($LASTEXITCODE -ne 0) { throw 'D8 failed' }

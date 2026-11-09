@@ -174,7 +174,7 @@ _Static_assert(sizeof(struct uy_fpstate) == UY_FPSIMD_BYTES, "FPSIMD image size"
  * hardware reports its own result, which for those shapes is the same failure it
  * reports without the module. */
 #define UY_LLSC_WIN_MAX 64U      /* instructions executed after the sampled load */
-#define UY_LLSC_PRE_MAX 12U      /* instructions between LDXR and the sampled load */
+#define UY_LLSC_PRE_SCAN 1024U   /* straight-line block bound for the linear proof */
 #define UY_LLSC_MEM_MAX 4U       /* gap stores recorded and replayed at commit */
 #define UY_LLSC_BYTES_MAX 64U    /* widest single access the decoder produces */
 
@@ -2563,9 +2563,6 @@ static void uy_llsc_walk(struct pt_regs *regs, uint64_t fault_pc, struct uy_llsc
             /* plan->size is in bytes; the encoding carries log2. */
             if (total != plan->size || rn == 31U) return;
             if (model.x[rn] != mon || (mon & (total - 1U))) return;
-            /* LDXR XZR leaves no register evidence, so the narrower 2.19 rule
-             * stays: only a store that also discards its value is accepted. */
-            if (plan->data_reg == 31U && rt != 31U) return;
             plan->store_reg = rt;
             plan->status_reg = rs;
             plan->release = (insn >> 15) & 1U;
@@ -2707,11 +2704,10 @@ static void uy_llsc_prepare_pair(const struct uro_regs *regs, uint64_t pc,
         if (lrt2 != 31U && regs->x[lrt2] != (mem[1] & mask)) return;
     }
     if (uy_llsc_skipped(ldxp_pc, pc) || uy_llsc_indirect(regs, ldxp_pc, pc)) return;
-    if ((lrt != 31U && load->rt == lrt) || (lrt2 != 31U && load->rt == lrt2) ||
-        load->rt == lrn || (load->count == 2U &&
-        ((lrt != 31U && load->rt2 == lrt) || (lrt2 != 31U && load->rt2 == lrt2) ||
-         load->rt2 == lrn)))
-        return;
+    /* The sampled load may overwrite either LDXP destination: the fault-time
+     * register file still holds the LDXP evidence, and the STXP outcome does
+     * not depend on those values.  Only the base register must survive. */
+    if (load->rt == lrn) return;
     if (load->writeback && load->rn == lrn) return;
 
     out->base = regs->x[lrn];
@@ -2729,154 +2725,76 @@ static void uy_llsc_prepare_pair(const struct uro_regs *regs, uint64_t pc,
     out->valid = 1;
 }
 
-/* Verify the short pre-load window between LDXR and the sampled load.  The
- * native instructions have already run, so only the values they left in the
- * GPR file are available.  Every accepted instruction must be a pure integer
- * ALU operation with no memory, control-flow or flag-reading effect.  The
- * verifier replays the window from the value the LDXR read and tracks a
- * shadow GPR file, so a copied or partly recomputed value still proves its
- * origin: a source register is known when an earlier instruction defined it,
- * and a register no pre instruction writes still holds its fault-time value
- * (which is also its value before the LDXR).  A source defined later in the
- * window is unpovenable there and declines.  Two replays, from `loaded` and
- * from `loaded ^ 1`, must end in different LDXR destinations, which keeps the
- * rule that the chain really consumes the exclusive read.  SP, memory and a
- * rewrite of the load base never change. */
-static int uy_llsc_pre_chain(const struct uro_regs *regs,
-                             const uint32_t *insn, const uint64_t *pcs,
-                             unsigned count, unsigned lrt, uint64_t loaded,
-                             uint64_t *out)
-{
-    uint64_t shadow[31];
-    uint64_t chain = loaded;
-    uint32_t written = 0, defined = 0;
-    unsigned i;
-
-    if (lrt == 31U) {
-        for (i = 0; i < count; ++i) {
-            unsigned dst = uy_win_dst(insn[i]);
-
-            if (dst == 33U || dst == 34U || (dst != 31U && dst != 32U)) return 0;
-            if (uy_win_reads_flags(insn[i])) return 0;
-        }
-        *out = 0;
-        return 1;
-    }
-    /* First pass: reject classes this verifier cannot track.  `written` is
-     * every GPR the pre-window rewrites anywhere in the chain. */
-    for (i = 0; i < count; ++i) {
-        unsigned dst = uy_win_dst(insn[i]);
-
-        if (dst == 33U || dst == 34U) return 0;
-        if (uy_win_reads_flags(insn[i])) return 0;
-        if (dst < 31U) written |= 1U << dst;
-    }
-    /* pcs[] is newest-first; walk it from the LDXR side (oldest) to the load. */
-    for (i = count; i-- > 0U; ) {
-        struct uro_regs model, other;
-        uint32_t srcs = uy_win_srcs(insn[i]);
-        unsigned dst = uy_win_dst(insn[i]);
-        unsigned j;
-
-        if (srcs == 0xffffffffU) return 0;
-        for (j = 0; j < 31U; ++j) {
-            model.x[j] = regs->x[j];
-            other.x[j] = regs->x[j];
-        }
-        model.sp = other.sp = regs->sp;
-        model.pc = other.pc = pcs[i];
-        model.pstate = other.pstate = regs->pstate;
-        for (j = 0; j < 31U; ++j) {
-            if (!(srcs & (1U << j)) || j == lrt) continue;
-            if (defined & (1U << j)) {
-                model.x[j] = shadow[j];
-                other.x[j] = shadow[j];
-            } else if (written & (1U << j)) {
-                return 0;
-            }
-        }
-        model.x[lrt] = chain;
-        other.x[lrt] = chain ^ UINT64_C(1);
-        if (!uy_win_alu(&model, insn[i]) || !uy_win_alu(&other, insn[i])) return 0;
-        if (dst == lrt) {
-            /* A result that does not depend on the LDXR value (MOVZ/AND #0)
-             * would make the two replays coincide; it is no evidence. */
-            if (model.x[lrt] == other.x[lrt]) return 0;
-            chain = model.x[lrt];
-        } else if (dst != 31U && dst != 32U) {
-            shadow[dst] = model.x[dst];
-            defined |= 1U << dst;
-        }
-    }
-    *out = chain;
-    return 1;
-}
-
-/* Decide whether the faulting load sits in an LDXR/LDAXR; load; <window>; STXR
- * sequence the handler can complete.  Only the pre-load evidence is collected
- * here; the window itself is modeled after the load commits (uy_llsc_walk).
- *
- * The ERET that resumes EL0 clears the local exclusive monitor, so the original
- * STXR would always fail.  Completing it restores the native outcome, but only
- * when the LDXR result reached the load through a reproducible pre-window
- * (execution evidence) and control reached the load sequentially.  A caller
- * that pre-reads [Xn] can forge the register value, but a direct branch into
- * the LDXR..load span is found in every executable mapping of the process, and
- * an indirect branch that leaves that span in a GPR is rejected. */
+/* A straight-line register-only run between an LDXR and the sampled load is
+ * enough evidence that the LDXR executed: every instruction in the span is
+ * reproduced by uy_win_alu(), so it neither branches nor touches memory, and
+ * uy_llsc_skipped() rejects any branch target inside the span.  The LDXR result
+ * does not have to reach the load or survive in its destination register: the
+ * STXR outcome depends only on the monitored address and on intervening
+ * monitor-clearing events, not on the loaded value.  This is what makes
+ * `LDRB Wt,[target]` with the same Wt as the LDXR legal.  The only register the
+ * proof depends on is the LDXR base, which must not be rewritten before the
+ * load, or the fault-time value would no longer be the monitored address. */
 static void uy_llsc_prepare_single(const struct uro_regs *regs, uint64_t pc,
                                    const struct uro_load *load, struct uy_llsc *out)
 {
     uint32_t ldxr_insn = 0;
-    uint32_t pre_insn[UY_LLSC_PRE_MAX];
-    uint64_t pre_pc[UY_LLSC_PRE_MAX];
-    unsigned lsize = 0, lrt = 0, lrn = 0, npre = 0;
-    uint64_t mem = 0, mask, ldxr_pc = 0, chain;
-    unsigned gap;
+    unsigned lsize = 0, lrt = 0, lrn = 0, scanned;
+    uint32_t written = 0;
+    uint64_t ldxr_pc = 0, at;
+    struct uro_regs model;
 
     if (!f_copy_out || !load || load->vector || load->multi || load->count != 1U)
         return;
     if (pc < 4U || !uy_user_range(pc - 4U, 4U))
         return;
-    /* The LDXR may be separated from the load by a short ALU chain. */
-    for (gap = 0; gap <= UY_LLSC_PRE_MAX; ++gap) {
-        uint64_t at = pc - 4U - 4U * gap;
+    memset(&model, 0, sizeof(model));
+    for (scanned = 0; scanned < 31U; ++scanned) model.x[scanned] = regs->x[scanned];
+    model.sp = regs->sp;
+    model.pstate = regs->pstate;
+    at = pc - 4U;
+    for (scanned = 0; scanned < UY_LLSC_PRE_SCAN; ++scanned) {
         uint32_t insn;
+        unsigned dst;
 
-        if (at < 4U || uy_read_insn(at, &insn)) break;
+        if (at < 4U || !uy_user_range(at, 4U) || uy_read_insn(at, &insn)) return;
         if (uy_is_ldxr(insn, &lsize, &lrt, &lrn)) {
             ldxr_pc = at;
             ldxr_insn = insn;
             break;
         }
-        if (npre == UY_LLSC_PRE_MAX) break;
-        pre_insn[npre] = insn;
-        pre_pc[npre] = at;
-        ++npre;
+        /* A branch may enter the span after the LDXR and skip it. */
+        if (uy_code_hit(at)) return;
+        model.pc = at;
+        if ((insn & 0xffff0000U) == 0xd53b0000U) {
+            /* EL0-readable MRS: register-only, destination is Rt. */
+            dst = insn & 31U;
+        } else if (insn == 0xd51b4200U || insn == 0xd51b4400U ||
+                   insn == 0xd51b4420U || insn == 0xd51bd040U) {
+            /* NZCV/FPCR/FPSR/TPIDR_EL0 writes cannot clear the monitor. */
+            dst = 32U;
+        } else if ((insn & 0xffc00000U) == 0xf9800000U ||
+                   (insn & 0xffe00000U) == 0xf8a00000U ||
+                   (insn & 0xffe00000U) == 0xf8800000U) {
+            /* PRFM/PRFUM are hints. */
+            dst = 32U;
+        } else {
+            if (!uy_win_alu(&model, insn)) return;
+            dst = uy_win_dst(insn);
+        }
+        if (dst == 33U || dst == 34U) return;
+        if (dst < 31U) written |= 1U << dst;
+        if (at < 4U) return;
+        at -= 4U;
     }
-    if (!ldxr_pc) return;
-    if (uy_llsc_skipped(ldxr_pc, pc)) return;
-    if (uy_llsc_indirect(regs, ldxr_pc, pc)) return;
-    if (lrn == 31U) return;
-    /* The intervening load must not rewrite the value the LDXR left as evidence
-     * or the base it addresses; a pre/post-index form that writes one of them is
-     * unreproducible.  A load that discards into XZR changes no register. */
-    if (load->rt == lrn || (lrt != 31U && load->rt == lrt) ||
-        (load->count == 2U && (load->rt2 == lrn ||
-         (lrt != 31U && load->rt2 == lrt))))
-        return;
-    if (load->writeback && (load->rn == lrn || (lrt != 31U && load->rn == lrt)))
-        return;
+    if (!ldxr_pc || lrn == 31U || lrt == lrn) return;
+    /* The fault-time value of the LDXR base must still be the monitored
+     * address.  A pre-window write to it would otherwise let the bridge fake a
+     * success at an address the native STXR never reserved. */
+    if (written & (1U << lrn)) return;
+    if (load->rt == lrn || (load->writeback && load->rn == lrn)) return;
     if (regs->x[lrn] & ((UINT64_C(1) << lsize) - 1U)) return;
-    if (f_copy_in(&mem, (const void *)(uintptr_t)regs->x[lrn], 1U << lsize))
-        return;
-    mask = lsize == 3U ? ~UINT64_C(0) : ((UINT64_C(1) << (8U << lsize)) - 1U);
-    /* LDXR Wt/Bt/Ht zero-extend into Xt.  Replay the pre-window from the
-     * zero-extended memory value and require that it reproduces the register
-     * file at the fault.  LDXR XZR has no such evidence and falls back to the
-     * control-flow proof above. */
-    if (!uy_llsc_pre_chain(regs, pre_insn, pre_pc, npre, lrt, mem & mask, &chain))
-        return;
-    if (lrt != 31U && regs->x[lrt] != chain) return;
+    if (uy_llsc_skipped(ldxr_pc, pc) || uy_llsc_indirect(regs, ldxr_pc, pc)) return;
 
     out->base = regs->x[lrn];
     out->size = 1U << lsize;
@@ -3627,18 +3545,14 @@ static void uy_replay_unblock(void)
 
 /* ------------------------------------- native single-step for a read window */
 
-/* Some windows contain an instruction the byte-level model does not reproduce:
- * scalar FP arithmetic, a SIMD permute outside the integer three-same family,
- * SVE data processing, or a longer straight-line run.  Modeling those in the
- * kernel would mean reimplementing IEEE-754 and the vector ISA.  Instead the
- * handler lets the CPU execute the window one instruction at a time and stops
- * before the consuming STXR.  The reservation is gone (every debug exception
- * clears it), so the STXR is completed by the handler exactly as the modeled
- * path does.  Each next instruction is validated before it runs: ordinary
- * loads and non-overlapping stores are allowed, branches are followed, and
- * anything that could change the exclusive state declines so the native STXR
- * reports its own result. */
-#define UY_STEP_MAX 4096U
+/* The byte-level model stops at shapes it does not reproduce (FP arithmetic,
+ * SIMD permutes, SVE/SME data processing, long runs).  Instead the handler lets
+ * the CPU execute the window natively, one instruction at a time, and stops
+ * before the consuming exclusive store.  Every debug exception has already
+ * cleared the hardware reservation, so a matching STXR/STXP is completed by the
+ * handler exactly as the modeled path does.  There is no instruction-class or
+ * length limit: only exclusive stores and exception-generating instructions
+ * need attention, and those are handled by uy_step_next()/uy_step_prev(). */
 struct uy_step {
     void *mm;
     void *task;
@@ -3650,6 +3564,11 @@ struct uy_step {
     unsigned store_reg;
     unsigned release;
     unsigned steps;
+    unsigned valid;      /* no monitor-clearing event seen since the reservation */
+    unsigned started;    /* next_pc names an instruction that has executed */
+    unsigned pair;       /* the reservation is an LDXP/STXP pair */
+    unsigned data_reg;   /* pair LDXP destinations (for diagnostics) */
+    unsigned data_reg2;
     uint32_t used;
 };
 static struct uy_step g_step[2];
@@ -3695,68 +3614,75 @@ static void uy_step_cancel(void)
     uy_step_end(s);
 }
 
-/* One instruction that may run natively between the sampled load and STXR.
- * Exclusives, atomics, CLREX and system instructions are declined.  Loads are
- * allowed (a target-page load is completed by the abort path and the replay
- * resumes); branch targets are revalidated after every step.  Everything else
- * is register/vector computation, including the FP/SIMD/SVE classes the model
- * does not reproduce. */
-static int uy_step_safe(uint32_t insn, const struct pt_regs *regs,
-                        const struct uy_step *s)
+static inline int uy_is_clrex(uint32_t insn)
 {
-    struct uro_regs model;
-    struct uro_load load;
-    struct uro_store store;
-    struct uro_atomic atomic;
-    unsigned size, rs, rt, rt2, rn, i;
+    return (insn & 0xfffff0ffU) == 0xd503305fU;
+}
 
-    memset(&model, 0, sizeof(model));
-    for (i = 0; i < 31U; ++i) model.x[i] = regs->regs[i];
-    model.sp = regs->sp;
-    model.pc = regs->pc;
-    model.pstate = regs->pstate;
+static inline int uy_is_exception_insn(uint32_t insn)
+{
+    unsigned op = insn & 0xffe0001fU;
+
+    return op == 0xd4000001U || op == 0xd4000002U || op == 0xd4000003U ||
+           op == 0xd4200000U || op == 0xd4400000U;
+}
+
+/* Interpret the instruction that the previous software step executed.  LDXR
+ * moves the modeled reservation to its own address; CLREX, another exclusive
+ * operation, and an exception clear it.  A plain store to the monitored word
+ * does not clear the local monitor on this core (measured: a same-PE store or
+ * LSE atomic to the watched word still lets the native STXR succeed), so the
+ * window may run those natively without invalidation. */
+static void uy_step_prev(struct pt_regs *regs, struct uy_step *s)
+{
+    uint32_t insn;
+    unsigned size, rs, rt, rt2, rn;
+
+    if (!s->started) return;
+    if (uy_read_insn(s->next_pc, &insn)) {
+        s->valid = 0;
+        return;
+    }
+    if (uy_is_ldxp(insn, &size, &rt, &rt2, &rn)) {
+        uint64_t base;
+
+        if (rn == 31U) {
+            s->valid = 0;
+            return;
+        }
+        base = regs->regs[rn];
+        s->pair = 1;
+        s->base = base;
+        s->size = 1U << size;
+        s->data_reg = rt;
+        s->data_reg2 = rt2;
+        s->valid = 1;
+        return;
+    }
+    if (uy_is_ldxr(insn, &size, &rt, &rn)) {
+        uint64_t base;
+
+        (void)rt;
+        if (rn == 31U) {
+            s->valid = 0;
+            return;
+        }
+        /* LDXR has no writeback; the retired base is the address. */
+        base = regs->regs[rn];
+        size = 1U << size;
+        s->pair = 0;
+        if (base != s->base || size != s->size) {
+            s->base = base;
+            s->size = size;
+        }
+        s->valid = 1;
+        return;
+    }
     if (uy_is_stxr(insn, &size, &rs, &rt, &rn) ||
         uy_is_stxp(insn, &size, &rs, &rt, &rt2, &rn) ||
-        uy_is_ldxr(insn, &size, &rt, &rn) ||
-        uy_is_ldxp(insn, &size, &rt, &rt2, &rn))
-        return 0;
-    if (insn == 0xd5033f5fU) return 0;                    /* CLREX */
-    if ((insn & 0xffff0000U) == 0xd53b0000U) return 1;    /* MRS, EL0-readable */
-    if ((insn & 0xfffff0ffU) == 0xd503309fU ||            /* DMB */
-        (insn & 0xfffff0ffU) == 0xd50330bfU ||            /* DSB */
-        (insn & 0xfffff0ffU) == 0xd50330dfU ||            /* ISB */
-        (insn & 0xfffff01fU) == 0xd503201fU ||            /* NOP/HINT */
-        insn == 0xd503245fU || insn == 0xd503249fU ||     /* BTI C/J */
-        insn == 0xd50324dfU)                              /* BTI JC */
-        return 1;
-    if ((insn & 0xffc00000U) == 0xf9800000U ||            /* PRFM imm */
-        (insn & 0xffe00000U) == 0xf8a00000U ||            /* PRFM reg */
-        (insn & 0xffe00000U) == 0xf8800000U)              /* PRFUM */
-        return 1;
-    switch (insn) {                                       /* harmless MSR */
-    case 0xd51b4200U:                                     /* NZCV */
-    case 0xd51b4400U:                                     /* FPCR */
-    case 0xd51b4420U:                                     /* FPSR */
-    case 0xd51bd040U:                                     /* TPIDR_EL0 */
-        return 1;
-    default:
-        break;
+        uy_is_clrex(insn) || uy_is_exception_insn(insn)) {
+        s->valid = 0;
     }
-    if (uy_win_branch(&model, insn, 0)) return 1;
-    if (!uro_decode(insn, &model, &load)) return 1;   /* ordinary load */
-    if (!uro_decode_store(insn, &model, &store)) {
-        uint64_t end = store.address + store.total;
-        uint64_t mon_end = s->base + s->size;
-
-        /* A store to the monitored word would clear the reservation.  Other
-         * stores preserve it, so the CPU may execute them natively. */
-        if (end < store.address || mon_end < s->base) return 0;
-        if (store.address < mon_end && s->base < end) return 0;
-        return 1;
-    }
-    if (!uro_decode_atomic(insn, &model, &atomic)) return 0;
-    if (insn & 0x80000000U) return 0;                     /* system / SVE ldst */
-    return 1;
 }
 
 /* Complete the STXR the native run stopped in front of. */
@@ -3794,27 +3720,85 @@ static int uy_step_force(struct pt_regs *regs, struct uy_step *s)
     return 0;
 }
 
+/* Complete the STXP that consumes an LDXP pair reservation. */
+static int uy_step_force_pair(struct pt_regs *regs, struct uy_step *s)
+{
+    uint32_t insn;
+    uint64_t values[2];
+    unsigned size, rs, rt, rt2, rn, total;
+    void *mm;
+
+    if (uy_read_insn(s->stxr_pc, &insn) ||
+        !uy_is_stxp(insn, &size, &rs, &rt, &rt2, &rn))
+        return -1;
+    if ((1U << size) != s->size || rn == 31U || regs->regs[rn] != s->base)
+        return -1;
+    total = s->size * 2U;
+    if (!uy_user_range(s->base, total) || s->base + total < s->base) return -1;
+    values[0] = rt == 31U ? 0 : regs->regs[rt];
+    values[1] = rt2 == 31U ? 0 : regs->regs[rt2];
+    mm = mm_of_task(current);
+    uy_write_enter();
+    if (f_copy_out((void *)(uintptr_t)s->base, values, total)) {
+        uy_write_leave();
+        return -1;
+    }
+    if (mm == g_sess.mm)
+        uy_image_store(s->base, (const uint8_t *)values, total);
+    else if (mm)
+        uy_shadow_store_range(mm, s->base, (const uint8_t *)values, total);
+    if (mm && uy_page_for_fault(mm, s->base))
+        uy_rearm_written(mm, s->base, total);
+    uy_write_leave();
+    if (s->release) __asm__ volatile("dmb ishst" : : : "memory");
+    if (s->status_reg != 31U) regs->regs[s->status_reg] = 0;
+    regs->pc = s->stxr_pc + 4U;
+    __atomic_fetch_add(&g_sess.llsc, 1, __ATOMIC_RELAXED);
+    return 0;
+}
+
 /* Validate the instruction at PC and either arm one step, force the consuming
- * STXR, or decline.  Branches are allowed because the next PC is revalidated
- * after every single step; memory and system instructions still decline. */
+ * exclusive store, or decline.  Everything except an exclusive store or an
+ * exception-generating instruction runs natively. */
 static int uy_step_next(struct pt_regs *regs, struct uy_step *s)
 {
     uint32_t insn;
-    unsigned size, rs, rt, rn;
+    unsigned size, rs, rt, rt2, rn;
 
-    if (s->steps++ >= UY_STEP_MAX) return -1;
     if (uy_read_insn(regs->pc, &insn)) return -1;
     if (uy_is_stxr(insn, &size, &rs, &rt, &rn)) {
+        if (s->pair) return -1;
         if ((1U << size) != s->size || rn == 31U || regs->regs[rn] != s->base)
             return -1;
+        /* A prior store/CLREX/exception cleared the reservation.  Let the
+         * native STXR execute and report the failure the untrapped hardware
+         * would have reported; faking success here would be a new feature. */
+        if (!s->valid) return -1;
         s->stxr_pc = regs->pc;
         s->status_reg = rs;
         s->store_reg = rt;
         s->release = (insn >> 15) & 1U;
         return uy_step_force(regs, s) ? -1 : 1;
     }
-    if (!uy_step_safe(insn, regs, s)) return -1;
+    if (uy_is_stxp(insn, &size, &rs, &rt, &rt2, &rn)) {
+        if (!s->pair) return -1;
+        if ((1U << size) != s->size || rn == 31U || regs->regs[rn] != s->base)
+            return -1;
+        if (!s->valid) return -1;
+        s->stxr_pc = regs->pc;
+        s->status_reg = rs;
+        s->release = (insn >> 15) & 1U;
+        return uy_step_force_pair(regs, s) ? -1 : 1;
+    }
+    /* Any other instruction may run natively.  A target-page load faults and
+     * is completed by the abort path, which calls uy_step_resume(); LDXR and
+     * CLREX are interpreted by uy_step_prev() after they retire; a store,
+     * atomic or vector instruction neither changes the modeled reservation on
+     * this core nor needs decoding.  This is what removes the old fail-closed
+     * classes (SIMD/SVE/SME stores, undecodable encodings, long windows). */
+    if (uy_is_exception_insn(insn)) return -1;
     s->next_pc = regs->pc;
+    s->started = 1;
     uy_step_arm(regs);
     return 0;
 }
@@ -3840,12 +3824,19 @@ static int uy_step_begin(struct pt_regs *regs, const struct uy_llsc *plan)
     s->task = current;
     s->base = plan->base;
     s->size = plan->size;
+    s->valid = 1;
+    s->started = 0;
+    s->pair = 0;
     __atomic_store_n(&s->used, 1, __ATOMIC_RELEASE);
     __atomic_add_fetch(&g_step_active, 1, __ATOMIC_RELEASE);
     rc = uy_step_next(regs, s);
-    if (rc) {
+    if (rc < 0) {
         uy_step_end(s);
         return -1;
+    }
+    if (rc > 0) {
+        uy_step_end(s);
+        return 0;
     }
     return 0;
 }
@@ -3859,6 +3850,7 @@ static int uy_step_handle(struct pt_regs *regs)
 
     if (!s) return 0;
     uy_step_disarm(regs);
+    uy_step_prev(regs, s);
     rc = uy_step_next(regs, s);
     if (rc) uy_step_end(s);
     return 1;
@@ -3873,6 +3865,7 @@ static int uy_step_resume(struct pt_regs *regs)
     int rc;
 
     if (!s) return -1;
+    uy_step_prev(regs, s);
     rc = uy_step_next(regs, s);
     if (rc) uy_step_end(s);
     return rc;
@@ -3906,15 +3899,17 @@ static void uy_dbg_before(hook_fargs3_t *args, void *udata)
 static void uy_switch_after(hook_fargs2_t *args, void *udata)
 {
     void *mm;
+    struct uy_step *step;
 
     (void)args;
     (void)udata;
+    step = uy_step_current();
     if (!__atomic_load_n(&g_replay_active, __ATOMIC_ACQUIRE) &&
         !__atomic_load_n(&g_step_active, __ATOMIC_ACQUIRE) && !g_step_orphan_task)
         return;
     mm = mm_of_task(current);
     if (!mm) return;
-    if (uy_replay_current() || uy_step_current() ||
+    if (uy_replay_current() || step ||
         (g_step_orphan_task == current && g_step_orphan_mm == mm))
         uy_mdscr_write(uy_mdscr_read() | UY_MDSCR_SS);
 }

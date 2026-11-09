@@ -21,6 +21,13 @@ struct ud_exclusive_observation {
     uint64_t elapsed_ns;
 };
 
+struct ud_store_observation {
+    enum ud_verdict verdict;
+    int error;
+    unsigned completed, unexpected_stores;
+    uint64_t elapsed_ns;
+};
+
 struct ud_ap_v221_observation {
     enum ud_verdict verdict;
     struct ud_exclusive_observation baseline, pre_gpr, simd;
@@ -33,21 +40,19 @@ struct ud_ap_v222_observation {
 
 struct ud_ap_v223_observation {
     enum ud_verdict verdict;
-    struct ud_exclusive_observation fparith;
+    struct ud_exclusive_observation fparith, pre_mov, pre_long;
+    struct ud_store_observation self_store, neon_self;
 };
+
+/* One-shot read-window probe with a 6000-instruction loop between the sampled
+ * load and the STXR.  Returns the STXR status; 0 is the native success. */
+unsigned ud_deep_window_status(const void *address, uint64_t *scratch, unsigned *byte);
 
 struct ud_reader_observation {
     enum ud_verdict reader_diff;
     int error;
     unsigned completed;
     uint64_t direct_value, reader_value, file_value;
-};
-
-struct ud_store_observation {
-    enum ud_verdict verdict;
-    int error;
-    unsigned completed, unexpected_stores;
-    uint64_t elapsed_ns;
 };
 
 typedef uint64_t (*ud_plain_reader)(const void *);
@@ -177,6 +182,14 @@ void ud_observe_ap_v222(const void *address, const void *reference, int backing_
 void ud_observe_ap_v223(const void *address, const void *reference, int backing_fd,
                         off_t offset, struct ud_ap_v223_observation *out);
 
+/* Same paired controls as ud_observe_ap_reservation. LDRB overwrites the
+ * LDXR destination, so the 2.23.0 precheck declines both the model and native
+ * stepping. STXR can only store zero back to the private zero scratch word.
+ * MATCH identifies a repeatable read trap even when the sampled byte matches
+ * the file. Check only stable, owned mappings and treat UNKNOWN as unverified. */
+void ud_observe_ap_overwrite_ldxr(const void *address, const void *reference, int backing_fd,
+                                  off_t offset, struct ud_exclusive_observation *out);
+
 /* Same contract as ud_observe_ap_reservation. CSEL reads NZCV and preserves
  * the scratch value. The UROV-Y 2.19.0 single LL/SC bridge declines this gap. */
 void ud_observe_ap_csel(const void *address, const void *reference, int backing_fd,
@@ -196,6 +209,8 @@ void ud_observe_ap_store(const void *address, const void *reference, int backing
 void ud_observe_ap_branch(const void *address, const void *reference, int backing_fd,
                           off_t offset, struct ud_exclusive_observation *out);
 void ud_observe_ap_xload(const void *address, const void *reference, int backing_fd,
+                         off_t offset, struct ud_exclusive_observation *out);
+void ud_observe_ap_xpair(const void *address, const void *reference, int backing_fd,
                          off_t offset, struct ud_exclusive_observation *out);
 
 /* Same paired controls as ud_observe_exclusive. The scratch word is zero
@@ -258,6 +273,18 @@ void ud_observe_gap_clrex_status(const void *address, const void *reference,
 void ud_observe_gap_svc_status(const void *address, const void *reference,
                                int backing_fd, off_t offset,
                                struct ud_store_observation *out);
+
+/* The LDXR executes, then a plain store to the monitored private word clears
+ * the reservation.  The native STXR must fail; a bridge that completes it
+ * reports success and raises unexpected_stores.  The second form uses a
+ * single-lane SIMD store outside the scalar decoder's guaranteed set, covering
+ * the store shapes the native-step path used to decline. */
+void ud_observe_gap_self_store(const void *address, const void *reference,
+                               int backing_fd, off_t offset,
+                               struct ud_store_observation *out);
+void ud_observe_gap_neon_self_store(const void *address, const void *reference,
+                                    int backing_fd, off_t offset,
+                                    struct ud_store_observation *out);
 
 /* Same contract, but the skipped LDXR is reached through ADR + BR.  The
  * target address remains in x9 when LDRB faults; a handler that retires the
