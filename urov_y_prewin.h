@@ -52,6 +52,15 @@ static unsigned uy_pre_dze = 1;
  * bridge fake a success at an address the hardware never reserved, which
  * would be a new feature.  An unknown value only makes the plan decline,
  * which is exactly the native failure path.
+ *
+ * 2.27.0 adds one more exact class on top of that rule.  A load-exclusive that
+ * reached the sampled access must have used a naturally aligned address, so
+ * the base register's low log2(size) bits are known zero.  A logical mask
+ * that can only name those bits is the identity for every address the
+ * hardware could have reserved, so its post-value is exact even though the
+ * same instruction is not invertible for an arbitrary input.  The backend
+ * passes that known-zero mask (uy_pre_step_aligned); a zero mask reproduces
+ * the 2.26.0 behaviour exactly.
  */
 struct uy_pre_state {
     uint64_t val[31];
@@ -88,8 +97,19 @@ static void uy_pre_forget(struct uy_pre_state *st, unsigned reg)
 
 /* Recover the value that `reg` held before one instruction that wrote it,
  * using the values its sources still hold.  Returns 1 only when the inverse is
- * exact for every pre-value the register could have had; 0 otherwise. */
-static int uy_pre_invert(uint32_t insn, unsigned reg, struct uy_pre_state *st)
+ * exact for every pre-value the register could have had; 0 otherwise.
+ *
+ * `zero_mask` names the bits a pre-value is architecturally known to have
+ * clear.  The only caller that passes a non-zero mask is the exclusive window:
+ * a load-exclusive that reached the sampled access reserved a naturally
+ * aligned address, so the low log2(size) bits of the base register are zero.
+ * For a logical mask that only names those bits, the pre-value is fixed even
+ * though the instruction is not invertible for an arbitrary input: AND/BIC
+ * are the identity (the cleared bits are already zero), and ORR/ORN set
+ * exactly the mask bits, so `post & ~mask` recovers the pre-value.  With
+ * zero_mask == 0 the old all-inputs rule is unchanged. */
+static int uy_pre_invert(uint32_t insn, unsigned reg, struct uy_pre_state *st,
+                         uint64_t zero_mask)
 {
     uint64_t after = uy_pre_value(st, reg);
 
@@ -162,12 +182,15 @@ static int uy_pre_invert(uint32_t insn, unsigned reg, struct uy_pre_state *st)
                 uy_pre_put(st, rd, after ^ other);
                 return 1;
             }
-            if ((opc == 0U || opc == 3U) && other == ~UINT64_C(0)) {
+            /* AND/BIC are the identity when the cleared bits are known zero;
+             * ORR/ORN set exactly the mask bits, which the aligned pre-value
+             * is known to have clear, so clearing them again is exact. */
+            if ((opc == 0U || opc == 3U) && (~other & ~zero_mask) == 0) {
                 uy_pre_put(st, rd, after);
                 return 1;
             }
-            if (opc == 1U && other == 0U) {
-                uy_pre_put(st, rd, after);
+            if (opc == 1U && (other & ~zero_mask) == 0) {
+                uy_pre_put(st, rd, after & ~other);
                 return 1;
             }
             return 0;
@@ -184,12 +207,12 @@ static int uy_pre_invert(uint32_t insn, unsigned reg, struct uy_pre_state *st)
                 uy_pre_put(st, rd, after ^ other);
                 return 1;
             }
-            if ((opc == 0U || opc == 3U) && other == ~UINT64_C(0)) {
+            if ((opc == 0U || opc == 3U) && (~other & ~zero_mask) == 0) {
                 uy_pre_put(st, rd, after);
                 return 1;
             }
-            if (opc == 1U && other == 0U) {
-                uy_pre_put(st, rd, after);
+            if (opc == 1U && (other & ~zero_mask) == 0) {
+                uy_pre_put(st, rd, after & ~other);
                 return 1;
             }
             return 0;
@@ -215,12 +238,15 @@ static int uy_pre_invert(uint32_t insn, unsigned reg, struct uy_pre_state *st)
             uy_pre_put(st, rd, after ^ wmask);
             return 1;
         }
-        if ((opc == 0U || opc == 3U) && wmask == ~UINT64_C(0)) {
+        /* AND/ANDS only clear: the identity when every cleared bit is known
+         * zero.  ORR sets exactly the mask bits, which the aligned pre-value
+         * is known to have clear, so clearing them again is exact. */
+        if ((opc == 0U || opc == 3U) && (~wmask & ~zero_mask) == 0) {
             uy_pre_put(st, rd, after);
             return 1;
         }
-        if (opc == 1U && wmask == 0U) {
-            uy_pre_put(st, rd, after);
+        if (opc == 1U && (wmask & ~zero_mask) == 0) {
+            uy_pre_put(st, rd, after & ~wmask);
             return 1;
         }
         return 0;
@@ -404,8 +430,13 @@ static int uy_pre_writes(uint32_t insn, uint32_t *mask)
 /* Rewind one retired instruction: apply its write set to the value table.
  * Every written register keeps its exact pre-value when uy_pre_invert() can
  * recover it; otherwise it becomes unknown.  A class this code cannot place
- * makes the whole plan decline (fail closed, native outcome). */
-static int uy_pre_step(uint32_t insn, struct uy_pre_state *st)
+ * makes the whole plan decline (fail closed, native outcome).
+ *
+ * `zero_mask` is passed through to the logical inverse; see uy_pre_invert().
+ * uy_pre_step() keeps the historical no-alignment-assumption entry point for
+ * the standalone differential test. */
+static int uy_pre_step_aligned(uint32_t insn, struct uy_pre_state *st,
+                               uint64_t zero_mask)
 {
     uint32_t mask;
     unsigned r;
@@ -414,9 +445,14 @@ static int uy_pre_step(uint32_t insn, struct uy_pre_state *st)
     if (!mask) return 0;
     for (r = 0; r < 32U; ++r) {
         if (!(mask & uy_pre_bit(r))) continue;
-        if (!uy_pre_invert(insn, r, st)) uy_pre_forget(st, r);
+        if (!uy_pre_invert(insn, r, st, zero_mask)) uy_pre_forget(st, r);
     }
     return 0;
+}
+
+static inline int uy_pre_step(uint32_t insn, struct uy_pre_state *st)
+{
+    return uy_pre_step_aligned(insn, st, 0);
 }
 
 /* Start the table at the faulting load: every general register still holds

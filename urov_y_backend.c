@@ -34,6 +34,15 @@
  * to decline on any GPR holding a span address is gone; the branch-target map
  * is what proves the LDXR actually ran.
  *
+ * 2.27.0 closes the two residuals KEYLESS_2_26_AUDIT.md demonstrated.  The
+ * rewind now knows the natural alignment of the exclusive access, so an
+ * alignment-preserving AND/BIC/ORR mask (the aligned-base probe) is an exact
+ * identity instead of an unknown.  A bounded walk of the LDXR's fall-through
+ * predecessors rejects an indirect transfer whose recovered target lands in
+ * the sampled span (the no-reservation phantom store) before the bridge can
+ * report a success the hardware never produced.  Neither change adds a hook,
+ * thread, timer, PTE/VMA bit, code word, request field or new read view.
+ *
  * SITE_BRK removes the data abort entirely by replacing the 4-byte site
  * instruction with BRK on a private COW page (A impossible, B handled by the
  * caller window).  PAGE_UXN removes the code-page feature by making the site
@@ -190,6 +199,15 @@ _Static_assert(sizeof(struct uy_fpstate) == UY_FPSIMD_BYTES, "FPSIMD image size"
  * register-only instructions in front of its sampled load must not be able to
  * turn the bound itself into an observable failure. */
 #define UY_LLSC_PRE_SCAN 16384U
+/* 2.27.0: after the LDXR has been located, walk its immediate predecessors
+ * (fall-through order) and stop at the first control-flow instruction.  An
+ * indirect branch whose recovered target lands in (ldxr_pc, fault_pc] proves
+ * that the sampled load was entered past the exclusive load, so the plan must
+ * decline instead of reporting a reservation the hardware never had.  The
+ * walk is bounded because it is a kernel-work guard, not a proof of the
+ * whole function; shapes that hide the branch beyond it are documented in
+ * ELIMINATION_2_27_DESIGN.md. */
+#define UY_LLSC_ENTRY_SCAN 64U
 #define UY_LLSC_MEM_MAX 4U       /* gap stores recorded and replayed at commit */
 #define UY_LLSC_BYTES_MAX 64U    /* widest single access the decoder produces */
 
@@ -2684,6 +2702,70 @@ static uint64_t uy_pt_gpr(const struct pt_regs *regs, unsigned reg)
     return reg == 31U ? regs->sp : regs->regs[reg];
 }
 
+/* True when the instruction transfers control to a value held in a register
+ * (BR, BLR, RET and the pointer-authenticated forms).  All of them read Xn
+ * and branch to it; a failed authentication faults before the sampled load
+ * and is therefore not part of this window. */
+static int uy_is_indirect_branch(uint32_t insn, unsigned *rn)
+{
+    if ((insn & 0xfe000000U) != 0xd6000000U) return 0;
+    *rn = (insn >> 5) & 31U;
+    return 1;
+}
+
+/* 2.27.0 entry proof: the exclusive load must not have been skipped by an
+ * indirect transfer into the linear span.  Direct targets in the span are
+ * already rejected by uy_llsc_skipped(); this walk covers the one shape the
+ * branch-target map cannot see.  It stops at the first control-flow
+ * instruction, because anything further back is not on the fall-through path:
+ * a real branch there would have left the block, and an unrelated function's
+ * trailing RET (the normal layout immediately before a leaf function) must not
+ * be misread as an entry into this function.  In the phantom shape the padding
+ * in front of the LDXR was not executed, so the rewound value of the branch
+ * register is exactly the value BR used; in a real window it is the value the
+ * executed fall-through produced.  `st` is the register state at the LDXR
+ * entry.
+ *
+ * This is a bounded, one-sided proof: returning 1 only ever turns a would-be
+ * false success into the native failure.  It cannot manufacture a success at
+ * an address the hardware did not reserve. */
+static int uy_llsc_entry_skipped(uint64_t ldxr_pc, uint64_t pc,
+                                 const struct uy_pre_state *st)
+{
+    uint64_t at = ldxr_pc;
+    unsigned scanned;
+
+    for (scanned = 0; scanned < UY_LLSC_ENTRY_SCAN && at >= 4U; ++scanned) {
+        uint32_t insn;
+        unsigned rn;
+        uint64_t target;
+
+        at -= 4U;
+        if (!uy_user_range(at, 4U) || uy_read_insn(at, &insn)) return 0;
+        if (uy_is_indirect_branch(insn, &rn)) {
+            /* Rn == 31 names XZR here, not SP: the transfer targets zero. */
+            if (rn == 31U) return 0;
+            /* An unknown target cannot be ruled out: the span may have
+             * overwritten the source register after the branch, and a branch
+             * that could have landed in the span means the LDXR may not have
+             * executed.  Decline; the native STXR then reports the failure it
+             * would report without a reservation. */
+            if (!uy_pre_known(st, rn)) return 1;
+            target = uy_pre_value(st, rn);
+            return target > ldxr_pc && target <= pc;
+        }
+        /* A direct branch cannot add an entry the branch-target map misses. */
+        if ((insn & 0xfc000000U) == 0x14000000U ||      /* B */
+            (insn & 0xfc000000U) == 0x94000000U ||      /* BL */
+            (insn & 0xff000010U) == 0x54000000U ||      /* B.cond */
+            (insn & 0x7e000000U) == 0x34000000U ||      /* CBZ/CBNZ */
+            (insn & 0x7e000000U) == 0x36000000U)        /* TBZ/TBNZ */
+            return 0;
+        if (uy_is_exception_insn(insn)) return 0;
+    }
+    return 0;
+}
+
 /* Linear read-before proof.  Walk backwards from the faulting instruction to
  * the most recent load-exclusive, rewinding the register value table one
  * instruction at a time (uy_pre_step).  When the exclusive load is reached the
@@ -2696,6 +2778,13 @@ static uint64_t uy_pt_gpr(const struct pt_regs *regs, unsigned reg)
  * for its value instead, so an in-place write that provably left it unchanged
  * (ADD s,s,#0, an add/sub/eor chain whose net effect is zero, a value copied
  * through another still-known register) no longer loses the reservation.
+ *
+ * 2.27.0 decodes the exclusive instruction first, then rewinds with the
+ * natural-alignment invariant of its access size: a mask write that can only
+ * clear the low log2(size) bits of the base is the identity for every address
+ * the hardware could have reserved, even though it is not invertible for an
+ * arbitrary input.  It also rejects the one entry shape the branch-target map
+ * cannot see (uy_llsc_entry_skipped).
  *
  * The sampled access itself does not participate: it has not committed at the
  * fault, so it may overwrite the LDXR destination, sample a pair or vector
@@ -2721,7 +2810,11 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
         return;
     }
     if (pc < 4U || !uy_user_range(pc - 4U, 4U)) return;
-    uy_pre_reset(&st, regs);
+
+    /* First pass: locate the reservation instruction and its access size.
+     * The value proof needs the alignment that a load-exclusive that reached
+     * the sampled access must have had, and that is only known after the
+     * instruction is decoded. */
     at = pc - 4U;
     for (scanned = 0; scanned < UY_LLSC_PRE_SCAN; ++scanned) {
         unsigned size_enc, rt, rt2, rs, rn;
@@ -2751,10 +2844,18 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
             uy_is_stxp(insn, &size_enc, &rs, &rt, &rt2, &rn) ||
             uy_is_clrex(insn) || uy_is_exception_insn(insn))
             return;
-        if (uy_pre_step(insn, &st)) return;
         at -= 4U;
     }
     if (!ldxr_pc) return;
+
+    /* Second pass: rewind with the alignment invariant.  A mask write that can
+     * only clear the low log2(size) bits of the base is the identity for every
+     * value the hardware could have reserved. */
+    uy_pre_reset(&st, regs);
+    for (at = pc - 4U; at > ldxr_pc; at -= 4U) {
+        if (uy_read_insn(at, &insn)) return;
+        if (uy_pre_step_aligned(insn, &st, lsize - 1U)) return;
+    }
     /* The rewind must still know the base.  A class it could not invert leaves
      * it unknown and the plan declines; the native instructions then report
      * exactly the result the hardware would have reported without the module. */
@@ -2763,6 +2864,7 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
     /* lsize is already in bytes, so the mask is the access size minus one. */
     if (base & (lsize - 1U)) return;
     if (uy_llsc_skipped(ldxr_pc, pc)) return;
+    if (uy_llsc_entry_skipped(ldxr_pc, pc, &st)) return;
 
     out->base = base;
     out->size = lsize;

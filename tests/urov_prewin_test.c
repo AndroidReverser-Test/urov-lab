@@ -88,6 +88,62 @@ static void check_inverse(const char *name, uint32_t insn, unsigned reg,
     }
 }
 
+/* 2.27.0: the exclusive base is naturally aligned, so a mask write that can
+ * only clear the low alignment bits is the identity even though it is not
+ * invertible for an arbitrary input. */
+static void check_inverse_zero(const char *name, uint32_t insn, unsigned reg,
+                               uint64_t a, uint64_t b, uint64_t c, uint64_t zero_mask)
+{
+    struct uro_regs post;
+
+    memset(&model, 0, sizeof(model));
+    model.x[1] = a;
+    model.x[2] = b;
+    model.x[3] = c;
+    model.sp = a;
+    model.pc = 0x400000;
+    post = model;
+    if (!uy_win_alu(&post, insn)) {
+        ++cases;
+        fail(name, "not modeled by the forward window");
+        return;
+    }
+    uy_pre_reset(&st, &post);
+    ++cases;
+    if (uy_pre_step_aligned(insn, &st, zero_mask)) {
+        fail(name, "declined by the aligned rewind");
+        return;
+    }
+    if (!uy_pre_known(&st, reg)) {
+        fail(name, "value left unknown");
+        return;
+    }
+    if (uy_pre_value(&st, reg) != a) {
+        printf("FAIL %-36s pre=%016llx want=%016llx\n", name,
+               (unsigned long long)uy_pre_value(&st, reg), (unsigned long long)a);
+        ++failures;
+    }
+}
+
+static void check_unknown_zero(const char *name, uint32_t insn, unsigned reg,
+                               uint64_t a, uint64_t b, uint64_t c, uint64_t zero_mask)
+{
+    struct uro_regs post;
+
+    memset(&model, 0, sizeof(model));
+    model.x[1] = a;
+    model.x[2] = b;
+    model.x[3] = c;
+    model.sp = a;
+    model.pc = 0x400000;
+    post = model;
+    (void)uy_win_alu(&post, insn);
+    uy_pre_reset(&st, &post);
+    ++cases;
+    if (uy_pre_step_aligned(insn, &st, zero_mask)) return;
+    if (uy_pre_known(&st, reg)) fail(name, "guessed a pre-value");
+}
+
 /* The inverse must not guess: after the rewind the register stays unknown. */
 static void check_unknown(const char *name, uint32_t insn, unsigned reg,
                           uint64_t a, uint64_t b, uint64_t c)
@@ -224,6 +280,18 @@ int main(void)
     check_unknown("unknown ldr x1,[x2]", 0xf9400041U, 1, 0x70000000ULL, 5, 6);
     check_unknown("unknown movz x1,#1", 0xd2800021U, 1, 0x70000000ULL, 5, 6);
     check_unknown("unknown csel x1,x2,x3", 0x9a830041U, 1, 0x70000000ULL, 5, 6);
+
+    /* 2.27.0 aligned-mask proof: identity only while the mask is confined to
+     * the bits a naturally aligned exclusive base must have clear. */
+    check_inverse_zero("aligned and x1,x1,#-8", 0x927df021U, 1, 0x70000000ULL, 5, 6, 7);
+    check_inverse_zero("aligned and x1,x1,x2=~7", 0x8a020021U, 1, 0x70000000ULL,
+                       ~UINT64_C(7), 6, 7);
+    check_inverse_zero("aligned orr x1,x1,x2=7", 0xaa020021U, 1, 0x70000000ULL, 7, 6, 7);
+    check_inverse_zero("aligned eor x1,x1,x2", 0xca020021U, 1, 0x70000000ULL, 0x1234, 6, 7);
+    check_unknown_zero("aligned and x1,x1,x2=~15", 0x8a020021U, 1, 0x70000000ULL,
+                       ~UINT64_C(15), 6, 7);
+    check_unknown_zero("aligned orr x1,x1,x2=8", 0xaa020021U, 1, 0x70000000ULL, 8, 6, 7);
+    check_unknown_zero("and #-8 with 4-byte alignment", 0x927df021U, 1, 0x70000000ULL, 5, 6, 3);
 
     /* Multi-instruction rewinds. */
     check_chain("chain add#0", add0, 1, 1, 0x70000000ULL, 5);

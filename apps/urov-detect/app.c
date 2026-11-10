@@ -1257,11 +1257,12 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
                  g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
         goto done;
     }
-    if (!strncmp(mode, "keyless225-", sizeof("keyless225-") - 1) ||
+    bool audit226 = !strncmp(mode, "keyless226-audit-", sizeof("keyless226-audit-") - 1);
+    if (audit226 || !strncmp(mode, "keyless225-", sizeof("keyless225-") - 1) ||
         !strncmp(mode, "keyless226-", sizeof("keyless226-") - 1)) {
-        const char *shape = mode + sizeof("keyless225-") - 1;
+        const char *shape = mode + (audit226 ? sizeof("keyless226-audit-") : sizeof("keyless225-")) - 1;
 
-        keyless225_fixture(shape, key, (unsigned)repeats);
+        keyless225_fixture(shape, key, (unsigned)repeats, audit226);
         snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
                  g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
         goto done;

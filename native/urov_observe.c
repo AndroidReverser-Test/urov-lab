@@ -546,6 +546,26 @@ static unsigned pre_base_write_once(const void *address, uint64_t *scratch, unsi
     return failed;
 }
 
+__attribute__((noinline))
+static unsigned pre_aligned_base_once(const void *address, uint64_t *scratch,
+                                      unsigned *byte, uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed;
+
+    (void)aux;
+    /* scratch is aligned: masking leaves its address unchanged. But 2.26's
+     * inverse must work for all inputs, so it forgets this LDXR base. */
+    __asm__ volatile("ldxr %0, [%[s]]\n"
+                     "and %[s], %[s], #0xfffffffffffffff8\n"
+                     "ldrb %w1, [%[a]]\n"
+                     "stxr %w2, %0, [%[s]]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed), [s] "+&r"(scratch)
+                     : [a] "r"(address) : "memory");
+    *byte = sample;
+    return failed;
+}
+
 /* 2.26.0 pre-window probes.  Each retires a legal instruction (or a long run
  * of NOPs) between the LDXR and the sampled LDRB.  None of them clears the
  * local monitor or moves the reserved address, so the native STXR succeeds; a
@@ -975,6 +995,7 @@ enum unreserved_branch {
     UNRESERVED_TO_LOAD,     /* direct branch to the LDRB */
     UNRESERVED_TO_NOP,      /* direct branch to a NOP in the LDXR gap */
     UNRESERVED_INDIRECT,    /* ADR + BR to the LDRB, target left in x9 */
+    UNRESERVED_INDIRECT_BTI, /* indirect branch over LDXR to a BTI landing pad */
     UNRESERVED_CROSS_PAGE,
     UNRESERVED_GAP_CLREX,   /* LDXR executes; CLREX clears it before the STXR */
     UNRESERVED_GAP_SVC,     /* LDXR executes; SVC takes an exception in between */
@@ -1011,6 +1032,18 @@ static int unreserved_store_once(const void *address, uint64_t *scratch,
                          "ldxr %0, [%3]\n"
                          "1: ldrb %w2, [%4]\n"
                          "stxr %w1, %0, [%3]\n"
+                         : "+&r"(value), "=&r"(status), "=&r"(*byte)
+                         : "r"(scratch), "r"(address) : "x9", "memory");
+    } else if (branch == UNRESERVED_INDIRECT_BTI) {
+        /* 2.26's branch-target map has no edge from BR. The dead LDXR and
+         * the real BTI/LDRB therefore look like an executed linear window. */
+        __asm__ volatile("clrex\n"
+                         "adr x9, 1f\n"
+                         "br x9\n"
+                         "ldxr %0, [%3]\n"
+                         "1: hint #36\n" /* BTI J, a NOP on older cores. */
+                         "ldrb %w2, [%4]\n"
+                         "stxr %w1, %0, [%3]"
                          : "+&r"(value), "=&r"(status), "=&r"(*byte)
                          : "r"(scratch), "r"(address) : "x9", "memory");
     } else if (branch == UNRESERVED_CROSS_PAGE) {
@@ -1103,7 +1136,7 @@ static void observe_unreserved_store(const void *address, const void *reference,
                                      struct ud_store_observation *out)
 {
     struct sample_identity target, control, after;
-    uint64_t scratch;
+    _Alignas(2048) uint64_t scratch;
     uint8_t file_byte;
     unsigned target_byte = 0;
     int saved = errno;
@@ -1121,7 +1154,8 @@ static void observe_unreserved_store(const void *address, const void *reference,
     }
     out->error = identity(address, 1, backing_fd, offset, &target);
     if (out->error) goto done;
-    bool exec_reference = branch != UNRESERVED_GAP_CLREX && branch != UNRESERVED_GAP_SVC &&
+    bool exec_reference = branch != UNRESERVED_INDIRECT_BTI &&
+                          branch != UNRESERVED_GAP_CLREX && branch != UNRESERVED_GAP_SVC &&
                           branch != UNRESERVED_GAP_SELF_STORE &&
                           branch != UNRESERVED_GAP_NEON_SELF_STORE;
 
@@ -1144,7 +1178,8 @@ static void observe_unreserved_store(const void *address, const void *reference,
         if (before != 0 || after_control != 0 || tested < 0 ||
             a != file_byte || c != file_byte ||
             (!self_shape && ((i && b != target_byte) ||
-                             (store_value != scratch_initial && b != file_byte)))) {
+                             (branch == UNRESERVED_TO_LOAD && store_value != scratch_initial &&
+                              b != file_byte)))) {
             out->error = EAGAIN;
             goto done;
         }
@@ -1197,6 +1232,13 @@ void ud_observe_unreserved_indirect_status(const void *address, const void *refe
 {
     observe_unreserved_store(address, reference, backing_fd, offset, scratch_initial,
                              UNRESERVED_INDIRECT, out);
+}
+
+void ud_observe_ap_phantom_store(const void *address, const void *reference,
+                                 int backing_fd, off_t offset, struct ud_store_observation *out)
+{
+    observe_unreserved_store(address, reference, backing_fd, offset,
+                             UINT64_C(0xc3175ed9246ab08f), UNRESERVED_INDIRECT_BTI, out);
 }
 
 void ud_observe_unreserved_cross_page_status(const void *address, const void *reference,
@@ -1281,7 +1323,8 @@ static unsigned execution_once(const void *address, uint64_t *scratch, unsigned 
 
 enum reservation_probe {
     READ_ADJACENT, READ_SPACED, READ_POST_LOAD_NOP, READ_POST_LOAD_ALU, READ_PRE_LOAD_ALU,
-    READ_POST_LOAD_FP, READ_PRE_LOAD_GPR, READ_PRE_BASE_WRITE, READ_PRE_MOV, READ_PRE_LONG,
+    READ_POST_LOAD_FP, READ_PRE_LOAD_GPR, READ_PRE_BASE_WRITE, READ_PRE_ALIGNED_BASE,
+    READ_PRE_MOV, READ_PRE_LONG,
     READ_POST_LOAD_SIMD,
     READ_POST_LOAD_CSEL,
     READ_POST_LOAD_LOAD, READ_POST_LOAD_STORE, READ_POST_LOAD_BRANCH, READ_POST_LOAD_XLOAD,
@@ -1307,6 +1350,7 @@ static void observe_reservation(const void *address, const void *reference,
     bool ap_probe = probe == READ_POST_LOAD_NOP || probe == READ_POST_LOAD_ALU ||
                     probe == READ_PRE_LOAD_ALU || probe == READ_POST_LOAD_FP ||
                     probe == READ_PRE_LOAD_GPR || probe == READ_PRE_BASE_WRITE ||
+                    probe == READ_PRE_ALIGNED_BASE ||
                     probe == READ_PRE_MOV ||
                     probe == READ_PRE_LONG ||
                     probe == READ_POST_LOAD_SIMD ||
@@ -1341,6 +1385,7 @@ static void observe_reservation(const void *address, const void *reference,
     if (probe == READ_POST_LOAD_FP) sample = post_load_fp_once;
     if (probe == READ_PRE_LOAD_GPR) sample = pre_load_gpr_once;
     if (probe == READ_PRE_BASE_WRITE) sample = pre_base_write_once;
+    if (probe == READ_PRE_ALIGNED_BASE) sample = pre_aligned_base_once;
     if (probe == READ_PRE_MOV) sample = pre_mov_once;
     if (probe == READ_PRE_LONG) sample = pre_long_once;
     if (probe == READ_POST_LOAD_SIMD) sample = post_load_simd_once;
@@ -1578,6 +1623,12 @@ void ud_observe_ap_base_write(const void *address, const void *reference,
                               struct ud_exclusive_observation *out)
 {
     observe_reservation(address, reference, backing_fd, offset, READ_PRE_BASE_WRITE, out);
+}
+
+void ud_observe_ap_aligned_base(const void *address, const void *reference,
+                                int backing_fd, off_t offset, struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_PRE_ALIGNED_BASE, out);
 }
 
 /* 2.25.0 sampled-access shapes and pre-load classes.  Every variant must stay

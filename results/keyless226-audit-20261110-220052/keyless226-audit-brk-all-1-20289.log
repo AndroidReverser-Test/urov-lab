@@ -1,0 +1,24 @@
+--------- beginning of main
+10-07 12:35:37.802 20289 20313 I urovdetect: CONTEXT pid=20289 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-07 12:35:37.802 20289 20313 I urovdetect: BEGIN mode=keyless226-audit-brk-all repeats=4
+10-07 12:35:37.897 20289 20313 I urovdetect: KEYLESS226_AUDIT stage=clean mask=0 mask_unknown=0 mask_triplets=384 mask_failed=0 phantom=0 phantom_unknown=0 phantom_trials=128 phantom_writes=0
+10-07 12:35:37.897 20289 20313 I urovdetect: KEYLESS225_STAGE stage=clean n=4 ap=0 ap_unknown=0 triplets=384 target_failed=0 control_failed=0 retries=0 site_code=0 site_brk=0 site_fetch=0 split=0 trap=0 changed=0 unknown=0 crc_eligible=4 file=96964c4f direct=96964c4f business=96964c4f execute=1234 reference_ok=1 fallback_execute=1234 mean_ns=17564656 max_ns=22104208
+10-07 12:35:37.897 20289 20313 I urovdetect: KEYLESS225_INVALID unknown=1 crc_eligible=0 errno=116 triplets=0
+10-07 12:35:37.942 20289 20313 I urovdetect: KEYLESS226_AUDIT stage=identity mask=0 mask_unknown=0 mask_triplets=384 mask_failed=0 phantom=0 phantom_unknown=0 phantom_trials=128 phantom_writes=0
+10-07 12:35:37.942 20289 20313 I urovdetect: KEYLESS225_STAGE stage=identity n=4 ap=0 ap_unknown=0 triplets=384 target_failed=0 control_failed=0 retries=0 site_code=1 site_brk=1 site_fetch=0 split=0 trap=4 changed=0 unknown=0 crc_eligible=0 file=96964c4f direct=96964c4f business=96964c4f execute=1234 reference_ok=1 fallback_execute=1234 mean_ns=9973622 max_ns=11160441
+10-07 12:35:37.947 20289 20313 I urovdetect: KEYLESS225_TRUTH stage=identity active=1 deactivated=1
+10-07 12:35:37.947 20289 20313 I urovdetect: KEYLESS226_STABILITY stage=identity stable=1
+10-07 12:35:37.947 20289 20313 I urovdetect: DOBBY_HOOK address=0x711392b000 original=1234 hooked=1235
+10-07 12:35:37.986 20289 20313 I urovdetect: KEYLESS226_AUDIT stage=patch_only mask=0 mask_unknown=0 mask_triplets=384 mask_failed=0 phantom=0 phantom_unknown=0 phantom_trials=128 phantom_writes=0
+10-07 12:35:37.986 20289 20313 I urovdetect: KEYLESS225_STAGE stage=patch_only n=4 ap=0 ap_unknown=0 triplets=384 target_failed=0 control_failed=0 retries=0 site_code=0 site_brk=0 site_fetch=0 split=0 trap=0 changed=4 unknown=0 crc_eligible=0 file=96964c4f direct=d96931a8 business=d96931a8 execute=1235 reference_ok=1 fallback_execute=1234 mean_ns=9001739 max_ns=9047485
+10-07 12:35:38.026 20289 20313 I urovdetect: KEYLESS226_AUDIT stage=overlay mask=0 mask_unknown=0 mask_triplets=384 mask_failed=0 phantom=0 phantom_unknown=0 phantom_trials=128 phantom_writes=0
+10-07 12:35:38.026 20289 20313 I urovdetect: KEYLESS225_STAGE stage=overlay n=4 ap=0 ap_unknown=0 triplets=384 target_failed=0 control_failed=0 retries=0 site_code=1 site_brk=1 site_fetch=0 split=4 trap=4 changed=0 unknown=0 crc_eligible=0 file=96964c4f direct=d96931a8 business=96964c4f execute=1235 reference_ok=1 fallback_execute=1234 mean_ns=9007873 max_ns=9022868
+10-07 12:35:38.066 20289 20313 I urovdetect: KEYLESS225_TRUTH stage=overlay active=1 deactivated=1
+10-07 12:35:38.066 20289 20313 I urovdetect: KEYLESS226_STABILITY stage=overlay stable=1
+10-07 12:35:38.107 20289 20313 I urovdetect: KEYLESS226_AUDIT stage=deactivated mask=0 mask_unknown=0 mask_triplets=384 mask_failed=0 phantom=0 phantom_unknown=0 phantom_trials=128 phantom_writes=0
+10-07 12:35:38.107 20289 20313 I urovdetect: KEYLESS225_STAGE stage=deactivated n=4 ap=0 ap_unknown=0 triplets=384 target_failed=0 control_failed=0 retries=0 site_code=0 site_brk=0 site_fetch=0 split=0 trap=0 changed=4 unknown=0 crc_eligible=0 file=96964c4f direct=d96931a8 business=d96931a8 execute=1235 reference_ok=1 fallback_execute=1234 mean_ns=9098439 max_ns=9368978
+10-07 12:35:38.107 20289 20313 I urovdetect: KEYLESS225_GUARD read_errno=22 exec_errno=22 inactive=1 reference_ok=1 execute=1234
+10-07 12:35:38.107 20289 20313 I urovdetect: KEYLESS225_BUSINESS ops=59776 errors=0
+10-07 12:35:38.107 20289 20313 I urovdetect: CONTEXT pid=20289 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-07 12:35:38.107 20289 20313 I urovdetect: NATIVE_RESULT PASS cases=5 assertions=18 failures=0 mode=keyless226-audit-brk-all
+10-07 12:35:38.159 20289 20289 I urovdetect: DETECT_RESULT PASS mode=keyless226-audit-brk-all worker_ms=351 ui_ticks=129 ui_max_gap_ms=17 native=PASS cases=5 assertions=18 failures=0

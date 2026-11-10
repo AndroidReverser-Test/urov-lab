@@ -1,0 +1,13 @@
+--------- beginning of main
+10-07 13:12:41.368  1149  1180 I urovdetect: CONTEXT pid=1149 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-07 13:12:41.368  1149  1180 I urovdetect: BEGIN mode=keyless226-audit-clean repeats=32
+10-07 13:12:41.729  1149  1180 I urovdetect: KEYLESS226_AUDIT stage=clean mask=0 mask_unknown=0 mask_triplets=3072 mask_failed=0 phantom=0 phantom_unknown=0 phantom_trials=1024 phantom_writes=0
+10-07 13:12:41.729  1149  1180 I urovdetect: KEYLESS225_STAGE stage=clean n=32 ap=0 ap_unknown=0 triplets=3072 target_failed=0 control_failed=0 retries=0 site_code=0 site_brk=0 site_fetch=0 split=0 trap=0 changed=0 unknown=0 crc_eligible=32 file=96964c4f direct=96964c4f business=96964c4f execute=1234 reference_ok=1 fallback_execute=1234 mean_ns=10347000 max_ns=27450480
+10-07 13:12:41.729  1149  1180 I urovdetect: KEYLESS225_INVALID unknown=1 crc_eligible=0 errno=116 triplets=0
+10-07 13:12:41.730  1149  1180 I urovdetect: DOBBY_HOOK address=0x711570b000 original=1234 hooked=1235
+10-07 13:12:42.019  1149  1180 I urovdetect: KEYLESS226_AUDIT stage=patch_only mask=0 mask_unknown=0 mask_triplets=3072 mask_failed=0 phantom=0 phantom_unknown=0 phantom_trials=1024 phantom_writes=0
+10-07 13:12:42.019  1149  1180 I urovdetect: KEYLESS225_STAGE stage=patch_only n=32 ap=0 ap_unknown=0 triplets=3072 target_failed=0 control_failed=0 retries=0 site_code=0 site_brk=0 site_fetch=0 split=0 trap=0 changed=32 unknown=0 crc_eligible=0 file=96964c4f direct=d96931a8 business=d96931a8 execute=1235 reference_ok=1 fallback_execute=1234 mean_ns=8944341 max_ns=8991089
+10-07 13:12:42.020  1149  1180 I urovdetect: KEYLESS225_BUSINESS ops=129920 errors=0
+10-07 13:12:42.020  1149  1180 I urovdetect: CONTEXT pid=1149 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-07 13:12:42.020  1149  1180 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=9 failures=0 mode=keyless226-audit-clean
+10-07 13:12:42.023  1149  1149 I urovdetect: DETECT_RESULT PASS mode=keyless226-audit-clean worker_ms=653 ui_ticks=159 ui_max_gap_ms=13 native=PASS cases=2 assertions=9 failures=0

@@ -204,6 +204,12 @@ void ud_observe_ap_base_write(const void *address, const void *reference,
                               int backing_fd, off_t offset,
                               struct ud_exclusive_observation *out);
 
+/* Same RX/R-only alias contract. AND #-8 leaves the aligned scratch address
+ * unchanged but the 2.26.0 pre-window cannot invert the mask. MATCH reports
+ * repeatable target-only reservation loss. No target writes or control calls. */
+void ud_observe_ap_aligned_base(const void *address, const void *reference,
+                                int backing_fd, off_t offset, struct ud_exclusive_observation *out);
+
 /* 2.25.0 sampled-access shapes and pre-load classes, indexed by variant:
  *   0 LDP Wt,Wt2        4 LDR from private storage before the sampled load
  *   1 LDR Q (128-bit)   5 STR to private storage before the sampled load
@@ -346,6 +352,13 @@ void ud_observe_gap_neon_self_store(const void *address, const void *reference,
 void ud_observe_unreserved_indirect_status(const void *address, const void *reference,
                                            int backing_fd, off_t offset,
                                            struct ud_store_observation *out);
+
+/* RX target and R-only reference at the same regular-file offset. CLREX and
+ * a BTI-compatible indirect jump skip LDXR. MATCH requires every target STXR
+ * to report success AND change private scratch, with both bracketing controls
+ * failing without a write. The target and reference are only read by LDRB. */
+void ud_observe_ap_phantom_store(const void *address, const void *reference,
+                                 int backing_fd, off_t offset, struct ud_store_observation *out);
 
 /* Same contract, with a direct branch from another code page. On 4/16 KiB
  * systems this tests the one-page branch scan in the UROV-Y 2.8.0 PAGE_AP
