@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 
 enum keyless225_verdict { KEYLESS_CLEAR, KEYLESS_TRAP, KEYLESS_CHANGED, KEYLESS_UNKNOWN };
+enum keyless_probe_set { KEYLESS_PRE_WINDOW, KEYLESS_AUDIT_226, KEYLESS_ENTRY_227 };
 
 static enum keyless225_verdict keyless225_policy(enum ud_verdict ap, enum ud_verdict brk,
                                                enum ud_verdict fetch, enum ud_verdict split,
@@ -53,12 +54,14 @@ static void keyless226_regression(const char *name, const uint8_t *text, const s
  * assisted live read, mapping edit or global signal handler. */
 static void keyless225_stage(const char *name, const uint8_t *text, const struct page *ref,
                             const uint8_t *exec_alias, const uint8_t *file, unsigned repeats,
-                            bool audit226)
+                            enum keyless_probe_set probes)
 {
+    bool entry_limit = probes == KEYLESS_ENTRY_227;
     unsigned verdicts[KEYLESS_UNKNOWN + 1] = {0}, ap_matches = 0, ap_unknown = 0, splits = 0;
     unsigned triplets = 0, failed = 0, control_failed = 0, retries = 0;
     unsigned mask_matches = 0, mask_unknown = 0, mask_triplets = 0, mask_failed = 0;
     unsigned phantom_matches = 0, phantom_unknown = 0, phantom_trials = 0, phantom_writes = 0;
+    unsigned entry_matches = 0, entry_unknown = 0, entry_trials = 0, entry_writes = 0;
     uint64_t total_ns = 0, max_ns = 0;
     enum ud_verdict site_code, site_fetch;
     const uint8_t *reference = ref->address + ref->entry;
@@ -77,42 +80,57 @@ static void keyless225_stage(const char *name, const uint8_t *text, const struct
                    UD_MATCH : UD_NO_MATCH;
     }
     for (unsigned i = 0; i < repeats; ++i) {
-        struct ud_exclusive_observation ap;
         struct ud_views views;
         uint64_t begin = now_ns();
         enum ud_verdict split = ud_check_reader_views(text, sizeof(direct), ref->fd, offset,
                                                       crc_copy_window, &views);
-        ud_observe_ap_base_write(text, reference, ref->fd, offset, &ap);
-        for (unsigned j = 0; j < 2 && ap.error == EAGAIN; ++j) {
-            ++retries;
+        enum ud_verdict ap_evidence = UD_UNKNOWN;
+        if (!entry_limit) {
+            struct ud_exclusive_observation ap;
             ud_observe_ap_base_write(text, reference, ref->fd, offset, &ap);
+            for (unsigned j = 0; j < 2 && ap.error == EAGAIN; ++j) {
+                ++retries;
+                ud_observe_ap_base_write(text, reference, ref->fd, offset, &ap);
+            }
+            ap_evidence = ap.reservation_loss;
+            ap_matches += ap.reservation_loss == UD_MATCH;
+            ap_unknown += ap.reservation_loss == UD_UNKNOWN;
+            triplets += ap.accepted;
+            failed += ap.target_failed;
+            control_failed += ap.control_failed;
         }
-        enum ud_verdict ap_evidence = ap.reservation_loss;
-        if (audit226) {
-            struct ud_exclusive_observation mask;
+        if (probes != KEYLESS_PRE_WINDOW) {
             struct ud_store_observation phantom;
-            window_probe(ud_observe_ap_aligned_base, text, reference, ref, offset, &mask);
             window_store_probe(ud_observe_ap_phantom_store, text, reference, ref, offset, &phantom);
-            ap_evidence = keyless226_ap_evidence(ap.reservation_loss, mask.reservation_loss,
-                                                 phantom.verdict);
-            mask_matches += mask.reservation_loss == UD_MATCH;
-            mask_unknown += mask.reservation_loss == UD_UNKNOWN;
-            mask_triplets += mask.accepted;
-            mask_failed += mask.target_failed;
             phantom_matches += phantom.verdict == UD_MATCH;
             phantom_unknown += phantom.verdict == UD_UNKNOWN;
             phantom_trials += phantom.completed;
             phantom_writes += phantom.unexpected_stores;
+            if (entry_limit) {
+                struct ud_store_observation padded;
+                window_store_probe(ud_observe_ap_entry_limit, text, reference, ref, offset, &padded);
+                /* This profile requires the short-window 2.27.0 control to
+                 * agree with hardware before classifying a padded-window hit. */
+                ap_evidence = phantom.verdict == UD_NO_MATCH ? padded.verdict : UD_UNKNOWN;
+                entry_matches += ap_evidence == UD_MATCH;
+                entry_unknown += ap_evidence == UD_UNKNOWN;
+                entry_trials += padded.completed;
+                entry_writes += padded.unexpected_stores;
+            } else {
+                struct ud_exclusive_observation mask;
+                window_probe(ud_observe_ap_aligned_base, text, reference, ref, offset, &mask);
+                ap_evidence = keyless226_ap_evidence(ap_evidence, mask.reservation_loss,
+                                                     phantom.verdict);
+                mask_matches += mask.reservation_loss == UD_MATCH;
+                mask_unknown += mask.reservation_loss == UD_UNKNOWN;
+                mask_triplets += mask.accepted;
+                mask_failed += mask.target_failed;
+            }
         }
         enum ud_verdict file_diff = views.file_diff;
         if (site_code == UD_MATCH && file_diff == UD_NO_MATCH) file_diff = UD_MATCH;
         ++verdicts[keyless225_policy(ap_evidence, site_brk, site_fetch, split, file_diff)];
-        ap_matches += ap.reservation_loss == UD_MATCH;
-        ap_unknown += ap.reservation_loss == UD_UNKNOWN;
         splits += split == UD_MATCH;
-        triplets += ap.accepted;
-        failed += ap.target_failed;
-        control_failed += ap.control_failed;
         uint64_t elapsed = now_ns() - begin;
         total_ns += elapsed;
         if (elapsed > max_ns) max_ns = elapsed;
@@ -125,7 +143,12 @@ static void keyless225_stage(const char *name, const uint8_t *text, const struct
     uint32_t fallback_execute = reference_ok ? crc_execute(exec_alias + ref->entry) : 0;
     REQUIRE(reference_ok && fallback_execute == DOBBY_ORIGINAL, "keyless225 fallback %s", name);
 
-    if (audit226) {
+    if (entry_limit) {
+        LOG("KEYLESS227_ENTRY stage=%s short_match=%u short_unknown=%u short_trials=%u short_writes=%u "
+            "match=%u unknown=%u trials=%u writes=%u no_evidence=%u",
+            name, phantom_matches, phantom_unknown, phantom_trials, phantom_writes,
+            entry_matches, entry_unknown, entry_trials, entry_writes, verdicts[KEYLESS_CLEAR]);
+    } else if (probes == KEYLESS_AUDIT_226) {
         LOG("KEYLESS226_AUDIT stage=%s mask=%u mask_unknown=%u mask_triplets=%u mask_failed=%u "
             "phantom=%u phantom_unknown=%u phantom_trials=%u phantom_writes=%u",
             name, mask_matches, mask_unknown, mask_triplets, mask_failed,
@@ -134,8 +157,8 @@ static void keyless225_stage(const char *name, const uint8_t *text, const struct
         keyless226_regression(name, text, ref);
     }
 
-    /* Report the ordinary CRC and actual execution separately from policy.
-     * A matching CRC must not override a trap or unknown verdict. */
+    /* The 2.27 detector treats live CRC as diagnostic only, including when
+     * the sample has no evidence. Earlier profiles keep their legacy metric. */
     copy_scalar(direct, text, sizeof(direct));
     crc_copy_window(business, text, sizeof(business));
     LOG("KEYLESS225_STAGE stage=%s n=%u ap=%u ap_unknown=%u triplets=%u target_failed=%u "
@@ -144,7 +167,8 @@ static void keyless225_stage(const char *name, const uint8_t *text, const struct
         "execute=%04x reference_ok=%d fallback_execute=%04x mean_ns=%llu max_ns=%llu",
         name, repeats, ap_matches, ap_unknown, triplets, failed, control_failed, retries,
         site_code, site_brk, site_fetch, splits, verdicts[KEYLESS_TRAP], verdicts[KEYLESS_CHANGED],
-        verdicts[KEYLESS_UNKNOWN], verdicts[KEYLESS_CLEAR], (uint32_t)crc32(0, file, sizeof(disk)),
+        verdicts[KEYLESS_UNKNOWN], entry_limit ? 0 : verdicts[KEYLESS_CLEAR],
+        (uint32_t)crc32(0, file, sizeof(disk)),
         (uint32_t)crc32(0, direct, sizeof(direct)), (uint32_t)crc32(0, business, sizeof(business)),
         crc_execute(text), reference_ok, fallback_execute, (unsigned long long)(total_ns / repeats),
         (unsigned long long)max_ns);
@@ -176,7 +200,8 @@ static bool keyless225_disarm(const struct uy_ctx *ctx, const char *stage,
     return stable && !error;
 }
 
-static void keyless225_fixture(const char *shape, const char *key, unsigned repeats, bool audit226)
+static void keyless225_fixture(const char *shape, const char *key, unsigned repeats,
+                               enum keyless_probe_set probes)
 {
     bool all_callers = !strcmp(shape, "ap-all") || !strcmp(shape, "brk-all") ||
                        !strcmp(shape, "uxn-all");
@@ -193,7 +218,7 @@ static void keyless225_fixture(const char *shape, const char *key, unsigned repe
     uint8_t file[DOBBY_CRC_BYTES], patched[DOBBY_CRC_BYTES];
     struct page reference;
     struct uy_ctx ctx;
-    struct urov_y_request before, *truth = audit226 ? &before : NULL;
+    struct urov_y_request before, *truth = probes == KEYLESS_PRE_WINDOW ? NULL : &before;
     struct business business = { .fn = ud_payload };
     pthread_t thread;
     bool running = false, armed = false;
@@ -223,18 +248,33 @@ static void keyless225_fixture(const char *shape, const char *key, unsigned repe
     running = pthread_create(&thread, NULL, business_main, &business) == 0;
     REQUIRE(running, "keyless225 business worker");
     if (!running) goto close_reference;
-    keyless225_stage("clean", text, &reference, exec_alias, file, repeats, audit226);
-    struct ud_exclusive_observation bad;
-    window_probe_fn invalid_probe = audit226 ? ud_observe_ap_aligned_base : ud_observe_ap_base_write;
-    invalid_probe(text, reference.address + reference.entry, reference.fd,
-                  reference.file_offset + reference.entry + 1, &bad);
-    enum keyless225_verdict policy = keyless225_policy(bad.reservation_loss, UD_NO_MATCH,
-                                                      UD_NO_MATCH, UD_NO_MATCH, UD_NO_MATCH);
-    REQUIRE(policy == KEYLESS_UNKNOWN && bad.error == ESTALE && !bad.accepted,
+    keyless225_stage("clean", text, &reference, exec_alias, file, repeats, probes);
+    enum ud_verdict invalid_verdict;
+    unsigned invalid_samples;
+    if (probes == KEYLESS_ENTRY_227) {
+        struct ud_store_observation bad;
+        ud_observe_ap_entry_limit(text, reference.address + reference.entry, reference.fd,
+                                  reference.file_offset + reference.entry + 1, &bad);
+        invalid_verdict = bad.verdict;
+        invalid_samples = bad.completed;
+        error = bad.error;
+    } else {
+        struct ud_exclusive_observation bad;
+        window_probe_fn probe = probes == KEYLESS_AUDIT_226 ?
+                                ud_observe_ap_aligned_base : ud_observe_ap_base_write;
+        probe(text, reference.address + reference.entry, reference.fd,
+              reference.file_offset + reference.entry + 1, &bad);
+        invalid_verdict = bad.reservation_loss;
+        invalid_samples = bad.accepted;
+        error = bad.error;
+    }
+    enum keyless225_verdict policy = keyless225_policy(invalid_verdict, UD_NO_MATCH,
+                                                       UD_NO_MATCH, UD_NO_MATCH, UD_NO_MATCH);
+    REQUIRE(policy == KEYLESS_UNKNOWN && error == ESTALE && !invalid_samples,
             "keyless225 bad reference was not inconclusive");
     LOG("KEYLESS225_INVALID unknown=%d crc_eligible=%d errno=%d triplets=%u",
-        policy == KEYLESS_UNKNOWN, policy == KEYLESS_CLEAR, bad.error, bad.accepted);
-    if (audit226) {
+        policy == KEYLESS_UNKNOWN, policy == KEYLESS_CLEAR, error, invalid_samples);
+    if (probes == KEYLESS_AUDIT_226) {
         struct ud_store_observation invalid;
         ud_observe_ap_phantom_store(text, reference.address + reference.entry, reference.fd,
                                     reference.file_offset + reference.entry + 1, &invalid);
@@ -252,7 +292,7 @@ static void keyless225_fixture(const char *shape, const char *key, unsigned repe
             REQUIRE(0, "keyless226 identity initial status");
             goto close_reference;
         }
-        keyless225_stage("identity", text, &reference, exec_alias, file, repeats, audit226);
+        keyless225_stage("identity", text, &reference, exec_alias, file, repeats, probes);
         if (!keyless225_disarm(&ctx, "identity", truth)) goto close_reference;
         armed = false;
     }
@@ -260,7 +300,7 @@ static void keyless225_fixture(const char *shape, const char *key, unsigned repe
     REQUIRE(!dobby_setup_error, "keyless225 Dobby patch errno=%d", dobby_setup_error);
     if (dobby_setup_error) goto close_reference;
     copy_scalar(patched, text, sizeof(patched));
-    keyless225_stage("patch_only", text, &reference, exec_alias, file, repeats, audit226);
+    keyless225_stage("patch_only", text, &reference, exec_alias, file, repeats, probes);
     if (!mode) goto close_reference;
 
     armed = keyless225_arm(&ctx, text, file, mode, all_callers);
@@ -269,10 +309,10 @@ static void keyless225_fixture(const char *shape, const char *key, unsigned repe
         REQUIRE(0, "keyless226 overlay initial status");
         goto close_reference;
     }
-    keyless225_stage("overlay", text, &reference, exec_alias, file, repeats, audit226);
+    keyless225_stage("overlay", text, &reference, exec_alias, file, repeats, probes);
     if (!keyless225_disarm(&ctx, "overlay", truth)) goto close_reference;
     armed = false;
-    keyless225_stage("deactivated", text, &reference, exec_alias, file, repeats, audit226);
+    keyless225_stage("deactivated", text, &reference, exec_alias, file, repeats, probes);
 
     /* Both guards are challenged with a different image while there is no
      * competing session, so EBUSY cannot explain registration refusal. */

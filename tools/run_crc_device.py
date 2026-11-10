@@ -63,22 +63,35 @@ def main():
                         help="detect residual read traps in all six urov-y 2.26.0 configurations")
     matrix.add_argument("--keyless-v227-audit", action="store_true",
                         help="verify that urov-y 2.27.0 closed the 2.26.0 AP residuals in all six configurations")
+    matrix.add_argument("--keyless-v227-detect", action="store_true",
+                        help="test keyless detection of urov-y 2.27.0 and guarded references")
+    matrix.add_argument("--keyless-v228-detect", action="store_true",
+                        help="verify that urov-y 2.28.0 closed the 2.27.0 padded-entry probe")
     parser.add_argument("--repeats", type=int, default=15)
     parser.add_argument("--cycles", type=int, default=3)
     args = parser.parse_args()
     if not 3 <= args.repeats <= 200 or not 1 <= args.cycles <= 10:
         parser.error("repeats 3..200, cycles 1..10")
 
-    if args.keyless_v225 or args.keyless_v226_audit or args.keyless_v227_audit:
-        if args.keyless_v227_audit:
+    audit226 = args.keyless_v226_audit or args.keyless_v227_audit
+    detect227 = args.keyless_v227_detect
+    detect228 = args.keyless_v228_detect
+    keyless_matrix = args.keyless_v225 or audit226 or detect227 or detect228
+    if keyless_matrix:
+        if detect228:
+            prefix = "keyless228-detect"
+        elif detect227:
+            prefix = "keyless227-detect"
+        elif args.keyless_v227_audit:
             prefix = "keyless227-audit"
         elif args.keyless_v226_audit:
             prefix = "keyless226-audit"
         else:
             prefix = "keyless225"
-        # The app fixture name is unchanged between 2.26 and 2.27; only the
-        # expected verdicts differ, so both matrices drive the same probes.
-        mode_prefix = "keyless226-audit" if (args.keyless_v226_audit or args.keyless_v227_audit) else prefix
+        # 2.28.0 reuses the 2.27.0 fixture and its KEYLESS_ENTRY_227 probe set;
+        # only the expected verdicts change, so the app mode prefix stays.
+        mode_prefix = "keyless227-detect" if detect228 else \
+                      "keyless226-audit" if audit226 else prefix
         modes = tuple(f"{mode_prefix}-{shape}" for shape in ("brk", "brk-all", "uxn", "uxn-all", "ap", "ap-all"))
     elif args.keyless_v226:
         # Only the production configuration is relevant: PAGE_AP with an
@@ -170,11 +183,13 @@ def main():
         invalid = records("KEYLESS225_INVALID")
         business = records("KEYLESS225_BUSINESS")
         audit = records("KEYLESS226_AUDIT")
+        entry = records("KEYLESS227_ENTRY")
         stability = records("KEYLESS226_STABILITY")
         if len(invalid) != 1 or len(business) != 1 or (active and (len(guard) != 1 or len(truth) != 2)):
             raise IncompleteLog(f"{label}: missing keyless guard or business logs")
-        if args.keyless_v226_audit or args.keyless_v227_audit:
-            if len(audit) != len(stages) or len(stability) != (2 if active else 0):
+        if audit226 or detect227 or detect228:
+            probe_records = entry if (detect227 or detect228) else audit
+            if [s["stage"] for s in probe_records] != names or len(stability) != (2 if active else 0):
                 raise IncompleteLog(f"{label}: missing residual probe or session stability logs")
             if active and stability != [{"stage": name, "stable": "1"} for name in ("identity", "overlay")]:
                 raise RuntimeError(f"{label}: observation altered the fixture session")
@@ -195,7 +210,6 @@ def main():
         ap = mode.endswith(("-ap", "-ap-all"))
         ap_all = mode.endswith("-ap-all")
         fixed = args.keyless_v227_audit
-        audit_mode = args.keyless_v226_audit or fixed
         for i, stage in enumerate(stages):
             name = stage["stage"]
             covered = name in ("identity", "overlay")
@@ -203,11 +217,20 @@ def main():
             n = args.repeats
             brk = int(covered and mode.endswith(("-brk", "-brk-all")))
             uxn = int(covered and mode.endswith(("-uxn", "-uxn-all")))
-            add_failed = ap and covered and not audit_mode
-            if fixed:
-                # 2.27.0: the audit's two AP probes are silent, so a PAGE_AP
-                # stage is a trap only through the documented caller-window
-                # split of the non-all-callers shapes.
+            add_failed = ap and covered and not (audit226 or detect227 or detect228)
+            if detect227:
+                trap = n * covered
+                crc_eligible = 0
+            elif detect228:
+                # 2.28.0: the padded and short phantom probes stay silent, so
+                # ap-all has no AP evidence; brk/uxn and the non-all-callers
+                # split remain the modes' own design features.
+                trap = n * (brk or uxn or (name == "overlay" and ap and not ap_all))
+                crc_eligible = 0
+            elif fixed:
+                # 2.27.0 audit / 2.28.0 detect: the audit's AP probes are
+                # silent, so a PAGE_AP stage is a trap only through the
+                # documented caller-window split of the non-all-callers shapes.
                 trap = n * (brk or uxn or (name == "overlay" and ap and not ap_all))
                 crc_eligible = n * (name == "clean" or
                                     (name == "identity" and ap) or
@@ -216,7 +239,8 @@ def main():
                 trap = n * covered
                 crc_eligible = n * (name == "clean")
             counts = {"n": n, "ap": n * add_failed, "ap_unknown": 0,
-                      "triplets": n * 3 * 32, "target_failed": n * 3 * 32 * add_failed,
+                      "triplets": 0 if (detect227 or detect228) else n * 3 * 32,
+                      "target_failed": n * 3 * 32 * add_failed,
                       "site_code": brk, "site_brk": brk,
                       "site_fetch": uxn,
                       "split": n * (name == "overlay" and not ap_all),
@@ -230,7 +254,33 @@ def main():
                 stage["execute"] != ("1234" if name in ("clean", "identity") else "1235") or
                 stage["reference_ok"] != "1" or stage["fallback_execute"] != "1234"):
                 raise RuntimeError(f"{label}: keyless verdict or CRC mismatch at {name}: {stage}")
-            if audit_mode:
+            if detect227 or detect228:
+                if detect228:
+                    # 2.28.0: the padded and short phantom probes, and the
+                    # aligned-base probe, all stay native-failure.  An AP
+                    # stage with no evidence is CLEAR, so it also reports
+                    # through no_evidence.
+                    if name == "clean":
+                        clear = n
+                    elif ap and name == "identity":
+                        clear = n
+                    elif ap and name == "overlay" and ap_all:
+                        clear = n
+                    else:
+                        clear = 0
+                    expected_entry = {"match": 0, "unknown": 0, "trials": n * 32,
+                                      "writes": 0, "short_match": 0, "short_unknown": 0,
+                                      "short_trials": n * 32, "short_writes": 0,
+                                      "no_evidence": clear}
+                else:
+                    ap_hits = n * (ap and covered)
+                    expected_entry = {"match": ap_hits, "unknown": 0, "trials": n * 32,
+                                      "writes": ap_hits * 32, "short_match": 0, "short_unknown": 0,
+                                      "short_trials": n * 32, "short_writes": 0,
+                                      "no_evidence": n * (name == "clean")}
+                if any(int(entry[i][k]) != v for k, v in expected_entry.items()):
+                    raise RuntimeError(f"{label}: unexpected entry-scan evidence at {name}: {entry[i]}")
+            if audit226:
                 ap_hits = 0 if fixed else n * (ap and covered)
                 expected_audit = {"mask": ap_hits, "mask_unknown": 0, "mask_triplets": n * 96,
                                   "mask_failed": ap_hits * 96, "phantom": ap_hits, "phantom_unknown": 0,
@@ -240,13 +290,16 @@ def main():
         if active and "state=inactive" not in kp("kpm", "ctl0", MODULE, "status"):
             raise RuntimeError(f"{label}: fixture left an active session")
         selected = stages[3] if active else stages[0]
+        ap_hits = entry[3 if active else 0]["match"] if (detect227 or detect228) else selected["ap"]
         print(f"{label}: {selected['stage']} trap={selected['trap']}/{selected['n']} "
-              f"ap={selected['ap']} brk={selected['site_brk']} fetch={selected['site_fetch']} "
+              f"ap={ap_hits} brk={selected['site_brk']} fetch={selected['site_fetch']} "
               f"split={selected['split']} crc_eligible={selected['crc_eligible']} "
               f"execute={selected['execute']} fallback={selected['fallback_execute']}", flush=True)
         details = {"stages": stages, "guard": guard, "invalid": invalid[0],
                    "truth": truth, "business": business[0]}
-        if args.keyless_v226_audit or args.keyless_v227_audit:
+        if detect227 or detect228:
+            details.update(entry=entry, stability=stability)
+        if audit226:
             details.update(audit=audit, stability=stability)
         return details
 
@@ -357,7 +410,7 @@ def main():
         if not uid or int(uid[1]) < 10000 or not re.search(r"CapEff:\s*0{16}\b", logs) or not re.search(
                 r"Seccomp:\s*2\b", logs):
             raise RuntimeError(f"{label}: invalid app credentials")
-        if args.keyless_v225 or args.keyless_v226_audit or args.keyless_v227_audit:
+        if keyless_matrix:
             details = check_keyless(label, mode, active, logs)
             report["runs"].append({"label": label, "mode": mode, "uid": int(uid[1]), "pid": pid,
                                    "log": log_path.name, "result": result[0],
@@ -758,7 +811,8 @@ def main():
         report["artifacts"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (apk, kpm)}
         if not args.skip_install:
             adb("install", "--no-incremental", "-r", str(apk), timeout=120)
-        clean_mode = f"{'keyless226-audit' if (args.keyless_v226_audit or args.keyless_v227_audit) else prefix}-clean"
+        clean_prefix = "keyless226-audit" if audit226 else (mode_prefix if keyless_matrix else prefix)
+        clean_mode = f"{clean_prefix}-clean"
         run_app("no-module", clean_mode)
 
         staged = True

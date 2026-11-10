@@ -360,6 +360,12 @@ void ud_observe_unreserved_indirect_status(const void *address, const void *refe
 void ud_observe_ap_phantom_store(const void *address, const void *reference,
                                  int backing_fd, off_t offset, struct ud_store_observation *out);
 
+/* Same contract, with 64 unreachable NOPs between BR and LDXR. In 2.27.0
+ * this puts BR outside the entry scan. Run on a worker with owned, stable
+ * mappings. NO_MATCH leaves the sampled read unverified. */
+void ud_observe_ap_entry_limit(const void *address, const void *reference,
+                               int backing_fd, off_t offset, struct ud_store_observation *out);
+
 /* Same contract, with a direct branch from another code page. On 4/16 KiB
  * systems this tests the one-page branch scan in the UROV-Y 2.8.0 PAGE_AP
  * bridge. MATCH requires all 32 target STXRs to report success without a

@@ -1257,12 +1257,18 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
                  g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
         goto done;
     }
-    bool audit226 = !strncmp(mode, "keyless226-audit-", sizeof("keyless226-audit-") - 1);
-    if (audit226 || !strncmp(mode, "keyless225-", sizeof("keyless225-") - 1) ||
+    const char entry_prefix[] = "keyless227-detect-";
+    const char audit_prefix[] = "keyless226-audit-";
+    bool entry227 = !strncmp(mode, entry_prefix, sizeof(entry_prefix) - 1);
+    bool audit226 = !strncmp(mode, audit_prefix, sizeof(audit_prefix) - 1);
+    if (entry227 || audit226 || !strncmp(mode, "keyless225-", sizeof("keyless225-") - 1) ||
         !strncmp(mode, "keyless226-", sizeof("keyless226-") - 1)) {
-        const char *shape = mode + (audit226 ? sizeof("keyless226-audit-") : sizeof("keyless225-")) - 1;
+        size_t prefix_len = entry227 ? sizeof(entry_prefix) :
+                            audit226 ? sizeof(audit_prefix) : sizeof("keyless225-");
+        enum keyless_probe_set probes = entry227 ? KEYLESS_ENTRY_227 :
+                                        audit226 ? KEYLESS_AUDIT_226 : KEYLESS_PRE_WINDOW;
 
-        keyless225_fixture(shape, key, (unsigned)repeats, audit226);
+        keyless225_fixture(mode + prefix_len - 1, key, (unsigned)repeats, probes);
         snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
                  g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
         goto done;

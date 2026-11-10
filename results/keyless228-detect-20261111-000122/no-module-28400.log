@@ -1,0 +1,13 @@
+--------- beginning of main
+10-07 14:36:03.302 28400 28428 I urovdetect: CONTEXT pid=28400 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-07 14:36:03.302 28400 28428 I urovdetect: BEGIN mode=keyless227-detect-clean repeats=4
+10-07 14:36:03.419 28400 28428 I urovdetect: KEYLESS227_ENTRY stage=clean short_match=0 short_unknown=0 short_trials=128 short_writes=0 match=0 unknown=0 trials=128 writes=0 no_evidence=4
+10-07 14:36:03.419 28400 28428 I urovdetect: KEYLESS225_STAGE stage=clean n=4 ap=0 ap_unknown=0 triplets=0 target_failed=0 control_failed=0 retries=0 site_code=0 site_brk=0 site_fetch=0 split=0 trap=0 changed=0 unknown=0 crc_eligible=0 file=96964c4f direct=96964c4f business=96964c4f execute=1234 reference_ok=1 fallback_execute=1234 mean_ns=16902476 max_ns=31495565
+10-07 14:36:03.419 28400 28428 I urovdetect: KEYLESS225_INVALID unknown=1 crc_eligible=0 errno=116 triplets=0
+10-07 14:36:03.419 28400 28428 I urovdetect: DOBBY_HOOK address=0x7112f10000 original=1234 hooked=1235
+10-07 14:36:03.457 28400 28428 I urovdetect: KEYLESS227_ENTRY stage=patch_only short_match=0 short_unknown=0 short_trials=128 short_writes=0 match=0 unknown=0 trials=128 writes=0 no_evidence=0
+10-07 14:36:03.457 28400 28428 I urovdetect: KEYLESS225_STAGE stage=patch_only n=4 ap=0 ap_unknown=0 triplets=0 target_failed=0 control_failed=0 retries=0 site_code=0 site_brk=0 site_fetch=0 split=0 trap=0 changed=4 unknown=0 crc_eligible=0 file=96964c4f direct=65806702 business=65806702 execute=1235 reference_ok=1 fallback_execute=1234 mean_ns=8100026 max_ns=8966390
+10-07 14:36:03.458 28400 28428 I urovdetect: KEYLESS225_BUSINESS ops=25856 errors=0
+10-07 14:36:03.458 28400 28428 I urovdetect: CONTEXT pid=28400 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-07 14:36:03.458 28400 28428 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=8 failures=0 mode=keyless227-detect-clean
+10-07 14:36:03.658 28400 28400 I urovdetect: DETECT_RESULT PASS mode=keyless227-detect-clean worker_ms=351 ui_ticks=127 ui_max_gap_ms=24 native=PASS cases=2 assertions=8 failures=0

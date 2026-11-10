@@ -2,6 +2,27 @@
 
 更新于 2026-11-10（Asia/Shanghai）。
 
+> 2026-11-10 补充：`urov-y` 2.28.0 清掉 2.27.0 检测文档里的
+> `64×NOP + BR` 长窗口探针。入口证明不再在 64 条处停止，而是走到 LDXR
+> 所在可执行 VMA 的起点或 16,384 条预算，预算耗尽时拒绝；目标未知的
+> 间接分支（含 `RET`）一律拒绝；对 `BR/BLR` 用读前值回退到分支点取值，
+> 只把已知目标落在采样区间内的分支判为可能跳过。扩展回查的代价是
+> “调用后紧接 LL/SC”等形状可能落入有界假失败，但不会在无预约地址上
+> 制造成功。没有新增 hook、线程、定时器、PTE/VMA/代码字，ABI 仍为
+> v8、`hooks=0xff`。
+> `--keyless-v228-detect` 6 模式 ×5 轮 ×32 次 PASS：`ap-all` 全部阶段
+> `trap=0/32`、`entry match=0 writes=0`、
+> `file=direct=business=96964c4f`、`execute=1235`；生产 CRC 7 模式 ×8
+> PASS（`crc-ap-all file=direct=window=f50bcaf6 execute=1235`、
+> `bridge=0/8`）；v225 读防御 6 模式 ×4、v226 前窗 6 形状 ×8、独立
+> `urov_prewin_test`（74 例）与 `urov_window_test`（145 例）均 PASS。
+> 构建 `urov-y.kpm 5e355713...`、`urovdetect.apk 82360af1...`。完整
+> 矩阵 [keyless228-detect-20261111-001129](results/keyless228-detect-20261111-001129/summary.json)，
+> 生产 CRC [crc-20261111-001443](results/crc-20261111-001443/summary.json)。
+> 剩余第 6、8、12 项（同步故障、跨 PE 写、跨函数/循环间接进入）的
+> 不可判定证明见 [ELIMINATION_2_28_DESIGN.md](ELIMINATION_2_28_DESIGN.md)
+> §5；审计结果见 [KEYLESS_2_28_AUDIT.md](KEYLESS_2_28_AUDIT.md)。
+
 > 2026-11-10 补充：`urov-y` 2.26.0 清掉 [2.25 审计](KEYLESS_2_25_AUDIT.md) 里
 > 唯一还能被普通 App 短探针稳定打中的读取侧特征：`LDXR` 基址寄存器的值保持写
 > （`ADD base,#0`）。读前证明从**写集**改成**逐指令值回推**：在故障现场寄存器表上
@@ -257,3 +278,5 @@ c55987c4667c02590f63f241a8a18012f8f4c4e790cf25fc290f77c1c085ebdd  urov-lab.kpm
 - [STANDALONE.md](STANDALONE.md)（独立后端设计与验收历史）
 - [DESIGN.md](DESIGN.md)、[BACKEND_CONTRACT.md](BACKEND_CONTRACT.md)（CORE-1 设计与契约）
 - [TEST_PLAN.md](TEST_PLAN.md)（测试计划）
+
+(End of file - total 259 lines)

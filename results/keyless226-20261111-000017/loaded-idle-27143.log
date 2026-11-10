@@ -1,0 +1,13 @@
+--------- beginning of main
+10-07 14:34:59.983 27143 27167 I urovdetect: CONTEXT pid=27143 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-07 14:34:59.984 27143 27167 I urovdetect: BEGIN mode=keyless226-clean repeats=8
+10-07 14:35:00.102 27143 27167 I urovdetect: KEYLESS226_EXTRA stage=clean chain=0 adr=0 mrs=0 zva=0 cvac=0 long=0 unknown=0 e0=0 e1=0 e2=0 e3=0 e4=0 e5=0
+10-07 14:35:00.102 27143 27167 I urovdetect: KEYLESS225_STAGE stage=clean n=8 ap=0 ap_unknown=0 triplets=768 target_failed=0 control_failed=0 retries=0 site_code=0 site_brk=0 site_fetch=0 split=0 trap=0 changed=0 unknown=0 crc_eligible=8 file=96964c4f direct=96964c4f business=96964c4f execute=1234 reference_ok=1 fallback_execute=1234 mean_ns=6349380 max_ns=9192953
+10-07 14:35:00.102 27143 27167 I urovdetect: KEYLESS225_INVALID unknown=1 crc_eligible=0 errno=116 triplets=0
+10-07 14:35:00.102 27143 27167 I urovdetect: DOBBY_HOOK address=0x7113d78000 original=1234 hooked=1235
+10-07 14:35:00.153 27143 27167 I urovdetect: KEYLESS226_EXTRA stage=patch_only chain=0 adr=0 mrs=0 zva=0 cvac=0 long=0 unknown=0 e0=0 e1=0 e2=0 e3=0 e4=0 e5=0
+10-07 14:35:00.153 27143 27167 I urovdetect: KEYLESS225_STAGE stage=patch_only n=8 ap=0 ap_unknown=0 triplets=768 target_failed=0 control_failed=0 retries=0 site_code=0 site_brk=0 site_fetch=0 split=0 trap=0 changed=8 unknown=0 crc_eligible=0 file=96964c4f direct=65806702 business=65806702 execute=1235 reference_ok=1 fallback_execute=1234 mean_ns=3491699 max_ns=3820801
+10-07 14:35:00.153 27143 27167 I urovdetect: KEYLESS225_BUSINESS ops=29184 errors=0
+10-07 14:35:00.153 27143 27167 I urovdetect: CONTEXT pid=27143 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-07 14:35:00.153 27143 27167 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=8 failures=0 mode=keyless226-clean
+10-07 14:35:00.343 27143 27143 I urovdetect: DETECT_RESULT PASS mode=keyless226-clean worker_ms=351 ui_ticks=129 ui_max_gap_ms=18 native=PASS cases=2 assertions=8 failures=0

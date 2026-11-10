@@ -1,0 +1,18 @@
+--------- beginning of main
+10-07 14:39:10.337   797   912 I urovdetect: CONTEXT pid=797 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-07 14:39:10.337   797   912 I urovdetect: BEGIN mode=crc-ap-big repeats=8
+10-07 14:39:10.339   797   912 I urovdetect: CRC_FIXTURE dlopen=1 mode=crc-ap-big all_callers=0
+10-07 14:39:10.341   797   912 I urovdetect: CRC_QUERY authenticated=1 state=0
+10-07 14:39:10.396   797   912 I urovdetect: CRC_BIG_VMA span=913408 offset=2c000 shared=0 maywrite=1 private_dirty_kb=0 anonymous_kb=0
+10-07 14:39:10.396   797   912 I urovdetect: CRC_STAGE name=clean n=8 execute=1234 file=0adadb20 backing=71515206 direct=0adadb20 site=0adadb20 window=0adadb20 bridge_match=0 bridge_clean=8 bridge_unknown=0
+10-07 14:39:31.400   797   912 I urovdetect: CRC_BIG n=8 lengths=16,32,64,160,512,1024,4096 fake_crc=71515206 window_crc=71515206 strlen=4095 file_crc=0adadb20
+10-07 14:39:31.400   797   912 I urovdetect: CRC_STAGE name=overlay n=8 execute=1234 file=0adadb20 backing=71515206 direct=0adadb20 site=0adadb20 window=71515206 bridge_match=0 bridge_clean=8 bridge_unknown=0
+10-07 14:39:31.400   797   912 I urovdetect: CRC_BIG_OVERLAY hits=6363 replays=33800 failures=0 length=4096
+10-07 14:39:31.416   797   912 I urovdetect: CRC_STAGE name=deactivated n=8 execute=1234 file=0adadb20 backing=71515206 direct=0adadb20 site=0adadb20 window=0adadb20 bridge_match=0 bridge_clean=8 bridge_unknown=0
+10-07 14:39:31.416   797   912 I urovdetect: CRC_BIG_RESTORED page=0adadb20
+10-07 14:39:33.561   797   912 I urovdetect: CRC_MIXED n=8 offset=64 length=32 window_crc=d1f7ac49 file_crc=0adadb20
+10-07 14:39:35.636   797   912 I urovdetect: CRC_SET n=8 generation=2 length=32 window_crc=fd83e7b5 file_crc=0adadb20
+10-07 14:39:35.636   797   912 I urovdetect: CRC_MIXED_RESTORED page=0adadb20
+10-07 14:39:35.637   797   912 I urovdetect: CONTEXT pid=797 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-07 14:39:35.637   797   912 I urovdetect: NATIVE_RESULT PASS cases=1 assertions=86 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0 mode=crc-ap-big
+10-07 14:39:35.655   797   797 I urovdetect: DETECT_RESULT PASS mode=crc-ap-big worker_ms=25301 ui_ticks=2500 ui_max_gap_ms=18 native=PASS cases=1 assertions=86 failures=0 crc32_file=f50bcaf6 crc32_patched=0c7da8a0

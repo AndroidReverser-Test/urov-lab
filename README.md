@@ -577,6 +577,10 @@ fake 字节按小端排列：`value` 是字节 0..7，`value_hi[0]` 是 8..15，
 
 ## 结果与限制
 
+- UROV-Y 2.28.0 的 VMA 边界入口证明、无密钥审计与真机矩阵见
+  [ELIMINATION_2_28_DESIGN.md](ELIMINATION_2_28_DESIGN.md) 与
+  [KEYLESS_2_28_AUDIT.md](KEYLESS_2_28_AUDIT.md)；2.27.0 的历史检测面见
+  [KEYLESS_2_27_DETECTION.md](KEYLESS_2_27_DETECTION.md)。
 - 真机结果、命令输出、产物散列与内核日志检查见 [RESULTS_OVERLAY.md](RESULTS_OVERLAY.md)、[RESULTS_APP.md](RESULTS_APP.md)。
 - 软件核心自测与历史设备记录见 [IMPLEMENTATION_RESULTS.md](IMPLEMENTATION_RESULTS.md)、[CURRENT_RESULTS.md](CURRENT_RESULTS.md)。
 - 设计背景与未采用的 CORE-1 常驻内核方案见 [DESIGN.md](DESIGN.md)、[BACKEND_CONTRACT.md](BACKEND_CONTRACT.md)。

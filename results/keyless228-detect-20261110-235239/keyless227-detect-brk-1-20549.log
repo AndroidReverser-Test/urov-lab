@@ -1,0 +1,24 @@
+--------- beginning of main
+10-07 14:27:23.642 20549 20574 I urovdetect: CONTEXT pid=20549 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-07 14:27:23.642 20549 20574 I urovdetect: BEGIN mode=keyless227-detect-brk repeats=3
+10-07 14:27:23.756 20549 20574 I urovdetect: KEYLESS227_ENTRY stage=clean short_match=0 short_unknown=0 short_trials=96 short_writes=0 match=0 unknown=0 trials=96 writes=0 no_evidence=3
+10-07 14:27:23.756 20549 20574 I urovdetect: KEYLESS225_STAGE stage=clean n=3 ap=0 ap_unknown=0 triplets=0 target_failed=0 control_failed=0 retries=0 site_code=0 site_brk=0 site_fetch=0 split=0 trap=0 changed=0 unknown=0 crc_eligible=0 file=96964c4f direct=96964c4f business=96964c4f execute=1234 reference_ok=1 fallback_execute=1234 mean_ns=16411987 max_ns=24095907
+10-07 14:27:23.756 20549 20574 I urovdetect: KEYLESS225_INVALID unknown=1 crc_eligible=0 errno=116 triplets=0
+10-07 14:27:23.791 20549 20574 I urovdetect: KEYLESS227_ENTRY stage=identity short_match=0 short_unknown=0 short_trials=96 short_writes=0 match=0 unknown=0 trials=96 writes=0 no_evidence=0
+10-07 14:27:23.791 20549 20574 I urovdetect: KEYLESS225_STAGE stage=identity n=3 ap=0 ap_unknown=0 triplets=0 target_failed=0 control_failed=0 retries=0 site_code=1 site_brk=1 site_fetch=0 split=0 trap=3 changed=0 unknown=0 crc_eligible=0 file=96964c4f direct=96964c4f business=96964c4f execute=1234 reference_ok=1 fallback_execute=1234 mean_ns=9216132 max_ns=10320842
+10-07 14:27:23.914 20549 20574 I urovdetect: KEYLESS225_TRUTH stage=identity active=1 deactivated=1
+10-07 14:27:23.914 20549 20574 I urovdetect: KEYLESS226_STABILITY stage=identity stable=1
+10-07 14:27:23.916 20549 20574 I urovdetect: DOBBY_HOOK address=0x71136fb000 original=1234 hooked=1235
+10-07 14:27:23.949 20549 20574 I urovdetect: KEYLESS227_ENTRY stage=patch_only short_match=0 short_unknown=0 short_trials=96 short_writes=0 match=0 unknown=0 trials=96 writes=0 no_evidence=0
+10-07 14:27:23.949 20549 20574 I urovdetect: KEYLESS225_STAGE stage=patch_only n=3 ap=0 ap_unknown=0 triplets=0 target_failed=0 control_failed=0 retries=0 site_code=0 site_brk=0 site_fetch=0 split=0 trap=0 changed=3 unknown=0 crc_eligible=0 file=96964c4f direct=65806702 business=65806702 execute=1235 reference_ok=1 fallback_execute=1234 mean_ns=8289781 max_ns=8914998
+10-07 14:27:23.977 20549 20574 I urovdetect: KEYLESS227_ENTRY stage=overlay short_match=0 short_unknown=0 short_trials=96 short_writes=0 match=0 unknown=0 trials=96 writes=0 no_evidence=0
+10-07 14:27:23.977 20549 20574 I urovdetect: KEYLESS225_STAGE stage=overlay n=3 ap=0 ap_unknown=0 triplets=0 target_failed=0 control_failed=0 retries=0 site_code=1 site_brk=1 site_fetch=0 split=3 trap=3 changed=0 unknown=0 crc_eligible=0 file=96964c4f direct=65806702 business=96964c4f execute=1235 reference_ok=1 fallback_execute=1234 mean_ns=7906250 max_ns=7919556
+10-07 14:27:24.026 20549 20574 I urovdetect: KEYLESS225_TRUTH stage=overlay active=1 deactivated=1
+10-07 14:27:24.026 20549 20574 I urovdetect: KEYLESS226_STABILITY stage=overlay stable=1
+10-07 14:27:24.055 20549 20574 I urovdetect: KEYLESS227_ENTRY stage=deactivated short_match=0 short_unknown=0 short_trials=96 short_writes=0 match=0 unknown=0 trials=96 writes=0 no_evidence=0
+10-07 14:27:24.055 20549 20574 I urovdetect: KEYLESS225_STAGE stage=deactivated n=3 ap=0 ap_unknown=0 triplets=0 target_failed=0 control_failed=0 retries=0 site_code=0 site_brk=0 site_fetch=0 split=0 trap=0 changed=3 unknown=0 crc_eligible=0 file=96964c4f direct=65806702 business=65806702 execute=1235 reference_ok=1 fallback_execute=1234 mean_ns=7341023 max_ns=7351156
+10-07 14:27:24.055 20549 20574 I urovdetect: KEYLESS225_GUARD read_errno=22 exec_errno=22 inactive=1 reference_ok=1 execute=1234
+10-07 14:27:24.055 20549 20574 I urovdetect: KEYLESS225_BUSINESS ops=71936 errors=0
+10-07 14:27:24.055 20549 20574 I urovdetect: CONTEXT pid=20549 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
+10-07 14:27:24.055 20549 20574 I urovdetect: NATIVE_RESULT PASS cases=5 assertions=17 failures=0 mode=keyless227-detect-brk
+10-07 14:27:24.058 20549 20549 I urovdetect: DETECT_RESULT PASS mode=keyless227-detect-brk worker_ms=414 ui_ticks=133 ui_max_gap_ms=19 native=PASS cases=5 assertions=17 failures=0

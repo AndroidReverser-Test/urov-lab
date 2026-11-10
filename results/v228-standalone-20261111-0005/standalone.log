@@ -1,0 +1,149 @@
+﻿prewin cases=74 failures=0
+PREWIN_EXIT=True
+ok   ubfx x0,x1,#4,#8               0000000000000078
+ok   ubfiz x0,x1,#4,#8              0000000000000880
+ok   lsl x0,x1,#4                   1223344556677880
+ok   lsr x0,x1,#4                   0112233445566778
+ok   asr x0,x1,#4                   0112233445566778
+ok   uxtb w0,w1                     0000000000000088
+ok   sxtb w0,w1                     00000000ffffff88
+ok   sbfx x0,x1,#4,#8               0000000000000078
+ok   bfi x0,x1,#4,#8                0000000000000880
+ok   bfxil x0,x1,#4,#8              0000000000000021
+ok   and x0,x1,#0xff                0000000000000088
+ok   and #0xffff0000ffff0000        1122000055660000
+ok   orr x0,x1,#0x3f                11223344556677bf
+ok   extr x0,x1,x2,#8               8888776655443322
+ok   madd x0,x1,x2,x3               92b5fc887bf92219
+ok   msub x0,x1,x2,x3               f5c169ccc839fff8
+ok   udiv x0,x1,x2                  0000000000000000
+ok   sdiv x0,x1,x2                  0000000000000000
+ok   lslv x0,x1,x2                  6688aaccef100000
+ok   rorv x0,x1,x2                  3bc4089119a22ab3
+ok   rbit x0,x1                     11ee66aa22cc4488
+ok   rev16 w0,w1                    0000000066558877
+ok   rev32 x0,x1                    4433221188776655
+ok   rev x0,x1                      8877665544332211
+ok   clz x0,x1                      0000000000000003
+ok   cls x0,x1                      0000000000000003
+ok   clz x0,x1 (w value)            0000000000000020
+ok   add x0,x1,#0x123               11223344556678ab
+ok   add x0,x1,x2,lsl#5             200efdecdbcab9a8
+ok   subs x0,x1,x2,asr#3            20134679ace01346
+ok   movk x0,#0xabcd,lsl#16         11223344abcd7788
+ok   movz x0,#0x1234,lsl#32         0000123400000000
+ok   movn x0,#0xf                   fffffffffffffff0
+ok   add x0,sp,#0x20                0000000000007020
+ok   add sp,sp,#0x20                0000000000007020
+ok   csel x0,x1,x2,eq (Z=1)         1122334455667788
+ok   csinc x0,x1,x2,ne (Z=1)        8877665544332212
+ok   csinv x0,x1,x2,lt (N=0,V=0)    778899aabbccddee
+ok   csneg x0,x1,x2,gt (Z=1)        778899aabbccddef
+ok   ccmp x1,#4,#0,eq (Z=1)         0010
+ok   ccmn x1,x2,#8,ne (Z=0)         1000
+ok   ccmp false keeps nzcv          0001
+ok   adr x0,#0                      0000000000001000
+ok   adrp x0,0                      0000000000001000
+ok   nop                            0000000000000000
+ok   bti c                          0000000000000000
+ok   dmb ish                        0000000000000000
+ok   isb                            0000000000000000
+ok   b.eq taken (Z=1)               2008
+ok   b.eq not taken (Z=0)           2004
+ok   cbz x1 nonzero                 2004
+ok   cbz x1 zero                    2008
+ok   tbnz w1,#3 set                 2008
+ok   bl +8/lr                      
+ok   blr x1/lr                     
+ok   br x1                          3000
+ok   ret x30                        4000
+ok   mrs x0,midr_el1                declined
+ok   clrex                          declined
+ok   svc #0                         declined
+ok   fmov d0,x1                     1122334455667788
+ok   fmov x0,d1                     0077000000000088
+ok   fmov v0.d[1],x1                1122334455667788
+ok   fmov x0,v1.d[1]                0000000000000044
+ok   fmov s0,w1                     0000000055667788
+ok   fmov w0,s1                     0000000000000021
+ok   fmov h0,w1                     0000000000007788
+ok   fmov w0,h1                     0000000000000066
+ok   mrs x0,nzcv                   
+ok   msr nzcv,x0                   
+ok   mrs x0,fpcr                   
+ok   msr fpsr,x0                   
+ok   add x0,x1,#1                   0
+ok   add sp,sp,#16                  33
+ok   adds xzr,x1,#1                 32
+ok   nop                            32
+ok   mrs x0,nzcv                    34
+ok   fadd d0,d0,d0                  1
+ok   add v0.16b,v0.16b,v0.16b       1
+ok   movi v0.16b,#0xff              1
+ok   dup v0.16b,w0                  1
+ok   ldr q0,[x0]                    0
+ok   add x0,x1,x2                   0
+ok   mrs x0,nzcv                    0
+ok   fmov x0,d0                     0
+ok   fmov w0,s0                     0
+ok   fmov w0,h0                     0
+ok   fmov x0,v0.d[1]                0
+ok   fmov d0,x0                     32
+ok   umov w0,v0.b[0]                0
+ok   umov x0,v0.d[1]                0
+ok   smov x0,v0.s[2]                0
+ok   dup v0.16b,w0                  32
+ok   fcvtzs w0,s0                   0
+ok   fcvtzs x0,d0                   0
+ok   fcvtns w0,s0                   0
+ok   fcvtas w0,s0                   0
+ok   scvtf s0,w0                    32
+ok   ucvtf s0,w0                    32
+ok   fadd d0,d0,d0                  32
+ok   base register naming           sp=4000
+ok   nop                            00000000
+ok   mov x9,x0                      00000001
+ok   mov w1,w0                      00000001
+ok   movk x0,#0x1234,lsl#16         00000001
+ok   add x0,x1,x2                   00000006
+ok   csel x0,x1,x2,eq               00000006
+ok   madd x0,x1,x2,x3               0000000e
+ok   svc #0                         ffffffff
+ok   and v0.16b,v1.16b,v2.16b      
+ok   orr v0.16b,v1.16b,v2.16b      
+ok   eor v0.16b,v1.16b,v2.16b      
+ok   bic v0.16b,v1.16b,v2.16b      
+ok   orn v0.16b,v1.16b,v2.16b      
+ok   bsl v0.16b,v1.16b,v2.16b      
+ok   bit v0.16b,v1.16b,v2.16b      
+ok   bif v0.16b,v1.16b,v2.16b      
+ok   and v0.8b,v1.8b,v2.8b         
+ok   eor v0.8b,v1.8b,v2.8b         
+ok   add v0.16b,v1.16b,v2.16b      
+ok   sub v0.8h,v1.8h,v2.8h         
+ok   add v0.4s,v1.4s,v2.4s         
+ok   sub v0.2d,v1.2d,v2.2d         
+ok   cmeq v0.16b,v1.16b,v2.16b     
+ok   cmtst v0.16b,v1.16b,v2.16b    
+ok   cmgt v0.4s,v1.4s,v2.4s        
+ok   cmhi v0.4s,v1.4s,v2.4s        
+ok   cmge v0.2d,v1.2d,v2.2d        
+ok   cmhs v0.8h,v1.8h,v2.8h        
+ok   smax v0.4s,v1.4s,v2.4s        
+ok   umin v0.8h,v1.8h,v2.8h        
+ok   smin v0.4s,v1.4s,v2.4s        
+ok   mul v0.4s,v1.4s,v2.4s         
+ok   mla v0.4s,v1.4s,v2.4s         
+ok   mls v0.8h,v1.8h,v2.8h         
+ok   sshl v0.4s,v1.4s,v2.4s        
+ok   ushl v0.2d,v1.2d,v2.2d        
+ok   cmeq v0.2d,v1.2d,v2.2d        
+ok   rev64 v0.16b,v1.16b           
+ok   rev64 v0.8b,v1.8b             
+ok   rev32 v0.16b,v1.16b           
+ok   rev16 v0.16b,v1.16b           
+ok   fadd v0.4s,v1.4s,v2.4s         declined
+ok   ldr q0,[x1]                    declined
+ok   tbl v0.16b,{v1.16b},v2.16b     declined
+cases=145 failures=0
+WINDOW_EXIT=True

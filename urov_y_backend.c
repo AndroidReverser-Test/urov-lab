@@ -43,6 +43,19 @@
  * report a success the hardware never produced.  Neither change adds a hook,
  * thread, timer, PTE/VMA bit, code word, request field or new read view.
  *
+ * 2.28.0 closes the residual that walk itself exposed: 64 dead NOPs between
+ * the skipping branch and the LDXR pushed the branch out of the 64-entry
+ * window.  The walk now continues to the first control-flow instruction or the
+ * start of the containing executable VMA, whichever comes first, and declines
+ * when its 16,384-instruction budget is exhausted.  For BR/BLR/RET xN it
+ * rewinds the dead padding from the LDXR entry to the branch and evaluates the
+ * branch register there, so a dead write after the branch cannot substitute a
+ * harmless-looking target; RET x30 is the previous function's boundary and
+ * uses the LDXR-entry value.  An indirect branch with an unknown target is
+ * declined.  No hook, thread, timer, PTE/VMA bit, code word, request field or
+ * read view is added; the remaining cross-function/loop entry is a property of
+ * the architecture, not of this walk (ELIMINATION_2_28_DESIGN.md).
+ *
  * SITE_BRK removes the data abort entirely by replacing the 4-byte site
  * instruction with BRK on a private COW page (A impossible, B handled by the
  * caller window).  PAGE_UXN removes the code-page feature by making the site
@@ -199,15 +212,22 @@ _Static_assert(sizeof(struct uy_fpstate) == UY_FPSIMD_BYTES, "FPSIMD image size"
  * register-only instructions in front of its sampled load must not be able to
  * turn the bound itself into an observable failure. */
 #define UY_LLSC_PRE_SCAN 16384U
-/* 2.27.0: after the LDXR has been located, walk its immediate predecessors
+/* 2.28.0: after the LDXR has been located, walk its immediate predecessors
  * (fall-through order) and stop at the first control-flow instruction.  An
  * indirect branch whose recovered target lands in (ldxr_pc, fault_pc] proves
  * that the sampled load was entered past the exclusive load, so the plan must
- * decline instead of reporting a reservation the hardware never had.  The
- * walk is bounded because it is a kernel-work guard, not a proof of the
- * whole function; shapes that hide the branch beyond it are documented in
- * ELIMINATION_2_27_DESIGN.md. */
-#define UY_LLSC_ENTRY_SCAN 64U
+ * decline instead of reporting a reservation the hardware never had.
+ *
+ * The 2.27.0 bound of 64 instructions was itself observable: 64 NOPs between
+ * the branch and the LDXR pushed the branch out of the walk, the walk then
+ * accepted the dead LDXR, and the bridge reported a success the hardware
+ * never produced.  2.28.0 walks to the nearest control-flow instruction or
+ * the start of the containing executable VMA, whichever comes first, and
+ * declines if the work bound is reached without finding one.  The bound is a
+ * kernel-work guard, not a proof of the whole function; the cross-function
+ * indirect entry that remains outside any linear walk is documented in
+ * ELIMINATION_2_28_DESIGN.md. */
+#define UY_LLSC_ENTRY_SCAN UY_LLSC_PRE_SCAN
 #define UY_LLSC_MEM_MAX 4U       /* gap stores recorded and replayed at commit */
 #define UY_LLSC_BYTES_MAX 64U    /* widest single access the decoder produces */
 
@@ -2713,7 +2733,18 @@ static int uy_is_indirect_branch(uint32_t insn, unsigned *rn)
     return 1;
 }
 
-/* 2.27.0 entry proof: the exclusive load must not have been skipped by an
+/* RET x30 is the compiler's function-boundary encoding.  It is the one
+ * indirect branch whose unknown target must not turn every function prologue
+ * into a false failure: its target is the caller of the *previous* function,
+ * not a transfer into the current LDXR window.  RET xN with N != 30 is not a
+ * boundary; it is treated like BR/BLR and its target is recovered at the
+ * branch. */
+static int uy_is_ret_x30(uint32_t insn)
+{
+    return insn == UY_RET_X30;
+}
+
+/* 2.28.0 entry proof: the exclusive load must not have been skipped by an
  * indirect transfer into the linear span.  Direct targets in the span are
  * already rejected by uy_llsc_skipped(); this walk covers the one shape the
  * branch-target map cannot see.  It stops at the first control-flow
@@ -2721,37 +2752,59 @@ static int uy_is_indirect_branch(uint32_t insn, unsigned *rn)
  * a real branch there would have left the block, and an unrelated function's
  * trailing RET (the normal layout immediately before a leaf function) must not
  * be misread as an entry into this function.  In the phantom shape the padding
- * in front of the LDXR was not executed, so the rewound value of the branch
- * register is exactly the value BR used; in a real window it is the value the
- * executed fall-through produced.  `st` is the register state at the LDXR
- * entry.
+ * in front of the LDXR was not executed, so the value of the branch register
+ * at the branch is the value that branch used; the walk rewinds the padding
+ * from the LDXR entry to each BR/BLR so a dead write to the branch register
+ * cannot substitute a harmless-looking value.  `st` is the register state at
+ * the LDXR entry; `cur` follows it back to the instruction being inspected.
+ * `floor` is the start of the containing executable VMA; the walk never
+ * crosses it.
  *
- * This is a bounded, one-sided proof: returning 1 only ever turns a would-be
- * false success into the native failure.  It cannot manufacture a success at
- * an address the hardware did not reserve. */
+ * A branch beyond the 2.27.0 64-instruction window is just as visible as one
+ * immediately before the LDXR, so the walk uses the same 16,384-instruction
+ * budget as the read-before proof and declines if it is exhausted.  Declining
+ * is the one-sided direction: it can only turn a would-be false success into
+ * the native failure, never manufacture a reservation.  An indirect branch
+ * with an unknown target is declined for the same reason, including RET xN:
+ * a RET whose xN was clobbered between the branch and the sampled load cannot
+ * be distinguished from a RET that jumped into the span. */
 static int uy_llsc_entry_skipped(uint64_t ldxr_pc, uint64_t pc,
-                                 const struct uy_pre_state *st)
+                                 const struct uy_pre_state *st, uint64_t floor)
 {
+    struct uy_pre_state cur;
     uint64_t at = ldxr_pc;
-    unsigned scanned;
+    unsigned scanned, i;
+    int rewind_ok = 1;
 
-    for (scanned = 0; scanned < UY_LLSC_ENTRY_SCAN && at >= 4U; ++scanned) {
+    for (i = 0; i < 31U; ++i) cur.val[i] = st->val[i];
+    cur.sp = st->sp;
+    cur.known = st->known;
+
+    for (scanned = 0; scanned < UY_LLSC_ENTRY_SCAN; ++scanned) {
         uint32_t insn;
         unsigned rn;
         uint64_t target;
 
+        if (at < 4U || at < floor + 4U) return 0;
         at -= 4U;
-        if (!uy_user_range(at, 4U) || uy_read_insn(at, &insn)) return 0;
+        if (!uy_user_range(at, 4U) || uy_read_insn(at, &insn)) return 1;
         if (uy_is_indirect_branch(insn, &rn)) {
             /* Rn == 31 names XZR here, not SP: the transfer targets zero. */
             if (rn == 31U) return 0;
-            /* An unknown target cannot be ruled out: the span may have
-             * overwritten the source register after the branch, and a branch
-             * that could have landed in the span means the LDXR may not have
-             * executed.  Decline; the native STXR then reports the failure it
-             * would report without a reservation. */
-            if (!uy_pre_known(st, rn)) return 1;
-            target = uy_pre_value(st, rn);
+            /* RET x30 is the previous function's boundary.  Use the LDXR-entry
+             * state; the instructions between the boundary and the LDXR are
+             * this function's prologue, not dead padding. */
+            if (uy_is_ret_x30(insn)) {
+                if (!uy_pre_known(st, rn)) return 1;
+                target = uy_pre_value(st, rn);
+                return target > ldxr_pc && target <= pc;
+            }
+            /* BR/BLR/RET xN: recover the register value at the branch, not at
+             * the LDXR.  A dead padding write between the branch and the LDXR
+             * must not be allowed to change the target the branch actually
+             * used. */
+            if (!rewind_ok || !uy_pre_known(&cur, rn)) return 1;
+            target = uy_pre_value(&cur, rn);
             return target > ldxr_pc && target <= pc;
         }
         /* A direct branch cannot add an entry the branch-target map misses. */
@@ -2762,8 +2815,11 @@ static int uy_llsc_entry_skipped(uint64_t ldxr_pc, uint64_t pc,
             (insn & 0x7e000000U) == 0x36000000U)        /* TBZ/TBNZ */
             return 0;
         if (uy_is_exception_insn(insn)) return 0;
+        if (rewind_ok && uy_pre_step(insn, &cur)) rewind_ok = 0;
     }
-    return 0;
+    /* The budget ran out before a control-flow instruction: the branch that
+     * could have skipped the LDXR may be further back.  Decline. */
+    return 1;
 }
 
 /* Linear read-before proof.  Walk backwards from the faulting instruction to
@@ -2795,7 +2851,7 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
     struct uy_pre_state st;
     uint32_t insn = 0;
     unsigned scanned, lsize = 0, lrn = 0, pair = 0, acquire = 0;
-    uint64_t ldxr_pc = 0, at, base;
+    uint64_t ldxr_pc = 0, at, base, floor = 0;
 
     memset(out, 0, sizeof(*out));
     if (!f_copy_out || !sample) return;
@@ -2848,6 +2904,18 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
     }
     if (!ldxr_pc) return;
 
+    /* The entry walk never crosses the start of the executable VMA that holds
+     * the LDXR.  Reaching that start is a legitimate fall-through entry (the
+     * loader enters the mapping there); crossing it would let the walk read an
+     * unrelated mapping or walk off the user address space. */
+    {
+        void *mm = mm_of_task(current);
+        void *vma = (mm && f_find_vma) ? f_find_vma(mm, (unsigned long)ldxr_pc) : 0;
+
+        if (vma) floor = *(uint64_t *)((char *)vma + g_layout.vma_start);
+        if (floor > ldxr_pc) floor = 0;
+    }
+
     /* Second pass: rewind with the alignment invariant.  A mask write that can
      * only clear the low log2(size) bits of the base is the identity for every
      * value the hardware could have reserved. */
@@ -2864,7 +2932,7 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
     /* lsize is already in bytes, so the mask is the access size minus one. */
     if (base & (lsize - 1U)) return;
     if (uy_llsc_skipped(ldxr_pc, pc)) return;
-    if (uy_llsc_entry_skipped(ldxr_pc, pc, &st)) return;
+    if (uy_llsc_entry_skipped(ldxr_pc, pc, &st, floor)) return;
 
     out->base = base;
     out->size = lsize;

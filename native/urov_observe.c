@@ -996,6 +996,7 @@ enum unreserved_branch {
     UNRESERVED_TO_NOP,      /* direct branch to a NOP in the LDXR gap */
     UNRESERVED_INDIRECT,    /* ADR + BR to the LDRB, target left in x9 */
     UNRESERVED_INDIRECT_BTI, /* indirect branch over LDXR to a BTI landing pad */
+    UNRESERVED_INDIRECT_BTI_PADDED, /* BR outside the 2.27.0 entry scan */
     UNRESERVED_CROSS_PAGE,
     UNRESERVED_GAP_CLREX,   /* LDXR executes; CLREX clears it before the STXR */
     UNRESERVED_GAP_SVC,     /* LDXR executes; SVC takes an exception in between */
@@ -1042,6 +1043,19 @@ static int unreserved_store_once(const void *address, uint64_t *scratch,
                          "br x9\n"
                          "ldxr %0, [%3]\n"
                          "1: hint #36\n" /* BTI J, a NOP on older cores. */
+                         "ldrb %w2, [%4]\n"
+                         "stxr %w1, %0, [%3]"
+                         : "+&r"(value), "=&r"(status), "=&r"(*byte)
+                         : "r"(scratch), "r"(address) : "x9", "memory");
+    } else if (branch == UNRESERVED_INDIRECT_BTI_PADDED) {
+        /* The 64 predecessors of LDXR are all NOPs. The BR and the LDXR
+         * have the same run-time behavior as in the short control. */
+        __asm__ volatile("clrex\n"
+                         "adr x9, 1f\n"
+                         "br x9\n"
+                         ".rept 64\nnop\n.endr\n"
+                         "ldxr %0, [%3]\n"
+                         "1: hint #36\n" /* BTI J */
                          "ldrb %w2, [%4]\n"
                          "stxr %w1, %0, [%3]"
                          : "+&r"(value), "=&r"(status), "=&r"(*byte)
@@ -1155,6 +1169,7 @@ static void observe_unreserved_store(const void *address, const void *reference,
     out->error = identity(address, 1, backing_fd, offset, &target);
     if (out->error) goto done;
     bool exec_reference = branch != UNRESERVED_INDIRECT_BTI &&
+                          branch != UNRESERVED_INDIRECT_BTI_PADDED &&
                           branch != UNRESERVED_GAP_CLREX && branch != UNRESERVED_GAP_SVC &&
                           branch != UNRESERVED_GAP_SELF_STORE &&
                           branch != UNRESERVED_GAP_NEON_SELF_STORE;
@@ -1239,6 +1254,13 @@ void ud_observe_ap_phantom_store(const void *address, const void *reference,
 {
     observe_unreserved_store(address, reference, backing_fd, offset,
                              UINT64_C(0xc3175ed9246ab08f), UNRESERVED_INDIRECT_BTI, out);
+}
+
+void ud_observe_ap_entry_limit(const void *address, const void *reference,
+                               int backing_fd, off_t offset, struct ud_store_observation *out)
+{
+    observe_unreserved_store(address, reference, backing_fd, offset,
+                             UINT64_C(0xc3175ed9246ab08f), UNRESERVED_INDIRECT_BTI_PADDED, out);
 }
 
 void ud_observe_unreserved_cross_page_status(const void *address, const void *reference,
