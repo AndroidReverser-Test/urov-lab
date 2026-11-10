@@ -527,6 +527,162 @@ static unsigned pre_load_gpr_once(const void *address, uint64_t *scratch, unsign
 }
 
 __attribute__((noinline))
+static unsigned pre_base_write_once(const void *address, uint64_t *scratch, unsigned *byte,
+                                    uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed;
+
+    (void)aux;
+    /* The reserved address stays identical. UROV-Y 2.25 rejects any write
+     * to the base register, including this ADD, before restoring STXR. */
+    __asm__ volatile("ldxr %0, [%3]\n"
+                     "add %3, %3, #0\n"
+                     "ldrb %w1, [%4]\n"
+                     "stxr %w2, %0, [%3]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed), "+&r"(scratch)
+                     : "r"(address) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+/* 2.26.0 pre-window probes.  Each retires a legal instruction (or a long run
+ * of NOPs) between the LDXR and the sampled LDRB.  None of them clears the
+ * local monitor or moves the reserved address, so the native STXR succeeds; a
+ * module that declines the plan reports a failure the hardware never produced.
+ * The 2.25.0 write-set rule failed the first form by construction, the
+ * register heuristic failed the ADR form, and the scan bound failed the long
+ * form. */
+__attribute__((noinline))
+static unsigned prewin_chain_once(const void *address, uint64_t *scratch,
+                                  unsigned *byte, uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed;
+
+    (void)aux;
+    /* Two in-place writes; the net effect on the reserved address is zero. */
+    __asm__ volatile("ldxr %0, [%[s]]\n"
+                     "add %[s], %[s], #8\n"
+                     "sub %[s], %[s], #8\n"
+                     "ldrb %w1, [%[a]]\n"
+                     "stxr %w2, %0, [%[s]]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed), [s] "+&r"(scratch)
+                     : [a] "r"(address) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned prewin_adr_once(const void *address, uint64_t *scratch,
+                                unsigned *byte, uint64_t *aux)
+{
+    uint64_t old, span;
+    unsigned sample, failed;
+
+    (void)aux;
+    /* ADR leaves an address inside the LDXR..load span in a live register.
+     * No branch uses it; it is only data.  Five outputs, so the address input
+     * is %5 and the ADR destination is %4. */
+    __asm__ volatile("ldxr %0, [%[s]]\n"
+                     "adr %[sp], .\n"
+                     "ldrb %w1, [%[a]]\n"
+                     "stxr %w2, %0, [%[s]]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed), [s] "+&r"(scratch),
+                       [sp] "=&r"(span)
+                     : [a] "r"(address) : "memory");
+    *byte = sample;
+    (void)span;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned prewin_mrs_once(const void *address, uint64_t *scratch,
+                                unsigned *byte, uint64_t *aux)
+{
+    uint64_t old, tls;
+    unsigned sample, failed;
+
+    (void)aux;
+    /* MRS into a register other than x0: legal at EL0, no monitor effect.
+     * Five outputs, so the address input is %5 and the MRS destination is %4. */
+    __asm__ volatile("ldxr %0, [%[s]]\n"
+                     "mrs %[t], tpidr_el0\n"
+                     "ldrb %w1, [%[a]]\n"
+                     "stxr %w2, %0, [%[s]]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed), [s] "+&r"(scratch),
+                       [t] "=&r"(tls)
+                     : [a] "r"(address) : "memory");
+    *byte = sample;
+    (void)tls;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned prewin_zva_once(const void *address, uint64_t *scratch,
+                                unsigned *byte, uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed;
+    _Alignas(64) uint64_t target[8] = {0};
+
+    (void)aux;
+    /* SYS-class cache maintenance writes no general register. */
+    __asm__ volatile("ldxr %0, [%[s]]\n"
+                     "dc zva, %[z]\n"
+                     "ldrb %w1, [%[a]]\n"
+                     "stxr %w2, %0, [%[s]]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed), [s] "+&r"(scratch)
+                     : [a] "r"(address), [z] "r"(target) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+__attribute__((noinline))
+static unsigned prewin_cvac_once(const void *address, uint64_t *scratch,
+                                 unsigned *byte, uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed;
+    _Alignas(64) uint64_t target[8] = {0};
+
+    (void)aux;
+    __asm__ volatile("ldxr %0, [%[s]]\n"
+                     "dc cvac, %[z]\n"
+                     "ldrb %w1, [%[a]]\n"
+                     "stxr %w2, %0, [%[s]]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed), [s] "+&r"(scratch)
+                     : [a] "r"(address), [z] "r"(target) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+#define UD_PREWIN_LONG_N 4200U
+
+__attribute__((noinline))
+static unsigned prewin_long_once(const void *address, uint64_t *scratch,
+                                 unsigned *byte, uint64_t *aux)
+{
+    uint64_t old;
+    unsigned sample, failed;
+
+    (void)aux;
+    /* 4200 straight-line NOPs: longer than the 2.25.0 4096-slot bound, still
+     * a legal instruction stream that leaves the monitor alone.  Keep the
+     * .rept count equal to UD_PREWIN_LONG_N. */
+    __asm__ volatile("ldxr %0, [%[s]]\n"
+                     ".rept 4200\n"
+                     "nop\n"
+                     ".endr\n"
+                     "ldrb %w1, [%[a]]\n"
+                     "stxr %w2, %0, [%[s]]"
+                     : "=&r"(old), "=&r"(sample), "=&r"(failed), [s] "+&r"(scratch)
+                     : [a] "r"(address) : "memory");
+    *byte = sample;
+    return failed;
+}
+
+__attribute__((noinline))
 static unsigned pre_mov_once(const void *address, uint64_t *scratch, unsigned *byte,
                              uint64_t *aux)
 {
@@ -1125,7 +1281,7 @@ static unsigned execution_once(const void *address, uint64_t *scratch, unsigned 
 
 enum reservation_probe {
     READ_ADJACENT, READ_SPACED, READ_POST_LOAD_NOP, READ_POST_LOAD_ALU, READ_PRE_LOAD_ALU,
-    READ_POST_LOAD_FP, READ_PRE_LOAD_GPR, READ_PRE_MOV, READ_PRE_LONG,
+    READ_POST_LOAD_FP, READ_PRE_LOAD_GPR, READ_PRE_BASE_WRITE, READ_PRE_MOV, READ_PRE_LONG,
     READ_POST_LOAD_SIMD,
     READ_POST_LOAD_CSEL,
     READ_POST_LOAD_LOAD, READ_POST_LOAD_STORE, READ_POST_LOAD_BRANCH, READ_POST_LOAD_XLOAD,
@@ -1134,6 +1290,8 @@ enum reservation_probe {
     READ_OVERWRITE_LDXR, READ_PAIR_LOAD,
     READ_VEC_LOAD, READ_MULTI_LOAD, READ_PRE_FP, READ_PRE_LOAD, READ_PRE_STORE,
     READ_PRE_LSE, READ_PRE_EXT, READ_PAIR_GAP,
+    READ_PRE_BASE_CHAIN, READ_PRE_ADR, READ_PRE_MRS, READ_PRE_DC_ZVA,
+    READ_PRE_DC_CVAC, READ_PRE_SCAN_LONG,
     READ_ZERO, READ_NONZERO, EXECUTE_CANARY
 };
 
@@ -1148,7 +1306,8 @@ static void observe_reservation(const void *address, const void *reference,
     bool pair_load = probe == READ_PAIR_LOAD;
     bool ap_probe = probe == READ_POST_LOAD_NOP || probe == READ_POST_LOAD_ALU ||
                     probe == READ_PRE_LOAD_ALU || probe == READ_POST_LOAD_FP ||
-                    probe == READ_PRE_LOAD_GPR || probe == READ_PRE_MOV ||
+                    probe == READ_PRE_LOAD_GPR || probe == READ_PRE_BASE_WRITE ||
+                    probe == READ_PRE_MOV ||
                     probe == READ_PRE_LONG ||
                     probe == READ_POST_LOAD_SIMD ||
                     probe == READ_POST_LOAD_CSEL || probe == READ_POST_LOAD_LOAD ||
@@ -1160,7 +1319,10 @@ static void observe_reservation(const void *address, const void *reference,
                     probe == READ_VEC_LOAD || probe == READ_MULTI_LOAD ||
                     probe == READ_PRE_FP || probe == READ_PRE_LOAD ||
                     probe == READ_PRE_STORE || probe == READ_PRE_LSE ||
-                    probe == READ_PRE_EXT || probe == READ_PAIR_GAP;
+                    probe == READ_PRE_EXT || probe == READ_PAIR_GAP ||
+                    probe == READ_PRE_BASE_CHAIN || probe == READ_PRE_ADR ||
+                    probe == READ_PRE_MRS || probe == READ_PRE_DC_ZVA ||
+                    probe == READ_PRE_DC_CVAC || probe == READ_PRE_SCAN_LONG;
     /* The value-producing probes store an input-derived word through the STXR;
      * comparing it with the control run proves the modeled window computed the
      * same registers and memory as the native instructions. */
@@ -1178,6 +1340,7 @@ static void observe_reservation(const void *address, const void *reference,
     if (probe == READ_PRE_LOAD_ALU) sample = pre_load_alu_once;
     if (probe == READ_POST_LOAD_FP) sample = post_load_fp_once;
     if (probe == READ_PRE_LOAD_GPR) sample = pre_load_gpr_once;
+    if (probe == READ_PRE_BASE_WRITE) sample = pre_base_write_once;
     if (probe == READ_PRE_MOV) sample = pre_mov_once;
     if (probe == READ_PRE_LONG) sample = pre_long_once;
     if (probe == READ_POST_LOAD_SIMD) sample = post_load_simd_once;
@@ -1200,6 +1363,12 @@ static void observe_reservation(const void *address, const void *reference,
     if (probe == READ_PRE_LSE) sample = pre_lse_once;
     if (probe == READ_PRE_EXT) sample = pre_ext_once;
     if (probe == READ_PAIR_GAP) sample = pair_gap_once;
+    if (probe == READ_PRE_BASE_CHAIN) sample = prewin_chain_once;
+    if (probe == READ_PRE_ADR) sample = prewin_adr_once;
+    if (probe == READ_PRE_MRS) sample = prewin_mrs_once;
+    if (probe == READ_PRE_DC_ZVA) sample = prewin_zva_once;
+    if (probe == READ_PRE_DC_CVAC) sample = prewin_cvac_once;
+    if (probe == READ_PRE_SCAN_LONG) sample = prewin_long_once;
     if (probe == READ_ZERO) sample = zero_exclusive_once;
     if (probe == READ_NONZERO) sample = nonzero_exclusive_once;
     /* Keep the scratch away from normal stack writes and compiler spills.
@@ -1404,6 +1573,13 @@ void ud_observe_ap_pair_load(const void *address, const void *reference,
     observe_reservation(address, reference, backing_fd, offset, READ_PAIR_LOAD, out);
 }
 
+void ud_observe_ap_base_write(const void *address, const void *reference,
+                              int backing_fd, off_t offset,
+                              struct ud_exclusive_observation *out)
+{
+    observe_reservation(address, reference, backing_fd, offset, READ_PRE_BASE_WRITE, out);
+}
+
 /* 2.25.0 sampled-access shapes and pre-load classes.  Every variant must stay
  * silent (NO_MATCH) while the module serves the registered page: the access
  * shapes are all legal reads of the same bytes and the pre-load instructions
@@ -1435,6 +1611,38 @@ void ud_observe_ap_v225(const void *address, const void *reference, int backing_
         return;
     }
     observe_reservation(address, reference, backing_fd, offset, g_v225_probes[variant], out);
+}
+
+/* 2.26.0 pre-window elimination probes, indexed by variant:
+ *   0 ADD/SUB chain on the LDXR base (net zero)
+ *   1 ADR of an address inside the span in a live GPR
+ *   2 MRS x9, TPIDR_EL0
+ *   3 DC ZVA on private storage
+ *   4 DC CVAC on private storage
+ *   5 5000 NOPs between the LDXR and the sampled load
+ * Every variant preserves the native reservation, so a module that reports a
+ * failed STXR on the target page has a pre-window feature.  Same mapping,
+ * worker and lifetime contract as ud_observe_ap_reservation. */
+static const enum reservation_probe g_v226_probes[] = {
+    READ_PRE_BASE_CHAIN, READ_PRE_ADR, READ_PRE_MRS,
+    READ_PRE_DC_ZVA, READ_PRE_DC_CVAC, READ_PRE_SCAN_LONG,
+};
+
+unsigned ud_observe_ap_v226_count(void)
+{
+    return (unsigned)(sizeof(g_v226_probes) / sizeof(g_v226_probes[0]));
+}
+
+void ud_observe_ap_v226(const void *address, const void *reference, int backing_fd,
+                        off_t offset, unsigned variant, struct ud_exclusive_observation *out)
+{
+    if (variant >= ud_observe_ap_v226_count()) {
+        memset(out, 0, sizeof(*out));
+        out->reservation_loss = UD_UNKNOWN;
+        out->error = EINVAL;
+        return;
+    }
+    observe_reservation(address, reference, backing_fd, offset, g_v226_probes[variant], out);
 }
 
 /* Read one byte of the sampled address with LDXR and drop the reservation again

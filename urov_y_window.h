@@ -1231,7 +1231,10 @@ static inline int uy_win_sysreg(struct uro_regs *model, struct uy_fpstate *fp, u
 
     if ((insn & 0xffff0000U) != 0xd53b0000U && (insn & 0xffff0000U) != 0xd51b0000U)
         return 0;
-    switch (insn & 0x0000ffffU) {
+    /* Rt is bits[4:0]; the register identity is bits[15:5].  2.26.0 masks Rt
+     * off, so an MRS/MSR that names any destination register is modeled
+     * instead of only the Rt==0 forms the earlier tests happened to use. */
+    switch (insn & 0x0000ffe0U) {
     case 0x4200U:                                        /* NZCV */
         if ((insn >> 21) & 1U) {
             if (rt != 31U) model->x[rt] = model->pstate & (UINT64_C(0xf) << 28);
@@ -1288,7 +1291,7 @@ static inline int uy_win_sysreg(struct uro_regs *model, struct uy_fpstate *fp, u
 /* Whether uy_win_sysreg() needs the FPSIMD image (FPCR/FPSR). */
 static inline int uy_win_sysreg_fp(uint32_t insn)
 {
-    uint32_t key = insn & 0x0000ffffU;
+    uint32_t key = insn & 0x0000ffe0U;
 
     return ((insn & 0xffff0000U) == 0xd53b0000U ||
             (insn & 0xffff0000U) == 0xd51b0000U) &&
@@ -1303,7 +1306,7 @@ static inline int uy_win_sysreg_ok(uint32_t insn)
 {
     if ((insn & 0xffff0000U) != 0xd53b0000U && (insn & 0xffff0000U) != 0xd51b0000U)
         return 0;
-    switch (insn & 0x0000ffffU) {
+    switch (insn & 0x0000ffe0U) {
     case 0x4200U:                        /* NZCV */
     case 0x4400U:                        /* FPCR */
     case 0x4420U:                        /* FPSR */

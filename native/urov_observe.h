@@ -197,6 +197,13 @@ void ud_observe_ap_overwrite_ldxr(const void *address, const void *reference, in
 void ud_observe_ap_pair_load(const void *address, const void *reference, int backing_fd,
                              off_t offset, struct ud_exclusive_observation *out);
 
+/* Same paired controls and caller obligations as ud_observe_ap_reservation.
+ * ADD #0 writes the LDXR base register without changing the address. This
+ * defeats the conservative 2.25.0 PAGE_AP read-before write-set proof. */
+void ud_observe_ap_base_write(const void *address, const void *reference,
+                              int backing_fd, off_t offset,
+                              struct ud_exclusive_observation *out);
+
 /* 2.25.0 sampled-access shapes and pre-load classes, indexed by variant:
  *   0 LDP Wt,Wt2        4 LDR from private storage before the sampled load
  *   1 LDR Q (128-bit)   5 STR to private storage before the sampled load
@@ -211,6 +218,23 @@ void ud_observe_ap_pair_load(const void *address, const void *reference, int bac
  * as ud_observe_ap_reservation. */
 unsigned ud_observe_ap_v225_count(void);
 void ud_observe_ap_v225(const void *address, const void *reference, int backing_fd,
+                        off_t offset, unsigned variant,
+                        struct ud_exclusive_observation *out);
+
+/* 2.26.0 pre-window elimination probes, indexed by variant:
+ *   0 ADD/SUB chain on the LDXR base (net zero)
+ *   1 ADR of a span address in a live GPR (no branch uses it)
+ *   2 MRS x9, TPIDR_EL0
+ *   3 DC ZVA on private storage
+ *   4 DC CVAC on private storage
+ *   5 5000 NOPs between the LDXR and the sampled load
+ * Every variant is a legal EL0 instruction stream that leaves the local
+ * monitor and the reserved address alone, so the native STXR succeeds and the
+ * sampled byte matches the file.  NO_MATCH is the expected result while the
+ * module serves the page; MATCH is a residual pre-window feature.  Same
+ * mapping, worker and lifetime contract as ud_observe_ap_reservation. */
+unsigned ud_observe_ap_v226_count(void);
+void ud_observe_ap_v226(const void *address, const void *reference, int backing_fd,
                         off_t offset, unsigned variant,
                         struct ud_exclusive_observation *out);
 

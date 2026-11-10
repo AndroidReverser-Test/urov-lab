@@ -55,13 +55,26 @@ def main():
                         help="compare the older LL/SC probes with the pair-load probe for urov-y 2.24.0")
     matrix.add_argument("--read-defense-v225", action="store_true",
                         help="verify every sampled-access shape and pre-load class against urov-y 2.25.0")
+    matrix.add_argument("--keyless-v225", action="store_true",
+                        help="detect active urov-y 2.25.0 without its control channel and verify guarded mappings")
+    matrix.add_argument("--keyless-v226", action="store_true",
+                        help="verify that urov-y 2.26.0 leaves no pre-window read-trap feature")
     parser.add_argument("--repeats", type=int, default=15)
     parser.add_argument("--cycles", type=int, default=3)
     args = parser.parse_args()
     if not 3 <= args.repeats <= 200 or not 1 <= args.cycles <= 10:
         parser.error("repeats 3..200, cycles 1..10")
 
-    if args.read_defense_v221 or args.read_defense_v221_guarded:
+    if args.keyless_v225:
+        prefix = "keyless225"
+        modes = tuple(f"{prefix}-{shape}" for shape in ("brk", "brk-all", "uxn", "uxn-all", "ap", "ap-all"))
+    elif args.keyless_v226:
+        # Only the production configuration is relevant: PAGE_AP with an
+        # all-callers session.  SITE_BRK and PAGE_UXN keep their inherent
+        # code-word and fetch features and are unchanged by 2.26.0.
+        prefix = "keyless226"
+        modes = (f"{prefix}-ap-all",)
+    elif args.read_defense_v221 or args.read_defense_v221_guarded:
         prefix = "read-defense-v221"
         if args.read_defense_v221_guarded:
             prefix += "-guarded"
@@ -128,6 +141,138 @@ def main():
     def kp(*argv):
         return shell("/data/local/tmp/kpatch", args.key, *argv)
 
+    def check_keyless(label, mode, active, logs):
+        def records(tag):
+            return [dict(KV.findall(line)) for line in re.findall(rf"{tag} [^\n]+", logs)]
+
+        stages = records("KEYLESS225_STAGE")
+        expected = ["clean", "identity", "patch_only", "overlay", "deactivated"] if active else [
+            "clean", "patch_only"]
+        names = [s["stage"] for s in stages]
+        if names != expected:
+            if names == [s for s in expected if s in names]:
+                raise IncompleteLog(f"{label}: missing keyless stage logs")
+            raise RuntimeError(f"{label}: unexpected keyless stage order {names}")
+        guard = records("KEYLESS225_GUARD")
+        truth = records("KEYLESS225_TRUTH")
+        invalid = records("KEYLESS225_INVALID")
+        business = records("KEYLESS225_BUSINESS")
+        if len(invalid) != 1 or len(business) != 1 or (active and (len(guard) != 1 or len(truth) != 2)):
+            raise IncompleteLog(f"{label}: missing keyless guard or business logs")
+        if invalid[0] != {"unknown": "1", "crc_eligible": "0", "errno": "116", "triplets": "0"}:
+            raise RuntimeError(f"{label}: bad reference accepted")
+        if int(business[0]["ops"]) <= 0 or business[0]["errors"] != "0":
+            raise RuntimeError(f"{label}: business worker failed")
+        if active and (
+            guard[0] != {"read_errno": "22", "exec_errno": "22", "inactive": "1",
+                         "reference_ok": "1", "execute": "1234"} or
+            [s["stage"] for s in truth] != ["identity", "overlay"] or
+            any(s["active"] != "1" or s["deactivated"] != "1" for s in truth)
+        ):
+            raise RuntimeError(f"{label}: missing registration refusal or active-session evidence")
+        if not active and (guard or truth):
+            raise RuntimeError(f"{label}: keyless control run unexpectedly managed a session")
+
+        ap = mode.endswith(("-ap", "-ap-all"))
+        ap_all = mode.endswith("-ap-all")
+        for stage in stages:
+            name = stage["stage"]
+            covered = name in ("identity", "overlay")
+            changed = name in ("patch_only", "deactivated")
+            n = args.repeats
+            brk = int(covered and mode.endswith(("-brk", "-brk-all")))
+            counts = {"n": n, "ap": n * (ap and covered), "ap_unknown": 0,
+                      "triplets": n * 3 * 32, "target_failed": n * 3 * 32 * (ap and covered),
+                      "site_code": brk, "site_brk": brk,
+                      "site_fetch": int(covered and mode.endswith(("-uxn", "-uxn-all"))),
+                      "split": n * (name == "overlay" and not ap_all),
+                      "trap": n * covered, "changed": n * changed, "unknown": 0,
+                      "crc_eligible": n * (name == "clean")}
+            business_file = name in ("clean", "identity", "overlay")
+            direct_file = name in ("clean", "identity") or (name == "overlay" and ap_all)
+            if (any(int(stage[k]) != v for k, v in counts.items()) or
+                (stage["business"] == stage["file"]) != business_file or
+                (stage["direct"] == stage["file"]) != direct_file or
+                stage["execute"] != ("1234" if name in ("clean", "identity") else "1235") or
+                stage["reference_ok"] != "1" or stage["fallback_execute"] != "1234"):
+                raise RuntimeError(f"{label}: keyless verdict or CRC mismatch at {name}: {stage}")
+        if active and "state=inactive" not in kp("kpm", "ctl0", MODULE, "status"):
+            raise RuntimeError(f"{label}: fixture left an active session")
+        selected = stages[3] if active else stages[0]
+        print(f"{label}: {selected['stage']} trap={selected['trap']}/{selected['n']} "
+              f"ap={selected['ap']} brk={selected['site_brk']} fetch={selected['site_fetch']} "
+              f"split={selected['split']} crc_eligible={selected['crc_eligible']} "
+              f"execute={selected['execute']} fallback={selected['fallback_execute']}", flush=True)
+        return {"stages": stages, "guard": guard, "invalid": invalid[0],
+                "truth": truth, "business": business[0]}
+
+    def check_keyless226(label, mode, active, logs):
+        def records(tag):
+            return [dict(KV.findall(line)) for line in re.findall(rf"{tag} [^\n]+", logs)]
+
+        stages = records("KEYLESS225_STAGE")
+        expected = ["clean", "identity", "patch_only", "overlay", "deactivated"] if active else [
+            "clean", "patch_only"]
+        names = [s["stage"] for s in stages]
+        if names != expected:
+            if names == [s for s in expected if s in names]:
+                raise IncompleteLog(f"{label}: missing keyless stage logs")
+            raise RuntimeError(f"{label}: unexpected keyless stage order {names}")
+        guard = records("KEYLESS225_GUARD")
+        truth = records("KEYLESS225_TRUTH")
+        invalid = records("KEYLESS225_INVALID")
+        business = records("KEYLESS225_BUSINESS")
+        extra = records("KEYLESS226_EXTRA")
+        if len(invalid) != 1 or len(business) != 1 or (active and (len(guard) != 1 or len(truth) != 2)):
+            raise IncompleteLog(f"{label}: missing keyless guard or business logs")
+        if len(extra) != len(expected):
+            raise IncompleteLog(f"{label}: missing 2.26 pre-window records")
+        if invalid[0] != {"unknown": "1", "crc_eligible": "0", "errno": "116", "triplets": "0"}:
+            raise RuntimeError(f"{label}: bad reference accepted")
+        if int(business[0]["ops"]) <= 0 or business[0]["errors"] != "0":
+            raise RuntimeError(f"{label}: business worker failed")
+        if active and (
+            guard[0] != {"read_errno": "22", "exec_errno": "22", "inactive": "1",
+                         "reference_ok": "1", "execute": "1234"} or
+            [s["stage"] for s in truth] != ["identity", "overlay"] or
+            any(s["active"] != "1" or s["deactivated"] != "1" for s in truth)
+        ):
+            raise RuntimeError(f"{label}: missing registration refusal or active-session evidence")
+        if not active and (guard or truth):
+            raise RuntimeError(f"{label}: keyless control run unexpectedly managed a session")
+        for stage, pre in zip(stages, extra):
+            name = stage["stage"]
+            n = args.repeats
+            changed = name in ("patch_only", "deactivated")
+            # 2.26.0: the AP[1] bridge leaves no reservation-loss difference and
+            # every ordinary view (business, direct, file) agrees, so neither the
+            # policy nor the CRC gating may report a trap.
+            counts = {"n": n, "ap": 0, "ap_unknown": 0, "triplets": n * 3 * 32,
+                      "target_failed": 0, "site_code": 0, "site_brk": 0, "site_fetch": 0,
+                      "split": 0, "trap": 0, "changed": n * changed, "unknown": 0,
+                      "crc_eligible": n * (name in ("clean", "identity", "overlay"))}
+            business_file = name in ("clean", "identity", "overlay")
+            direct_file = name in ("clean", "identity", "overlay")
+            if (any(int(stage[k]) != v for k, v in counts.items()) or
+                (stage["business"] == stage["file"]) != business_file or
+                (stage["direct"] == stage["file"]) != direct_file or
+                stage["execute"] != ("1234" if name in ("clean", "identity") else "1235") or
+                stage["reference_ok"] != "1" or stage["fallback_execute"] != "1234"):
+                raise RuntimeError(f"{label}: keyless226 verdict or CRC mismatch at {name}: {stage}")
+            keys = ("chain", "adr", "mrs", "zva", "cvac", "long", "unknown",
+                    "e0", "e1", "e2", "e3", "e4", "e5")
+            if pre["stage"] != name or any(pre[k] != "0" for k in keys):
+                raise RuntimeError(f"{label}: 2.26 pre-window feature at {name}: {pre}")
+        if active and "state=inactive" not in kp("kpm", "ctl0", MODULE, "status"):
+            raise RuntimeError(f"{label}: fixture left an active session")
+        selected = stages[3] if active else stages[0]
+        print(f"{label}: {selected['stage']} trap={selected['trap']}/{selected['n']} "
+              f"ap={selected['ap']} brk={selected['site_brk']} fetch={selected['site_fetch']} "
+              f"split={selected['split']} crc_eligible={selected['crc_eligible']} "
+              f"execute={selected['execute']} fallback={selected['fallback_execute']}", flush=True)
+        return {"stages": stages, "guard": guard, "invalid": invalid[0],
+                "truth": truth, "business": business[0], "pre_window": extra}
+
     def run_once(label, mode):
         dobby = mode.startswith("dobby-detect-")
         defense = mode.startswith("read-defense-")
@@ -168,6 +313,18 @@ def main():
         if not uid or int(uid[1]) < 10000 or not re.search(r"CapEff:\s*0{16}\b", logs) or not re.search(
                 r"Seccomp:\s*2\b", logs):
             raise RuntimeError(f"{label}: invalid app credentials")
+        if args.keyless_v225:
+            details = check_keyless(label, mode, active, logs)
+            report["runs"].append({"label": label, "mode": mode, "uid": int(uid[1]), "pid": pid,
+                                   "log": log_path.name, "result": result[0],
+                                   "ui": dict(KV.findall(result[0])), **details})
+            return
+        if args.keyless_v226:
+            details = check_keyless226(label, mode, active, logs)
+            report["runs"].append({"label": label, "mode": mode, "uid": int(uid[1]), "pid": pid,
+                                   "log": log_path.name, "result": result[0],
+                                   "ui": dict(KV.findall(result[0])), **details})
+            return
         if modern_defense:
             stages = [dict(KV.findall(line)) for line in re.findall(rf"READ_DEFENSE_{defense_tag} [^\n]+", logs)]
             stage_key = "stage"

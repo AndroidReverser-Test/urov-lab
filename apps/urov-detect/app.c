@@ -1219,6 +1219,7 @@ finish:
 #include "mp_fixture.inc"
 #include "dobby_crc_fixture.inc"
 #include "read_defense_fixture.inc"
+#include "keyless225_fixture.inc"
 #include "v217_fixture.inc"
 
 JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
@@ -1252,6 +1253,15 @@ JNIEXPORT jstring JNICALL Java_com_example_urovdetect_MainActivity_runNative(
     }
     if (!strncmp(mode, "read-defense-", sizeof("read-defense-") - 1)) {
         read_defense_fixture(mode, key, (int)repeats);
+        snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
+                 g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
+        goto done;
+    }
+    if (!strncmp(mode, "keyless225-", sizeof("keyless225-") - 1) ||
+        !strncmp(mode, "keyless226-", sizeof("keyless226-") - 1)) {
+        const char *shape = mode + sizeof("keyless225-") - 1;
+
+        keyless225_fixture(shape, key, (unsigned)repeats);
         snprintf(result, sizeof(result), "%s cases=%u assertions=%u failures=%u",
                  g_fail ? "FAIL" : "PASS", g_cases, g_checks, g_fail);
         goto done;

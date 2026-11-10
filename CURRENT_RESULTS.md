@@ -2,6 +2,24 @@
 
 更新于 2026-11-10（Asia/Shanghai）。
 
+> 2026-11-10 补充：`urov-y` 2.26.0 清掉 [2.25 审计](KEYLESS_2_25_AUDIT.md) 里
+> 唯一还能被普通 App 短探针稳定打中的读取侧特征：`LDXR` 基址寄存器的值保持写
+> （`ADD base,#0`）。读前证明从**写集**改成**逐指令值回推**：在故障现场寄存器表上
+> 反向求出每条指令的精确逆，回到最近的独占 load 时基址寄存器的已知值就是实际预约
+> 地址；只有“对任意前值都精确”的逆会被接受，32 位写、恰好不变的掩码、load/原子/
+> 条件选择一律退化为未知并放弃，因此不会出现“模块成功、原生失败”。同时删掉
+> 按寄存器内容放弃的 `uy_llsc_indirect()`（改由分支目标图证明 `LDXR` 执行）、把
+> `SYS/DC/IC/TLBI/AT`、`LDRAA/LDRAB`、直接/条件分支归入“无 GPR 写”，修正
+> `MRS/MSR` 的 `Rt` 掩码，读前扫描上限 4096→16384，并修正 2.21 起的 `MRS` 只识别
+> `Rt==0` 的边界。没有新增 hook、线程、定时器、PTE/VMA/代码字，ABI 仍为 v8、
+> `hooks=0xff`。`--keyless-v226`（ap-all 8×1）overlay
+> `trap=0/8 ap=0 split=0 crc_eligible=8 execute=1235`，新增六个形状
+> `chain/adr/mrs/zva/cvac/long` 全 0；生产 CRC 7 模式 ×1（`crc-ap-all`
+> `file=direct=window=f50bcaf6`、`execute=1235`）、v225 探针 6 模式 ×1、读前差分
+> `cases=67 failures=0`、窗口模型 `cases=145 failures=0` 均 PASS。构建
+> `urov-y.kpm a6c79256...`、`urovdetect.apk bab3d2c3...`。见
+> [ELIMINATION_2_26_DESIGN.md](ELIMINATION_2_26_DESIGN.md)。
+
 > 2026-11-10 补充：`urov-y` 2.25.0 清掉 2.24.0 残余清单里普通 App 可构造的全部读侧
 > 特征，包括 2.24.0 复测自己发现的成对读取（`LDP`）特征。`decode.c` 现在解码
 > `LDXR/LDAXR/LDXP/LDAXP`，`uy_llsc_prepare()` 不再要求采样指令是单个标量 load：

@@ -25,6 +25,15 @@
  * FP instruction is actually reached, and commits it only together with the
  * STXR.  Everything else stays fail-closed.
  *
+ * 2.26.0 replaces the pre-window write-set rule with a value-preserving rewind
+ * (uy_pre_step/uy_pre_invert): an in-place write that provably leaves the LDXR
+ * base unchanged keeps the reservation instead of declining it, and the
+ * instruction classes that are legal at EL0 but write no general register
+ * (SYS/DC/IC/TLBI/AT, direct and conditional branches, LDRAA/LDRAB) are named
+ * instead of being treated as unknown.  The register-value heuristic that used
+ * to decline on any GPR holding a span address is gone; the branch-target map
+ * is what proves the LDXR actually ran.
+ *
  * SITE_BRK removes the data abort entirely by replacing the 4-byte site
  * instruction with BRK on a private COW page (A impossible, B handled by the
  * caller window).  PAGE_UXN removes the code-page feature by making the site
@@ -62,6 +71,7 @@
 #include "urov_y_compat.h"
 #include "urov_y_readers.h"
 #include "urov_y_window.h"
+#include "urov_y_prewin.h"
 
 #ifndef __NR_mmap
 #define __NR_mmap 222
@@ -174,13 +184,14 @@ _Static_assert(sizeof(struct uy_fpstate) == UY_FPSIMD_BYTES, "FPSIMD image size"
  * hardware reports its own result, which for those shapes is the same failure it
  * reports without the module. */
 #define UY_LLSC_WIN_MAX 64U      /* instructions executed after the sampled load */
-#define UY_LLSC_PRE_SCAN 4096U   /* straight-line block bound for the linear proof */
+/* Straight-line block bound for the linear read-before proof.  2.26.0 raises
+ * it from 4096 (16 KiB) to 16384 (64 KiB): the bound is a kernel-work guard,
+ * not a property of the architecture, and an App that pads a longer run of
+ * register-only instructions in front of its sampled load must not be able to
+ * turn the bound itself into an observable failure. */
+#define UY_LLSC_PRE_SCAN 16384U
 #define UY_LLSC_MEM_MAX 4U       /* gap stores recorded and replayed at commit */
 #define UY_LLSC_BYTES_MAX 64U    /* widest single access the decoder produces */
-/* A page-aligned, non-wrapping value used as every register when the read-before
- * proof classifies a pre-window instruction: the decoders compute an address
- * from it, and both under- and overflow must be impossible. */
-#define UY_PRE_PROBE_ADDR (UINT64_C(1) << 32)
 
 struct uy_llsc_pstore {
     uint64_t address;
@@ -2400,31 +2411,6 @@ static int uy_llsc_skipped(uint64_t ldxr_pc, uint64_t pc)
     return seq1 != seq2;
 }
 
-/* An indirect branch to the load or to a gap instruction leaves that address
- * in the branch register.  At the fault the load has not executed yet, so the
- * GPR file still holds it.  A normal sequence never needs such a value.
- *
- * Authenticated branches (BRAA/BLRAA/RETAA) leave a signed pointer, and MTE
- * adds a top-byte tag; either hides the real address from a raw comparison.
- * The AArch64 PAC field and the MTE tag both live above the configured user
- * VA, so compare the raw value and the masked value.  The masked test is
- * conservative: an unrelated register whose low VA bits equal a span address
- * only makes the bridge decline. */
-static int uy_llsc_indirect(const struct uro_regs *regs, uint64_t ldxr_pc, uint64_t pc)
-{
-    uint64_t mask = g_user_limit - 1U;
-    unsigned i;
-
-    for (i = 0; i <= 30; ++i) {
-        uint64_t value = regs->x[i];
-
-        if (value >= ldxr_pc + 4U && value <= pc) return 1;
-        value &= mask;
-        if (value >= ldxr_pc + 4U && value <= pc) return 1;
-    }
-    return 0;
-}
-
 /* A gap store is only recorded, never written while the window is being
  * modeled, so a later load in the same window has to observe it.  Forward the
  * recorded bytes over the freshly read ones, in issue order. */
@@ -2682,136 +2668,6 @@ static void uy_llsc_walk(struct pt_regs *regs, uint64_t fault_pc, struct uy_llsc
     }
 }
 
-/* GPR write set of one instruction that already retired in front of the
- * sampled access.  The linear read-before proof only needs to know whether the
- * LDXR base register is rewritten; an instruction it cannot classify returns
- * -1 and the plan declines.  Nothing else about the instruction matters: it ran
- * to completion before the fault, and a faulting instruction can never reach
- * this scan.
- *
- * The accepted classes are what an EL0 task can execute on this target:
- * integer data processing (immediate and register forms, extended-register
- * add/subtract, add/subtract with carry, pointer-authentication hints), loads
- * and stores in every scalar/pair/SIMD/multiple/literal form, LSE atomics and
- * the acquire/release accesses, SIMD&FP data processing plus its transfers into
- * a general register, MRS and the EL0-writable MSR, NOP/BTI/barriers and
- * prefetch.  CLREX, the exclusive stores and the exception-generating
- * instructions are rejected by the caller, which knows they clear the local
- * monitor.  Bit 31 of the mask records a write to SP. */
-static int uy_pre_writes(uint32_t insn, uint32_t *mask)
-{
-    /* A register file with a large page-aligned value everywhere keeps the
-     * decoders' address arithmetic away from both under- and overflow, so a
-     * pre-window instruction is classified by encoding alone. */
-    struct uro_regs probe;
-    struct uro_load load;
-    struct uro_store store;
-    struct uro_atomic atomic;
-    uint32_t set = 0;
-    unsigned dst, imm;
-
-    *mask = 0;
-    memset(&probe, 0, sizeof(probe));
-    for (dst = 0; dst < 31U; ++dst) probe.x[dst] = UY_PRE_PROBE_ADDR;
-    probe.sp = UY_PRE_PROBE_ADDR;
-    probe.pc = UY_PRE_PROBE_ADDR;
-
-    if (insn == UY_NOP || insn == UY_BTI_C || insn == UY_BTI_J || insn == UY_BTI_JC ||
-        (insn & 0xfffff0ffU) == 0xd503309fU ||      /* DMB */
-        (insn & 0xfffff0ffU) == 0xd50330bfU ||      /* DSB */
-        (insn & 0xfffff0ffU) == 0xd50330dfU)        /* ISB */
-        return 0;
-    if ((insn & 0xfffff01fU) == 0xd503201fU) {      /* HINT #imm */
-        imm = (insn >> 5) & 0x7fU;
-        /* XPACLRI and the PAC/AUT forms that sign or strip x30; the four
-         * *1716 forms sign x17.  A core without FEAT_PAuth runs them as NOPs,
-         * so this stays the conservative direction. */
-        if (imm == 7U || (imm >= 24U && imm <= 31U)) set = 1U << 30;
-        else if (imm == 8U || imm == 10U || imm == 12U || imm == 14U) set = 1U << 17;
-        *mask = set;
-        return 0;
-    }
-    /* MRS/MSR of the user-visible state the window model carries exactly.  Any
-     * other system-register encoding traps at EL0, so it cannot be accepted
-     * here: the exception it takes would have cleared the monitor. */
-    if (uy_win_sysreg_ok(insn)) {
-        if ((insn >> 21) & 1U) *mask = 1U << (insn & 31U);   /* MRS -> Rt */
-        return 0;
-    }
-    /* LDRAA/LDRAB (pointer-authenticated loads) share the store encoding's
-     * shape and would be misread as a store that writes no register.  Decline
-     * instead: the destination is a general register this proof would have to
-     * name, and a failed authentication is a native fault this code cannot
-     * reproduce.  Checked before the prefetch masks, which overlap. */
-    if ((insn & 0xffe00c00U) == 0xf8200400U || (insn & 0xffe00c00U) == 0xf8a00400U)
-        return -1;
-    /* Prefetch hints read an address and write nothing. */
-    if ((insn & 0xffc00000U) == 0xf9800000U || (insn & 0xffe00000U) == 0xf8a00000U ||
-        (insn & 0xffe00000U) == 0xf8800000U)
-        return 0;
-
-    dst = uy_win_dst(insn);
-    if (dst != 34U) {
-        if (dst < 31U) set = 1U << dst;
-        else if (dst == 33U) set = 1U << 31;
-        *mask = set;
-        return 0;
-    }
-    /* Add/subtract (extended register) and add/subtract with carry: the window
-     * model does not reproduce them, but both only write Rd (or SP). */
-    if ((insn & 0x1f200000U) == 0x0b200000U ||
-        (insn & 0x1fe00000U) == 0x1a000000U) {
-        dst = insn & 31U;
-        if (dst != 31U) set = 1U << dst;
-        else if (!(insn & (1U << 29))) set = 1U << 31;
-        *mask = set;
-        return 0;
-    }
-    /* Conditional compare (register) only writes the flags. */
-    if ((insn & 0x3fe00010U) == 0x1a400000U) return 0;
-
-    /* LSE atomic read-modify-write. */
-    if (!uro_decode_atomic(insn, &probe, &atomic)) {
-        if (atomic.op == URO_ATOMIC_CAS) {
-            if (atomic.rs != 31U) set |= 1U << atomic.rs;
-            if (atomic.count == 2U && atomic.rs2 != 31U) set |= 1U << atomic.rs2;
-        } else if (atomic.return_old && atomic.rt != 31U) {
-            set |= 1U << atomic.rt;
-        }
-        *mask = set;
-        return 0;
-    }
-    /* Loads, including the exclusive forms: destinations plus any writeback. */
-    if (!uro_decode(insn, &probe, &load)) {
-        if (!load.vector && !load.multi) {
-            if (load.rt != 31U) set |= 1U << load.rt;
-            if (load.count == 2U && load.rt2 != 31U) set |= 1U << load.rt2;
-        }
-        if (load.writeback) {
-            if (load.rn == 31U) set |= 1U << 31;
-            else set |= 1U << load.rn;
-        }
-        *mask = set;
-        return 0;
-    }
-    /* Stores: only a writeback base register changes. */
-    if (!uro_decode_store(insn, &probe, &store)) {
-        if (store.writeback) {
-            if (store.rn == 31U) set |= 1U << 31;
-            else set |= 1U << store.rn;
-        }
-        *mask = set;
-        return 0;
-    }
-    /* SIMD&FP data processing and the transfers into a general register. */
-    if (uy_win_fp_group(insn)) {
-        dst = (unsigned)uy_win_fp_gpr_dst(insn);
-        if (dst < 31U) *mask = 1U << dst;
-        return 0;
-    }
-    return -1;
-}
-
 /* What the read-before proof needs to know about the faulting instruction.  An
  * ordinary load consumes the reservation an earlier exclusive load created; an
  * exclusive load creates its own. */
@@ -2822,35 +2678,35 @@ struct uy_sample {
     uint64_t address;   /* address the faulting instruction accessed */
 };
 
-/* The fault-time value of a general register, or of SP when reg is 31. */
-static uint64_t uy_reg_of(const struct uro_regs *regs, unsigned reg)
-{
-    return reg == 31U ? regs->sp : regs->x[reg];
-}
-
-/* The same, for the live user register file the single-step path works on. */
+/* The live user register file the single-step path works on. */
 static uint64_t uy_pt_gpr(const struct pt_regs *regs, unsigned reg)
 {
     return reg == 31U ? regs->sp : regs->regs[reg];
 }
 
 /* Linear read-before proof.  Walk backwards from the faulting instruction to
- * the most recent load-exclusive and accept it when every slot in between
- * provably leaves the local monitor and the exclusive base register alone.
- * The base then still holds the address that was reserved, so an exclusive
- * store to it later has to be completed by the handler: the exception return
- * that served the sampled read already cleared the hardware monitor.
+ * the most recent load-exclusive, rewinding the register value table one
+ * instruction at a time (uy_pre_step).  When the exclusive load is reached the
+ * base register's recovered value is the address the hardware reserved; a
+ * later exclusive store to it has to be completed by the handler because the
+ * exception return that served the sampled read already cleared the hardware
+ * monitor.
  *
- * No value chain is required - the reserved address and the monitor state do
- * not depend on the loaded value, so the sampled access may overwrite the
- * LDXR destination, sample a pair or vector register, or write back over the
- * base.  The only register the proof depends on is the LDXR base itself. */
+ * 2.25.0 only required that the base register was never written.  2.26.0 asks
+ * for its value instead, so an in-place write that provably left it unchanged
+ * (ADD s,s,#0, an add/sub/eor chain whose net effect is zero, a value copied
+ * through another still-known register) no longer loses the reservation.
+ *
+ * The sampled access itself does not participate: it has not committed at the
+ * fault, so it may overwrite the LDXR destination, sample a pair or vector
+ * register, or write back over the base.  Only the LDXR base matters. */
 static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
                             const struct uy_sample *sample, struct uy_llsc *out)
 {
-    uint32_t insn = 0, written = 0;
+    struct uy_pre_state st;
+    uint32_t insn = 0;
     unsigned scanned, lsize = 0, lrn = 0, pair = 0, acquire = 0;
-    uint64_t ldxr_pc = 0, at;
+    uint64_t ldxr_pc = 0, at, base;
 
     memset(out, 0, sizeof(*out));
     if (!f_copy_out || !sample) return;
@@ -2865,10 +2721,10 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
         return;
     }
     if (pc < 4U || !uy_user_range(pc - 4U, 4U)) return;
+    uy_pre_reset(&st, regs);
     at = pc - 4U;
     for (scanned = 0; scanned < UY_LLSC_PRE_SCAN; ++scanned) {
         unsigned size_enc, rt, rt2, rs, rn;
-        uint32_t mask;
 
         if (at < 4U || !uy_user_range(at, 4U) || uy_read_insn(at, &insn))
             return;
@@ -2895,24 +2751,20 @@ static void uy_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
             uy_is_stxp(insn, &size_enc, &rs, &rt, &rt2, &rn) ||
             uy_is_clrex(insn) || uy_is_exception_insn(insn))
             return;
-        if (uy_pre_writes(insn, &mask)) return;
-        written |= mask;
-        if (at < 4U) return;
+        if (uy_pre_step(insn, &st)) return;
         at -= 4U;
     }
     if (!ldxr_pc) return;
-    /* The fault-time value of the base must still be the reserved address.  A
-     * pre-window write to it would let the bridge fake a success at an address
-     * the native exclusive store never reserved. */
-    if (lrn == 31U ? (written & (1U << 31)) != 0U
-                   : (written & (1U << lrn)) != 0U)
-        return;
-    if (uy_llsc_skipped(ldxr_pc, pc)) return;
-    if (uy_llsc_indirect(regs, ldxr_pc, pc)) return;
+    /* The rewind must still know the base.  A class it could not invert leaves
+     * it unknown and the plan declines; the native instructions then report
+     * exactly the result the hardware would have reported without the module. */
+    if (!uy_pre_known(&st, lrn)) return;
+    base = uy_pre_value(&st, lrn);
     /* lsize is already in bytes, so the mask is the access size minus one. */
-    if (uy_reg_of(regs, lrn) & (lsize - 1U)) return;
+    if (base & (lsize - 1U)) return;
+    if (uy_llsc_skipped(ldxr_pc, pc)) return;
 
-    out->base = uy_reg_of(regs, lrn);
+    out->base = base;
     out->size = lsize;
     out->base_reg = lrn;
     out->pair = pair;
@@ -6554,6 +6406,20 @@ long urov_y_backend_init(const char *args)
     memset(kdf_key, 0, sizeof(kdf_key));
 
     if (!kallsyms_lookup_name) return -ENOSYS;
+    /* The pre-window proof may only name the EL0 cache-maintenance encodings
+     * that this core actually lets EL0 execute.  SCTLR_EL1.UCI (bit 26)
+     * enables DC CVAC/CVAU/CIVAC/CVAP/CVADP and IC IVAU/IALLU, .DZE (bit 14)
+     * enables DC ZVA.  If a bit is clear the encoding traps at EL0, so the
+     * proof has to keep declining it. */
+    {
+        uint64_t sctlr;
+
+        __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
+        uy_pre_uci = (unsigned)((sctlr >> 26) & 1U);
+        uy_pre_dze = (unsigned)((sctlr >> 14) & 1U);
+        if (g_verbose)
+            pr_info("urov-y: el0 cache ops uci=%u dze=%u\n", uy_pre_uci, uy_pre_dze);
+    }
     if (uro_core_selftest(g_selftest_ws, &checks) || checks != URO_CORE_CHECKS) return -EINVAL;
 
     ret = resolve_kernel(btf_path, &brk_argc, &mmf_argc);

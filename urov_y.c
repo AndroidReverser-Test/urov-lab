@@ -17,10 +17,10 @@
 #include "urov_y_backend.h"
 
 KPM_NAME("urov-y");
-KPM_VERSION("2.25.0");
+KPM_VERSION("2.26.0");
 KPM_LICENSE("GPL v2");
 KPM_AUTHOR("UROV-Y");
-KPM_DESCRIPTION("Reader-site trap ARM64 user read overlay: BRK, UXN or AP[1] trap; linear pre-window proof, permissive native step, every sampled-access shape and paired exclusives");
+KPM_DESCRIPTION("Reader-site trap ARM64 user read overlay: BRK, UXN or AP[1] trap; value-preserving pre-window proof, permissive native step, every sampled-access shape and paired exclusives");
 KPM_INFO(context, "sleepable-v2", 32);
 
 static int str_eq(const char *a, const char *b)
