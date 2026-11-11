@@ -10,7 +10,9 @@ if (!$Baseline -and $ModuleKey -notmatch '^[0-9a-fA-F]{32}$') {
 $out = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\out\app'))
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 & adb shell am force-stop com.example.urovz
+if ($LASTEXITCODE -ne 0) { throw 'Cannot stop test App.' }
 & adb shell run-as com.example.urovz rm -f files/report.txt
+if ($LASTEXITCODE -ne 0) { throw 'Cannot remove previous report; refusing stale test results.' }
 $arguments = @('shell','am','start','-W','-n','com.example.urovz/.MainActivity','--ez','autorun','true')
 if ($Baseline) { $arguments += @('--ez','baseline','true') }
 else { $arguments += @('--es','key',$ModuleKey) }

@@ -318,6 +318,17 @@ static int uz_access_vm_argc(const struct kclf_btf *btf, const char *name, int p
     return 0;
 }
 
+/* Remote GUP removed the vmas argument in newer kernels. Internal entries
+ * require a complete prototype; never infer their ABI from the version. */
+static int uz_remote_gup_argc(const struct kclf_btf *btf, const char *name)
+{
+    const struct kclf_btf_type *proto = kclf_btf_func_proto(btf, name);
+
+    if (uz_btf_signature(btf, proto, "lmllippp")) return 7;
+    if (uz_btf_signature(btf, proto, "lmllipp")) return 6;
+    return 0;
+}
+
 /* Root can supply detached BTF when CONFIG_DEBUG_INFO_BTF is disabled.
  * Require an exact GNU build ID match before opening the trusted BTF. */
 #define UZ_BTF_MAX (64U * 1024U * 1024U)
@@ -407,6 +418,7 @@ static unsigned uz_btf_enum_flag(const struct kclf_btf *btf,
                                  const char *name, unsigned fallback)
 {
     size_t offset = 0;
+    unsigned found = 0;
     while (offset < btf->type_len) {
         const struct kclf_btf_type *type = (const void *)(btf->types + offset);
         const uint32_t *values = (const void *)(type + 1);
@@ -417,11 +429,12 @@ static unsigned uz_btf_enum_flag(const struct kclf_btf *btf,
         if (((type->info >> 24) & 31U) != 6U) continue;
         for (i = 0; i < (type->info & 0xffffU); ++i) {
             unsigned value = values[2U * i + 1U];
-            if (!strcmp(kclf_btf_name(btf, values[2U * i]), name))
-                return value && !(value & (value - 1U)) ? value : 0;
+            if (strcmp(kclf_btf_name(btf, values[2U * i]), name)) continue;
+            if (!value || (value & (value - 1U)) || (found && found != value)) return 0;
+            found = value;
         }
     }
-    return fallback;
+    return found ? found : fallback;
 }
 
 #endif

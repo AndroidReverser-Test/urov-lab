@@ -205,8 +205,6 @@ typedef long (*kernel_read_t)(void *file, void *buf, unsigned long count,
 typedef void (*msleep_t)(unsigned int msecs);
 typedef void *(*filp_open_t)(const char *path, int flags, unsigned short mode);
 typedef int (*filp_close_t)(void *file, void *owner);
-typedef int (*gup_fast_t)(unsigned long start, int nr_pages, unsigned int gup_flags,
-                          void **pages);
 typedef void *(*alloc_pages_t)(unsigned int gfp, unsigned int order, int nid,
                                void *nodemask);
 typedef void (*put_page_t)(void *page);
@@ -323,10 +321,12 @@ static int g_pin_ok;
 static void *f_gup_slow;
 static int g_gup_slow_hooked;
 static unsigned g_foll_pin, g_foll_longterm;
+static unsigned g_foll_get, g_foll_fast_only;
 static _Bool (*f_grab_page_bool)(void *, unsigned);
 static int (*f_grab_page_int)(void *, unsigned);
 static void (*f_unpin_page)(void *);
 static int g_pin_argc;
+static int g_pin_internal;
 #define UZ_READV_SLOTS 64U
 struct uz_readv_rec {
     void *task;
@@ -386,7 +386,8 @@ static int g_abort_has_iss2;
 /* GUP fast is the one user-page pin path that bypasses both the EL0 data
  * abort and the kernel access_remote_vm hook (vmsplice is the standard
  * reader).  The after hook substitutes a private page holding the image. */
-static gup_fast_t f_gup_fast;
+static void *f_gup_fast;
+static int g_gup_internal;
 static alloc_pages_t f_alloc_pages;
 static put_page_t f_put_page;
 static copy_highpage_t f_copy_highpage;
@@ -1391,7 +1392,8 @@ static void ap_protection_update(void *mm, uint64_t start, uint64_t len, uint64_
         struct uz_page *p = &g_sess.pages[i];
         int ret;
 
-        if (p->base < start || p->base + g_page_size > end) continue;
+        /* A successful mprotect rounds its length up to a whole page. */
+        if (p->base < start || p->base >= end) continue;
         if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
         if (!readable) {
             __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
@@ -4188,7 +4190,7 @@ static void uz_mm_fault_after(hook_fargs4_t *args, void *udata)
             } else if (p && __atomic_load_n(&p->want, __ATOMIC_ACQUIRE) &&
                 !__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) {
                 ret = page_set_ap_any(mm, page, 0);
-                if (ret == 0) __atomic_store_n(&p->armed, 1, __ATOMIC_RELEASE);
+                if (ret >= 0) __atomic_store_n(&p->armed, 1, __ATOMIC_RELEASE);
             }
             else if (!p && !(args->local.data2 & UZ_FAULT_WRITE) &&
                      __atomic_load_n(&g_code.valid, __ATOMIC_ACQUIRE))
@@ -4757,6 +4759,7 @@ static void uz_pin_after(hook_fargs8_t *args, void *udata)
     (void)udata;
     if (got <= 0 || !pages || !g_pin_ok) return;
     if (flags & (UZ_FOLL_WRITE | g_foll_longterm)) return;
+    if (g_pin_internal && !(flags & g_foll_pin)) return;
     if (!overlay_live() || __atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) return;
     if (!mm) return;
     rec = uz_readv_rec_find(current, 0);
@@ -4975,7 +4978,8 @@ static void uz_gup_after(hook_fargs4_t *args, void *udata)
     unsigned long nr = (unsigned long)args->arg1;
     unsigned int flags = (unsigned int)args->arg2;
     void **pages = (void **)args->arg3;
-    long got = (long)args->ret;
+    /* The function returns int in W0; upper X0 bits do not sign-extend it. */
+    int got = (int32_t)(uint32_t)args->ret;
     void *mm;
     uint64_t ref;
     int owner, writer;
@@ -4987,7 +4991,8 @@ static void uz_gup_after(hook_fargs4_t *args, void *udata)
         return;
     /* PIN/LONGTERM require the exact user page.  PIN/LONGTERM are also used by
      * the kernel's own long-term pins, which must never see a replacement. */
-    if ((flags & (g_foll_longterm | g_foll_pin)) ||
+    if ((flags & (g_foll_longterm | g_foll_pin | g_foll_fast_only)) ||
+        (g_gup_internal && !(flags & g_foll_get)) ||
         (start & (g_page_size - 1U)) || !overlay_live() ||
                 __atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE))
         return;
@@ -5003,7 +5008,7 @@ static void uz_gup_after(hook_fargs4_t *args, void *udata)
      * the replacement copy.  The kernel's own FOLL_WRITE fault-in has already
      * installed a writable leaf, so the trap is gone for that page anyway. */
     writer = (flags & UZ_FOLL_WRITE) != 0;
-    if ((unsigned long)got > nr) got = (long)nr;
+    if ((unsigned long)got > nr) got = (int)nr;
     for (i = 0; i < (unsigned)got; ++i) {
         uint64_t va = (uint64_t)start + (uint64_t)i * g_page_size;
         uint64_t page = page_base(va);
@@ -5032,9 +5037,9 @@ static void uz_gup_after(hook_fargs4_t *args, void *udata)
         if (!owner) sh = uz_shadow_find(mm, p->index);
         src = f_vmalloc_to_page(sh ? sh->image :
                                 (allow_fake ? p->image : p->snapshot));
-        if (!src) continue;
+        if (!src) goto failed;
         fake = f_alloc_pages(UZ_GFP_ATOMIC, 0, -1, 0);
-        if (!fake) continue;
+        if (!fake) goto failed;
         f_copy_highpage(fake, src);
         if (pages[i]) f_put_page(pages[i]);
         pages[i] = fake;
@@ -5045,6 +5050,17 @@ static void uz_gup_after(hook_fargs4_t *args, void *udata)
             !uz_trap_leaf(mm, page) && page_set_ap_any(mm, page, 0) > 0)
             flush_tlb_all();
     }
+    uz_reader_exit(&g_readers, ref);
+    return;
+failed:
+    /* The caller must not silently receive native bytes on allocation
+     * failure. Drop both original and already substituted ordinary refs. */
+    for (i = 0; i < (unsigned)got; ++i) {
+        if (pages[i]) f_put_page(pages[i]);
+        pages[i] = 0;
+    }
+    __atomic_fetch_add(&g_sess.failures, 1, __ATOMIC_RELAXED);
+    args->ret = (uint64_t)-ENOMEM;
     uz_reader_exit(&g_readers, ref);
 }
 
@@ -5661,6 +5677,8 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
     const char *fault_name = "handle_mm_fault", *access_name = "access_remote_vm";
     const char *read_name = "copy_from_user_nofault", *write_name = "copy_to_user_nofault";
     const char *fp_name = "fpsimd_save_and_flush_current_state";
+    const char *pin_name = "pin_user_pages_remote";
+    const char *gup_name = "get_user_pages_fast";
     void *access;
     int access_argc;
     unsigned foll_force;
@@ -5766,16 +5784,33 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
     /* GUP fast is the vmsplice/pipe path.  The page replacement needs a page
      * allocator, a page-to-virt copy helper and vmalloc_to_page for the image
      * pages; if any is missing the overlay stays on the older read paths. */
-    f_gup_fast = (gup_fast_t)lookup("get_user_pages_fast");
+    g_foll_get = uz_btf_enum_flag(btf, "FOLL_GET", kver < VERSION(6, 3, 0) ? 0x04U : 0);
+    g_foll_fast_only = uz_btf_enum_flag(btf, "FOLL_FAST_ONLY",
+                                     kver < VERSION(6, 3, 0) ? 0x80000U : 0);
+    /* LTO can also bypass get_user_pages_fast(). The shared entry has a
+     * 64-bit page count and also accepts PIN / FAST_ONLY callers. Exclude
+     * both: their accounting or atomic context is outside this overlay. */
+    g_gup_internal = 0;
+    if (g_foll_get && g_foll_fast_only) {
+        gup_name = "internal_get_user_pages_fast";
+        if (!uz_btf_signature(btf, kclf_btf_func_proto(btf, gup_name), "illip") ||
+            !(f_gup_fast = lookup(gup_name))) {
+            gup_name = "gup_fast_fallback";
+            f_gup_fast = uz_btf_signature(btf, kclf_btf_func_proto(btf, gup_name), "illip") ?
+                         lookup(gup_name) : 0;
+        }
+        g_gup_internal = f_gup_fast != 0;
+    }
+    if (!f_gup_fast) {
+        gup_name = "get_user_pages_fast";
+        f_gup_fast = uz_symbol_abi(btf, gup_name, "iliip") ? lookup(gup_name) : 0;
+    }
     f_alloc_pages = (alloc_pages_t)lookup("__alloc_pages");
     if (!f_alloc_pages && uz_symbol_abi(btf, "__alloc_pages_noprof", "piiip"))
         f_alloc_pages = (alloc_pages_t)lookup("__alloc_pages_noprof");
     f_put_page = (put_page_t)lookup("put_page");
     f_copy_highpage = (copy_highpage_t)lookup("copy_highpage");
     f_vmalloc_to_page = (vmalloc_to_page_t)lookup("vmalloc_to_page");
-    /* get_user_pages_fast() is a fixed four-argument entry on every supported
-     * arm64 kernel; some builds omit its BTF FUNC record, so trust kallsyms. */
-    (void)btf;
     if (f_alloc_pages && !uz_symbol_abi(btf, "__alloc_pages", "piiip"))
         f_alloc_pages = 0;
     if (f_put_page && !uz_symbol_abi(btf, "put_page", "vp")) f_put_page = 0;
@@ -5790,18 +5825,26 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
         kver < VERSION(6, 3, 0) ? 0x40000U : 0);
     g_foll_longterm = uz_btf_enum_flag(btf, "FOLL_LONGTERM",
         kver < VERSION(6, 3, 0) ? 0x10000U : 0x100U);
+    if (g_gup_internal && !g_foll_pin) f_gup_fast = 0;
     f_unpin_page = (void (*)(void *))lookup("unpin_user_page");
     if (!uz_symbol_abi(btf, "unpin_user_page", "vp")) f_unpin_page = 0;
     if (uz_btf_signature(btf, kclf_btf_func_proto(btf, "try_grab_page"), "bpi"))
         f_grab_page_bool = (_Bool (*)(void *, unsigned))lookup("try_grab_page");
     if (uz_btf_signature(btf, kclf_btf_func_proto(btf, "try_grab_page"), "ipi"))
         f_grab_page_int = (int (*)(void *, unsigned))lookup("try_grab_page");
-    f_pin_remote = lookup("pin_user_pages_remote");
-    g_pin_argc = 0;
-    if (uz_btf_signature(btf, kclf_btf_func_proto(btf, "pin_user_pages_remote"), "lmllippp"))
-        g_pin_argc = 7;
-    if (uz_btf_signature(btf, kclf_btf_func_proto(btf, "pin_user_pages_remote"), "lmllipp"))
-        g_pin_argc = 6;
+    /* Android LTO can inline the public pin wrapper into process_vm_readv.
+     * Prefer its shared implementation when BTF proves the complete ABI.
+     * That entry also serves FOLL_GET, so the hook must require FOLL_PIN. */
+    g_pin_internal = 0;
+    f_pin_remote = lookup("__get_user_pages_remote");
+    g_pin_argc = f_pin_remote ? uz_remote_gup_argc(btf, "__get_user_pages_remote") : 0;
+    if (g_pin_argc) {
+        pin_name = "__get_user_pages_remote";
+        g_pin_internal = 1;
+    } else {
+        f_pin_remote = lookup(pin_name);
+        g_pin_argc = f_pin_remote ? uz_remote_gup_argc(btf, pin_name) : 0;
+    }
     if (!g_pin_argc) f_pin_remote = 0;
     f_gup_slow = lookup("__get_user_pages");
     if (f_gup_slow && !uz_symbol_abi(btf, "__get_user_pages", "lmllippp"))
@@ -5857,6 +5900,11 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
                 read_name, f_copy_out ? write_name : "control-gup",
                 f_find_task_by_vpid ? "task" : "none",
                 g_fp_ready ? fp_name : "none", foll_force, g_page_shift);
+    if (g_verbose)
+        pr_info("urov-z: remote GUP entry=%s/%d internal=%d\n",
+                pin_name, g_pin_argc, g_pin_internal);
+    if (g_verbose)
+        pr_info("urov-z: fast GUP entry=%s internal=%d\n", gup_name, g_gup_internal);
     if (g_verbose)
         pr_info("urov-z: gup_fast=%d alloc_pages=%d put_page=%d copy_highpage=%d "
                 "vmalloc_to_page=%d pin_remote=%d gup_slow=%d page_ref=%d/%d\n",

@@ -19,7 +19,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <zlib.h>
-#include "../module/abi.h"
+#include "urov/urov.h"
 
 extern int uz_fixture(void);
 extern unsigned uz_self_read(const void *);
@@ -31,7 +31,7 @@ extern void uz_read_ld2(const void *, void *);
 extern void uz_read_ld4(const void *, void *);
 
 struct test_context {
-    struct uz_keys keys;
+    struct urov_client client;
     uint64_t generation;
     unsigned caps;
     size_t page_size;
@@ -59,10 +59,8 @@ static void report(struct test_context *t, const char *format, ...)
 }
 static struct urov_z_request request(unsigned op)
 {
-    struct urov_z_request q = {0};
-    q.size = sizeof(q);
-    q.version = UROV_Z_ABI_VERSION;
-    q.op = (uint16_t)op;
+    struct urov_z_request q;
+    urov_request_init(&q, op);
     return q;
 }
 static long control(struct test_context *t, struct urov_z_request *q)
@@ -70,11 +68,7 @@ static long control(struct test_context *t, struct urov_z_request *q)
     struct urov_z_request input = *q;
     for (unsigned attempt = 0; attempt < 100; ++attempt) {
         struct urov_z_request wire = input;
-        wire.mac = urov_z_request_mac(t->keys.mac, &wire);
-        long ret = syscall(__NR_prctl, (unsigned long)t->keys.option,
-                           (unsigned long)UROV_Z_PRCTL_MAGIC, (unsigned long)wire.op,
-                           &wire, (unsigned long)sizeof(wire));
-        if (ret < 0) ret = -errno;
+        long ret = urov_call(&t->client, &wire);
         if (ret != -EBUSY) {
             *q = wire;
             return ret;
@@ -85,31 +79,38 @@ static long control(struct test_context *t, struct urov_z_request *q)
 }
 static long deactivate(struct test_context *t)
 {
-    struct urov_z_request q = request(UROV_Z_DEACTIVATE);
-    q.session = 1;
-    return control(t, &q);
+    for (unsigned attempt = 0; attempt < 100; ++attempt) {
+        int ret = urov_deactivate(&t->client);
+        if (ret != -EBUSY) return ret;
+        usleep(2000);
+    }
+    return -EBUSY;
 }
 static long register_pages(struct test_context *t, struct uz_page_desc *d, unsigned count)
 {
-    struct urov_z_request q = request(UROV_Z_REGISTER);
-    q.page_count = count;
-    q.page_stride = sizeof(*d);
-    q.pages_addr = (uintptr_t)d;
-    long rc = control(t, &q);
-    if (!rc) t->generation = q.generation;
+    struct urov_page pages[2];
+    struct urov_status status;
+    if (count > 2) return -EINVAL;
+    for (unsigned i = 0; i < count; ++i) pages[i] = (struct urov_page){
+        .base = (const void *)(uintptr_t)d[i].base,
+        .image = (const void *)(uintptr_t)d[i].fake_addr,
+        .offset = d[i].fake_off, .length = d[i].fake_len,
+    };
+    long rc = urov_register_pages(&t->client, pages, count, &status);
+    if (!rc) t->generation = status.generation;
     return rc;
 }
 static long set_page(struct test_context *t, unsigned index, const void *image)
 {
-    struct urov_z_request q = request(UROV_Z_SET_PAGE);
-    q.session = 1;
-    q.expected_generation = t->generation;
-    q.reserved = index;
-    q.fake_addr = (uintptr_t)image;
-    q.length = (uint32_t)t->page_size;
-    long rc = control(t, &q);
-    if (!rc) t->generation = q.generation;
-    return rc;
+    for (unsigned attempt = 0; attempt < 100; ++attempt) {
+        struct urov_status status;
+        int ret = urov_set_page(&t->client, index, t->generation, 0, image,
+                                (uint32_t)t->page_size, &status);
+        if (!ret) t->generation = status.generation;
+        if (ret != -EBUSY) return ret;
+        usleep(2000);
+    }
+    return -EBUSY;
 }
 static int uniform(const unsigned char *bytes, size_t n, unsigned char expected)
 {
@@ -158,6 +159,7 @@ static int concurrency(struct test_context *t, unsigned char *image)
     };
     pthread_t threads[2];
     unsigned created = 0;
+    unsigned updates = 0;
     int good = 1;
     for (; created < 2; ++created) {
         if (pthread_create(&threads[created], NULL, reader_thread, &w[created])) {
@@ -165,35 +167,46 @@ static int concurrency(struct test_context *t, unsigned char *image)
             break;
         }
     }
-    usleep(10000);
+    for (unsigned wait = 0; good && wait < 100; ++wait) {
+        if (atomic_load(&w[0].reads) && atomic_load(&w[1].reads)) break;
+        usleep(1000);
+    }
+    if (!atomic_load(&w[0].reads) || !atomic_load(&w[1].reads)) good = 0;
     for (unsigned i = 0; good && i < 48; ++i) {
         memset(image, (i & 1U) ? 0x88 : 0x44, t->page_size);
         if (set_page(t, 0, image)) good = 0;
+        else ++updates;
     }
     for (unsigned i = 0; i < created; ++i) atomic_store(&w[i].stop, 1);
     for (unsigned i = 0; i < created; ++i) pthread_join(threads[i], NULL);
-    uint64_t reads = atomic_load(&w[0].reads) + atomic_load(&w[1].reads);
+    uint64_t direct_reads = atomic_load(&w[0].reads);
+    uint64_t other_reads = atomic_load(&w[1].reads);
+    uint64_t reads = direct_reads + other_reads;
     uint64_t errors = atomic_load(&w[0].errors) + atomic_load(&w[1].errors);
-    report(t, "CONCURRENCY updates=48 reads=%" PRIu64 " torn_or_failed=%" PRIu64, reads, errors);
-    return good && reads && !errors;
+    report(t, "CONCURRENCY updates=%u reads=%" PRIu64 " direct=%" PRIu64
+           " %s=%" PRIu64 " torn_or_failed=%" PRIu64,
+           updates, reads, direct_reads, w[1].use_readv ? "readv" : "direct2", other_reads, errors);
+    return good && updates == 48 && direct_reads && other_reads && !errors;
 }
 
 #define CHECK(condition, name) do {     ++t->checks;     if (!(condition)) {         ++t->failed; report(t, "FAIL %s line=%d errno=%d", name, __LINE__, errno);         goto done;     }     report(t, "PASS %s", name); } while (0)
 
 static void run_tests(struct test_context *t, const char *hex, int baseline)
 {
-    unsigned char key[16], sample[64];
+    unsigned char sample[64];
     unsigned char *original = NULL, *image = NULL;
     unsigned char *base = (unsigned char *)(uintptr_t)uz_fixture;
     struct urov_z_request q;
+    struct urov_info info;
+    struct urov_status status;
     struct uz_page_desc d[2];
-    struct utsname info;
+    struct utsname kernel_info;
     int memfd = -1, pipefd[2] = {-1, -1};
     int active = 0;
-    uname(&info);
+    uname(&kernel_info);
     t->page_size = (size_t)sysconf(_SC_PAGESIZE);
     t->target = base;
-    report(t, "UROV-Z app uid=%u kernel=%s page_size=%zu", (unsigned)getuid(), info.release, t->page_size);
+    report(t, "UROV-Z app uid=%u kernel=%s page_size=%zu", (unsigned)getuid(), kernel_info.release, t->page_size);
     {
         char domain[128] = {0};
         int fd = open("/proc/self/attr/current", O_RDONLY);
@@ -211,16 +224,26 @@ static void run_tests(struct test_context *t, const char *hex, int baseline)
         CHECK(uz_self_read(base + 256) == 0x11, "baseline self-reading code");
         goto done;
     }
-    CHECK(hex && !uz_parse_key(hex, (unsigned)strlen(hex), key), "module key format");
-    uz_derive(key, &t->keys);
-    memset(key, 0, sizeof(key));
-    q = request(UROV_Z_QUERY);
-    CHECK(!control(t, &q), "authenticated QUERY");
-    t->caps = (unsigned)q.session_flags;
+    CHECK(!urov_client_init(&t->client, hex), "API module key initialization");
+    CHECK(!urov_query(&t->client, &info), "API authenticated QUERY");
+    t->caps = (unsigned)info.capabilities;
     report(t, "CAPS 0x%x max_pages=%u page_shift=%u ABI=%u size=%zu",
-           t->caps, q.page_count, q.page_stride, q.version, sizeof(q));
-    CHECK((t->caps & UROV_Z_CAP_PAGE_AP) && q.page_stride < 32 &&
-          (1UL << q.page_stride) == t->page_size, "PAGE_AP capability and geometry");
+           t->caps, info.max_pages, info.page_shift, info.abi_version, sizeof(q));
+    CHECK((t->caps & UROV_Z_CAP_PAGE_AP) && info.page_shift < 32 &&
+          (1UL << info.page_shift) == t->page_size, "PAGE_AP capability and geometry");
+    {
+        struct urov_client invalid = {0};
+        struct urov_info unchanged = info;
+        CHECK(urov_client_init(&invalid, "bad") == -EINVAL, "API rejects malformed key");
+        CHECK(urov_query(&invalid, &info) == -EINVAL && !memcmp(&info, &unchanged, sizeof(info)),
+              "API invalid context preserves output");
+        CHECK(!urov_client_init(&invalid, "00000000000000000000000000000000") &&
+              urov_query(&invalid, &info) == -EINVAL, "API wrong key rejected by module");
+        urov_client_destroy(&invalid);
+        CHECK(urov_query(&invalid, &info) == -EINVAL, "API destroyed context rejected");
+        CHECK(urov_register_inline(&t->client, base, 256, sample, 7, &status) == -EINVAL,
+              "API rejects invalid inline length");
+    }
     original = malloc(2 * t->page_size);
     image = malloc(2 * t->page_size);
     CHECK(original && image, "image buffers");
@@ -273,8 +296,18 @@ static void run_tests(struct test_context *t, const char *hex, int baseline)
               uniform(sample, 32, 0x6a), "proc self mem image");
     } else report(t, "SKIP remote VM capability unavailable");
     if (t->caps & UROV_Z_CAP_READV) {
-        CHECK(self_readv(sample, base + 256, 32) == 32 &&
+        errno = 0;
+        long copied = self_readv(sample, base + 256, 32);
+        report(t, "READV returned=%ld errno=%d sample=%02x%02x%02x%02x",
+               copied, errno, sample[0], sample[1], sample[2], sample[3]);
+        CHECK(copied == 32 &&
               uniform(sample, 32, 0x6a), "process_vm_readv image");
+        CHECK(self_readv(sample, base + t->page_size - 8, 16) == 16 &&
+              !memcmp(sample, image + t->page_size - 8, 16), "process_vm_readv cross-page image");
+        errno = 0;
+        CHECK(self_readv(sample, (const void *)1, 16) == -1 && errno == EFAULT,
+              "process_vm_readv invalid source preserves EFAULT");
+        CHECK(uz_read8(base + 256) == 0x6a, "overlay survives failed readv");
     } else report(t, "SKIP process_vm_readv capability unavailable");
     if (t->caps & UROV_Z_CAP_GUP) {
         CHECK(!pipe(pipefd), "vmsplice pipe");
@@ -282,6 +315,11 @@ static void run_tests(struct test_context *t, const char *hex, int baseline)
         CHECK(vmsplice(pipefd[1], &vector, 1, 0) == 32 &&
               read(pipefd[0], sample, 32) == 32 && uniform(sample, 32, 0x6a),
               "vmsplice image page");
+        vector = (struct iovec){(void *)1, 32};
+        errno = 0;
+        CHECK(vmsplice(pipefd[1], &vector, 1, 0) == -1 && errno == EFAULT,
+              "vmsplice invalid source preserves EFAULT");
+        CHECK(uz_read8(base + 256) == 0x6a, "overlay survives failed GUP");
         close(pipefd[0]); close(pipefd[1]);
         pipefd[0] = pipefd[1] = -1;
     } else report(t, "SKIP GUP capability unavailable");
@@ -299,6 +337,14 @@ static void run_tests(struct test_context *t, const char *hex, int baseline)
     CHECK(uz_read8(base + 256) == 0x88, "overlay after mprotect");
     CHECK(!mprotect(base, t->page_size, PROT_READ | PROT_EXEC), "mprotect RX");
     CHECK(uz_fixture() == 1235, "execute after protection restore");
+    CHECK(!mprotect(base, 1, PROT_READ), "mprotect rounds one-byte length");
+    CHECK(uz_read8(base + 256) == 0x88, "overlay after one-byte mprotect");
+    CHECK(!mprotect(base, 1, PROT_READ | PROT_EXEC), "one-byte mprotect restores RX");
+    CHECK(!mprotect(base, t->page_size, PROT_NONE), "suspend with PROT_NONE");
+    CHECK(!madvise(base, t->page_size, MADV_DONTNEED), "drop suspended target PTE");
+    CHECK(!mprotect(base, t->page_size, PROT_READ | PROT_EXEC), "restore nonresident RX page");
+    CHECK(uz_read8(base + 256) == 0x88 && uz_fixture() == 1235,
+          "first refault republishes armed state");
     CHECK(!madvise(base, t->page_size, MADV_DONTNEED), "drop target PTE");
     CHECK(uz_read8(base + 256) == 0x88, "fault-in rearms PAGE_AP");
     if (t->caps & UROV_Z_CAP_FORK_SNAPSHOT) {
@@ -322,38 +368,52 @@ static void run_tests(struct test_context *t, const char *hex, int baseline)
         unsigned char token = 1;
         int released = write(pipefd[1], &token, 1) == 1;
         close(pipefd[1]); pipefd[1] = -1;
-        int status = 0;
-        int waited = waitpid(child, &status, 0) == child;
-        report(t, "FORK status=%d deactivate_refused=%d updated=%d", status, refused, updated);
+        int child_status = 0;
+        int waited = waitpid(child, &child_status, 0) == child;
+        report(t, "FORK status=%d deactivate_refused=%d updated=%d", child_status, refused, updated);
         CHECK(refused, "DEACTIVATE refuses a live child snapshot");
-        CHECK(updated && released && waited && WIFEXITED(status) &&
-              WEXITSTATUS(status) == 0, "child snapshot isolation, execution and descendant guard");
+        CHECK(updated && released && waited && WIFEXITED(child_status) &&
+              WEXITSTATUS(child_status) == 0, "child snapshot isolation, execution and descendant guard");
     } else report(t, "SKIP fork snapshot capability unavailable");
-    q = request(UROV_Z_STATUS);
-    q.session = 1;
-    CHECK(!control(t, &q) && q.state == UROV_Z_ACTIVE &&
-          q.page_count == 2 && q.failures == 0, "active STATUS");
+    CHECK(!urov_get_status(&t->client, &status) && status.state == UROV_Z_ACTIVE &&
+          status.page_count == 2 && status.armed_pages == 2 && status.failures == 0,
+          "API active STATUS");
     report(t, "COUNTERS hits=%" PRIu64 " replay=%" PRIu64 " failures=%" PRIu64
-           " generation=%" PRIu64, q.hits, q.replays, q.failures, q.generation);
+           " generation=%" PRIu64, status.hits, status.replays, status.failures, status.generation);
     CHECK(!deactivate(t), "DEACTIVATE");
     active = 0;
     CHECK(!memcmp(base, original, 2 * t->page_size) && uz_fixture() == 1235,
           "original reads and execution restored");
-    q = request(UROV_Z_REGISTER);
-    q.address = (uintptr_t)base;
-    q.offset = 256;
-    q.length = 8;
-    q.value = UINT64_C(0x123456789abcdef0);
-    CHECK(!control(t, &q), "inline single-page REGISTER");
+    uint64_t inline_value = UINT64_C(0x123456789abcdef0);
+    CHECK(!urov_register_inline(&t->client, base, 256, &inline_value, sizeof(inline_value), &status),
+          "API inline single-page REGISTER");
     active = 1;
     CHECK(uz_read64(base + 256) == UINT64_C(0x123456789abcdef0), "inline 64-bit value");
-    q = request(UROV_Z_SET);
-    q.session = 1;
-    q.expected_generation = 1;
-    q.length = 8;
-    q.value = UINT64_C(0xfedcba9876543210);
-    CHECK(!control(t, &q) && uz_read64(base + 256) == UINT64_C(0xfedcba9876543210),
-          "inline SET generation");
+    inline_value = UINT64_C(0xfedcba9876543210);
+    CHECK(!urov_set_inline(&t->client, status.generation, &inline_value, sizeof(inline_value), &status) &&
+          uz_read64(base + 256) == inline_value && status.generation == 2,
+          "API inline SET generation");
+    {
+        unsigned char before[sizeof(status)];
+        memcpy(before, &status, sizeof(status));
+        CHECK(urov_set_inline(&t->client, 1, &inline_value, sizeof(inline_value), &status) == -EAGAIN &&
+              !memcmp(&status, before, sizeof(status)), "API stale update preserves output");
+    }
+    CHECK(!deactivate(t), "API inline DEACTIVATE");
+    active = 0;
+    CHECK(!urov_get_status(&t->client, &status) && status.state == UROV_Z_INACTIVE,
+          "API inactive STATUS");
+    CHECK(urov_register_inline(&t->client, base, 256, &inline_value, 8, NULL) == -EINVAL &&
+          !urov_get_status(&t->client, &status) && status.state == UROV_Z_INACTIVE,
+          "API null output rejected before registration");
+    memset(sample, 0x52, 32);
+    CHECK(!urov_register_inline(&t->client, base, 256, sample, 32, &status),
+          "API 32-byte inline REGISTER");
+    active = 1;
+    CHECK(!memcmp(base + 256, sample, 32), "API full inline payload layout");
+    memset(sample, 0x93, 32);
+    CHECK(!urov_set_inline(&t->client, status.generation, sample, 32, &status) &&
+          !memcmp(base + 256, sample, 32), "API full inline SET payload");
 done:
     if (active) {
         long rc = deactivate(t);
@@ -376,7 +436,7 @@ Java_com_example_urovz_MainActivity_runNative(JNIEnv *env, jclass cls, jstring k
     run_tests(t, hex, baseline);
     if (hex) (*env)->ReleaseStringUTFChars(env, key, hex);
     jstring result = (*env)->NewStringUTF(env, t->output);
-    memset(&t->keys, 0, sizeof(t->keys));
+    urov_client_destroy(&t->client);
     free(t);
     return result;
 }

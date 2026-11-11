@@ -4,7 +4,9 @@
 
 Android ARM64 用户态代码页读取覆盖实验模块，基于 UROV-Y 2.28.0，固定使用 **PAGE_AP / all-callers**。执行原始代码，数据读取由注册的影像替代；无需配置读取指令地址或调用者白名单。详细原理、ABI、兼容条件和限制见 [DESIGN.md](DESIGN.md)。
 
-分支只保留 `module/`、`app/` 源码、构建脚本和两份文档；`out/` 中的 KPM、APK、测试日志、密钥与 BTF 不进入 Git。原实现可从 `dev` / `3679b4f` 查看。
+源码分为 `module/`、`app/` 和独立用户态库 `api/`；`out/` 中的 KPM、APK、测试日志、密钥与 BTF 不进入 Git。原实现可从 `dev` / `3679b4f` 查看。2026-11-11 的实现审查、修复证据和未解决问题见 [AUDIT.md](AUDIT.md)。当前 `main` 发布 UROV-Z 1.0.0；已编译 KPM、测试 APK 与校验值见 [Releases](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.0.0)，本次 Pixel 6 发布验证见 [RELEASE-1.0.0.md](RELEASE-1.0.0.md)。
+
+用户态 C/C++ 接口见 [api/README.md](api/README.md)：查询、注册、更新、状态和注销均已封装；无需应用自己实现 syscall 参数和 MAC。构建静态库/动态库：`.\api\build.ps1 -Ndk <NDK目录>`。
 
 ### 编译
 
@@ -53,7 +55,7 @@ adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z status
 
 ### 兼容性与参数
 
-- 实机验证：Pixel 6，Android API 36，Linux 6.1.134，4 KB 页；App 49 项、自检 4152 项通过。5.15 / 6.12 / 6.18 / 16 KB 目前仅有 BTF 静态验证。
+- 实机证据：小米 13 / fuxi，Android 13，Linux 5.15.74，4 KB；Pixel 6 / oriole，Android 16，Linux 6.1.134，4 KB。API 接入后两台设备的 App 均在 live / detached BTF 下通过 73 项，模块自检 4152 项；Pixel 6 的本次发布验证详见发布记录。6.12 / 6.18 / 16 KB 目前仅有 BTF 静态验证。
 - 兼容目标为 Linux **5.4–6.x**、AArch64、4 KB / 16 KB 普通页。必须具备可识别的符号和准确 BTF；不支持的布局/页表会拒绝加载。5.0–5.3、32 位 App、64 KB、LPA2 未支持。
 - 可选加载参数：`verbose`、`max_pages=N`（1–4096）、`max_kb=N`（64–65536，默认 8192，仅主影像池）、`btf=/absolute/path/kernel.uzbtf`。没有其他模式或 caller 参数。
 - 目标必须是可读可执行、当前不可写的文件映射；普通私有 `.text` 最适合测试。使用未带标签的用户地址。App 明确禁用 native heap pointer tagging。
@@ -71,7 +73,7 @@ adb push out/kernel.uzbtf /data/local/tmp/kernel.uzbtf
 
 UROV-Z is an Android ARM64 code-page read-overlay experiment derived from UROV-Y 2.28.0. It uses **PAGE_AP / all-callers only**: original instructions execute while supported data reads receive a registered image. No reader-site addresses or caller allowlist are required. [DESIGN.md](DESIGN.md) describes the implementation, ABI, compatibility conditions and limitations.
 
-This branch contains module and App sources, build scripts and two documents. Generated KPM/APK files, logs, keys and BTF remain under ignored `out/`. The original implementation remains in `dev` / `3679b4f`.
+This branch contains module, App and standalone userspace API sources. Generated KPM/APK files, logs, keys and BTF remain under ignored `out/`. The original implementation remains in `dev` / `3679b4f`. See [AUDIT.md](AUDIT.md) for the review and unresolved limitations, and [api/README.md](api/README.md) for the C/C++ API, static/shared libraries and CMake integration. Current `main` publishes UROV-Z 1.0.0: download the KPM, test APK and checksums from [Releases](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.0.0). [RELEASE-1.0.0.md](RELEASE-1.0.0.md) records the current Pixel 6 release validation.
 
 ### Build
 
@@ -85,7 +87,7 @@ After `RESULT PASS`, verify global `ctl0 status` reports `inactive pages=0 armed
 
 ### Compatibility
 
-The connected Pixel 6 / Android API 36 / Linux 6.1.134 / 4 KB device passed 49 App checks and 4152 core checks. Linux 5.15, 6.12, 6.18 and 16 KB configurations have BTF inspection results only, not runtime certification.
+Xiaomi 13 / fuxi / Android 13 / Linux 5.15.74 / 4 KB and Pixel 6 / oriole / Android 16 / Linux 6.1.134 / 4 KB both passed 73 App checks through the API and 4152 core checks with live and detached BTF. The release record documents the current Pixel 6 runs. Linux 6.12, 6.18 and 16 KB configurations have BTF inspection results only, not runtime certification.
 
 The target range is **Linux 5.4–6.x**, AArch64 and ordinary 4 KB / 16 KB pages, subject to validated symbols, BTF and translation geometry. Linux 5.0–5.3, AArch32, 64 KB and LPA2 are unsupported. Registration accepts readable executable, currently non-writable file mappings. Use untagged user addresses; this App disables native heap pointer tagging.
 

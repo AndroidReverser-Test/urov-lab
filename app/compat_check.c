@@ -112,11 +112,40 @@ static void test_gup_flags(void)
     };
 
     assert(uz_foll_force(&btf, 0x10) == 0x10);
+    assert(uz_btf_enum_flag(&btf, "FOLL_FORCE", 0x10) == 0x10);
     btf.type_len = sizeof(records) / 2;
     assert(uz_foll_force(&btf, 0x10) == 8);
+    assert(uz_btf_enum_flag(&btf, "FOLL_FORCE", 0x10) == 8);
     btf.type_len = sizeof(records);
     assert(!uz_foll_force(&btf, 0x10));
+    assert(!uz_btf_enum_flag(&btf, "FOLL_FORCE", 0x10));
     puts("GUP: version fallback, BTF override and conflicting values PASS");
+}
+
+static void test_gup_signatures(void)
+{
+    struct fixture f = {.strings_used = 1};
+    unsigned i = add_type(&f, "int", 1, 0, 4);
+    f.words[f.words_used++] = 32;
+    unsigned l = add_type(&f, "long", 1, 0, 8);
+    f.words[f.words_used++] = 64;
+    unsigned m = add_type(&f, "mm_struct", 4, 0, 8);
+    unsigned mp = add_type(&f, NULL, 2, 0, m);
+    unsigned p = add_type(&f, NULL, 2, 0, 0);
+    add_func(&f, "pin7", l, 7, (unsigned[]){mp, l, l, i, p, p, p});
+    add_func(&f, "pin6", l, 6, (unsigned[]){mp, l, l, i, p, p});
+    add_func(&f, "pin_bad", l, 6, (unsigned[]){mp, l, l, l, p, p});
+    add_func(&f, "fast_public", i, 4, (unsigned[]){l, i, i, p});
+    add_func(&f, "fast_internal", i, 4, (unsigned[]){l, l, i, p});
+    struct kclf_btf btf = fixture_btf(&f);
+    assert(uz_remote_gup_argc(&btf, "pin7") == 7);
+    assert(uz_remote_gup_argc(&btf, "pin6") == 6);
+    assert(!uz_remote_gup_argc(&btf, "pin_bad"));
+    assert(!uz_remote_gup_argc(&btf, "missing"));
+    assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "fast_public"), "iliip"));
+    assert(!uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "fast_public"), "illip"));
+    assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "fast_internal"), "illip"));
+    puts("GUP ABI: remote 6/7 arguments, invalid/missing prototypes and fast count widths PASS");
 }
 
 static void test_build_id(void)
@@ -182,6 +211,11 @@ static void test_saved_btf(const char *path, const char *fault, int expected_arg
     assert(uz_mm_fault_argc(&btf, fault, 0) == expected_args);
     assert(uz_symbol_abi(&btf, "do_mem_abort", "vlsr"));
     assert(uz_foll_force(&btf, 0x10) == 0x10);
+    assert(uz_remote_gup_argc(&btf, "pin_user_pages_remote") == 7);
+    if (expected_args == 5) {
+        assert(uz_remote_gup_argc(&btf, "__get_user_pages_remote") == 7);
+        assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "internal_get_user_pages_fast"), "illip"));
+    }
     printf("%s: MM, VMA and FPSIMD layouts; %s/%d PASS\n", path, fault, expected_args);
     free(data);
 }
@@ -204,6 +238,11 @@ static void test_gki_btf(const char *path)
     assert(uz_mm_fault_argc(&btf, "handle_mm_fault", 0) == 4);
     assert(uz_access_vm_argc(&btf, "access_remote_vm", 0) == 5);
     assert(uz_foll_force(&btf, 0) == 8);
+    assert(uz_remote_gup_argc(&btf, "pin_user_pages_remote") == 6);
+    assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "gup_fast_fallback"), "illip"));
+    assert(uz_btf_enum_flag(&btf, "FOLL_PIN", 0) == 0x80000U);
+    assert(uz_btf_enum_flag(&btf, "FOLL_FAST_ONLY", 0) == 0x100000U);
+    assert(uz_btf_enum_flag(&btf, "FOLL_GET", 0) == 2U);
     printf("%s: MM/VMA/FPSIMD layouts (pgd=%d mmap_lock=%d fpsimd=%d), "
            "handle_mm_fault/4 %s rwsem vmalloc_noprof PASS\n",
            path, layout.mm_pgd, layout.mmap_lock, layout.task_fpsimd, save);
@@ -213,6 +252,7 @@ static void test_gki_btf(const char *path)
 int main(int argc, char **argv)
 {
     test_signatures();
+    test_gup_signatures();
     test_gup_flags();
     test_build_id();
     test_geometry();

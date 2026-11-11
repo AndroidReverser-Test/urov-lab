@@ -10,6 +10,9 @@ $out = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\out\app'))
 $bin = Join-Path $Sdk "build-tools\$BuildTools"
 $android = Join-Path $Sdk "platforms\$Platform\android.jar"
 $clang = Join-Path $Ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin\clang.exe'
+$api = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\api'))
+$apiInclude = '-I' + (Join-Path $api 'include')
+$apiSource = Join-Path $api 'src\urov.c'
 foreach ($dir in @('classes','dex','lib\arm64-v8a')) {
     New-Item -ItemType Directory -Force -Path (Join-Path $out $dir) | Out-Null
 }
@@ -17,10 +20,10 @@ function Check([string]$step) { if ($LASTEXITCODE -ne 0) { throw "$step failed (
 & $clang --target=aarch64-linux-android26 -std=gnu11 -O2 -Wall -Wextra -Werror `
     -fPIC -shared -fno-builtin -fno-omit-frame-pointer -mno-outline-atomics `
     '-Wl,-z,max-page-size=16384' (Join-Path $PSScriptRoot 'app.c') `
-    (Join-Path $PSScriptRoot 'fixture.S') -llog -lz -o (Join-Path $out 'lib\arm64-v8a\liburovz.so')
+    $apiInclude $apiSource (Join-Path $PSScriptRoot 'fixture.S') -llog -lz -o (Join-Path $out 'lib\arm64-v8a\liburovz.so')
 Check 'Native compilation'
 & $clang --target=aarch64-linux-android26 -std=gnu11 -O2 -Wall -Wextra -Werror `
-    (Join-Path $PSScriptRoot 'ctl.c') -o (Join-Path $out 'urovz-query')
+    $apiInclude $apiSource (Join-Path $PSScriptRoot 'ctl.c') -o (Join-Path $out 'urovz-query')
 Check 'QUERY utility'
 & $clang --target=aarch64-linux-android26 -std=gnu11 -O2 -Wall -Wextra -Werror -Wno-unused-function `
     (Join-Path $PSScriptRoot 'compat_check.c') -o (Join-Path $out 'compat-check')

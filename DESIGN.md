@@ -79,8 +79,8 @@ flowchart LR
 | 路径 | 实现与限制 |
 |---|---|
 | `/proc/<pid>/mem`、使用相同 helper 的 ptrace | hook `__access_remote_vm` / `access_remote_vm`，仅覆盖 Linux 已允许且实际成功读取的范围；模块内部读取通过 task 槽位排除 |
-| `process_vm_readv` | hook syscall 和 `pin_user_pages_remote`；在已成功 pin 的源页数组中，以独立影像页替换目标页；保持 Linux 原本的权限检查和目的 iovec 导入逻辑 |
-| `vmsplice` 等普通 fast-GUP 读者 | hook `get_user_pages_fast`，为受支持读路径提供独立、普通引用计数影像页 |
+| `process_vm_readv` | hook syscall，优先挂钩经 BTF 验证的 `__get_user_pages_remote`（仅 FOLL_PIN），否则 `pin_user_pages_remote`；替换成功 pin 的源页，保持原权限检查和 iovec 导入 |
+| `vmsplice` 等普通 fast-GUP 读者 | 优先挂钩经 BTF 验证的 `internal_get_user_pages_fast` / `gup_fast_fallback`，否则 `get_user_pages_fast`；排除 PIN/LONGTERM/FAST_ONLY，使用普通引用计数页；影像分配失败返回错误 |
 | 写 GUP / slow GUP | 保留 native 写入/COW，尝试捕获并同步写后数据和重新 arm；不将长期 pin 转换成临时影像页 |
 
 pin 替换用 `try_grab_page` 的正确 bool/int 约定以及 `unpin_user_page`；不能通过硬编码修改 `struct page` 引用计数来代替 Linux helper。新旧 FOLL 编码及 pin 类型有差异，参考 [Linux 6.1 gup.c](https://raw.githubusercontent.com/torvalds/linux/v6.1/mm/gup.c)、[Linux 6.6 gup.c](https://raw.githubusercontent.com/torvalds/linux/v6.6/mm/gup.c)。BTF 未提供可用签名或必要 helper 缺失时不报告 READV 能力；不存在目的缓冲区重写回退。
@@ -97,7 +97,7 @@ fork 槽在本会话内不循环复用；持续 fork 应分批创建新会话。
 
 ### 7. ABI v1
 
-头文件 [module/abi.h](module/abi.h) 为唯一线格式定义：小端 AArch64，自然 8 字节对齐，184 字节请求、32 字节页描述符，编译期静态断言大小。它与 UROV-Y ABI 不兼容。
+头文件 [api/include/urov/abi.h](api/include/urov/abi.h) 为唯一线格式定义，`module/abi.h` 仅作包含转发：小端 AArch64，自然 8 字节对齐，184 字节请求、32 字节页描述符，编译期静态断言大小与 MAC 偏移。它与 UROV-Y ABI 不兼容。应用集成使用 [用户态 API](api/README.md)。
 
 传输为 `syscall(__NR_prctl, option, magic, op, &request, sizeof(request))`。option 为 `uz_derive` 得到的低 32 位，magic 固定为 `0x42414c5a564f5255`（小端 “UROVZLAB”）。用派生 MAC key 对前 176 字节计算 SipHash-2-4。错误 option/magic/size/version/op/MAC 不会执行控制操作，交还原始 prctl，通常得到 EINVAL。
 
@@ -152,6 +152,8 @@ capability：MULTI=0x1、LD1/2/3/4=0x2/4/8/10、CROSS=0x20、16K=0x80、PAGE_AP=
 
 ### 9. 实际验证记录（2026-11-11）
 
+以下 Pixel 6 数据为原基线记录。小米 13 / fuxi / Android 13 / Linux 5.15.74 / 4 KB 的后续验证：通过独立用户态 API 的 App 在 live / detached BTF 下各通过 73 项，自检 4152 项，卸载后基线 5 项；详细数据和仍未解决的 P1 问题见 [AUDIT.md](AUDIT.md)。公开 GUP wrapper 在该设备上未覆盖实际读取路径，现已增加严格 BTF 校验的内部入口适配；另修复 GUP int 返回值、短长度 mprotect 和非驻留页 armed 发布。1.0.0 发布时又在 Pixel 6 / Android 16 / Linux 6.1.134 重跑了当前 API 版本，两条 BTF 路径均为 73/73，详见 [发布验证](RELEASE-1.0.0.md)。
+
 设备 Pixel 6/oriole，API 36，内核 `6.1.134-android14-11-g66e758f7d0c0-ab13748739`，4 KB，KernelPatch c00。App UID 10286，在 `untrusted_app` 域运行。设备自身时钟与主机日期不同，因此记录以本次工作日期为准。
 
 | 验证 | 结果 |
@@ -168,7 +170,7 @@ capability：MULTI=0x1、LD1/2/3/4=0x2/4/8/10、CROSS=0x20、16K=0x80、PAGE_AP=
 
 49 项包含：原代码执行、独立读取者和页内读取者、两页与跨页 LDP、FPSIMD/LD2/LD4、memcpy/memcmp/strlen/CRC、proc mem/readv/vmsplice、重复/越界描述符拒绝、generation 冲突、并发影像更新、mprotect、丢弃 PTE 后 rearm、fork 快照隔离、存活子进程阻止注销、子进程再次 fork 拒绝，以及内联 REGISTER/SET 与注销恢复。
 
-`app/compat_check.c` 另检查合成 3/4/5 参数 ABI、错误原型、FOLL 值冲突、外置 BTF 错误包、页表几何。保存的真实 BTF 检查通过：5.15.74（vendor `do_handle_mm_fault/5`）、6.1.134、GKI 6.12、GKI 6.18、GKI 6.18 16 KB。后三者及 5.15 **没有在相应内核启动运行本模块**；5.4 仅有 ABI 适配/合成检查。
+`app/compat_check.c` 另检查合成 3/4/5 参数 ABI、错误原型、FOLL 值冲突、外置 BTF 错误包、页表几何。保存的真实 BTF 检查通过：5.15.74（vendor `do_handle_mm_fault/5`）、6.1.134、GKI 6.12、GKI 6.18、GKI 6.18 16 KB。后三者仅有结构检查，**没有在相应内核启动运行本模块**；5.15 后续实机数据见 AUDIT，5.4 仅有 ABI 适配/合成检查。
 
 测试期间修正了 App tagged heap pointer 导致注册失败、子进程文件页未 arm，以及过于宽泛的映射 EBUSY 导致 libc abort；最终结果取修正后的回归。内核日志还存在一次 `pci_pm_suspend` 的 WARN，不在 urov-z 调用栈；不能把整个测试期间描述为零内核告警。没有观察到本模块引起的内核 Oops 或设备重启。
 
@@ -232,8 +234,8 @@ Optional hooks cover paths that bypass the EL0 exception:
 | Path | Mechanism |
 |---|---|
 | proc mem and consumers of remote-VM helpers | Overlay the successfully authorized, returned range in `__access_remote_vm`/`access_remote_vm`; exclude module-internal snapshots |
-| process_vm_readv | Retain a syscall reader reference and replace successfully pinned source pages in `pin_user_pages_remote`; leave native access checks and imported destination iovecs intact |
-| vmsplice / ordinary fast GUP | Return independent image pages with ordinary page references for supported read calls |
+| process_vm_readv | Retain a syscall reader reference; prefer the BTF-verified `__get_user_pages_remote` with FOLL_PIN, otherwise `pin_user_pages_remote`; preserve native authorization and imported iovecs |
+| vmsplice / ordinary fast GUP | Prefer BTF-verified `internal_get_user_pages_fast` / `gup_fast_fallback`, otherwise the public wrapper; exclude PIN/LONGTERM/FAST_ONLY; use independent ordinary-reference pages and return an error if allocation fails |
 | Write / slow GUP | Keep native COW/write behavior and attempt image synchronization/rearming; do not turn long-term pins into temporary overlays |
 
 The pin path uses the correct bool or int return convention of `try_grab_page` and Linux's `unpin_user_page`. It does not patch raw page reference counts. Missing helpers/signatures disable READV capability; there is no destination-buffer rewrite fallback. The Linux GUP sources linked above show the version-dependent conventions.
@@ -248,7 +250,7 @@ DEACTIVATE returns EBUSY while a retained child mm still has users or native rep
 
 ### 7. Wire protocol
 
-`module/abi.h` defines the little-endian, naturally aligned AArch64 ABI: request 184 bytes, descriptor 32 bytes, enforced by static assertions. It is not wire-compatible with Y. Transport is `syscall(__NR_prctl, option, magic, op, &request, sizeof(request))`; option is the derived low 32-bit value, magic is fixed `0x42414c5a564f5255`, and SipHash authenticates the first 176 request bytes. Invalid transport/authentication is passed to native prctl, normally returning EINVAL.
+`api/include/urov/abi.h` defines the little-endian, naturally aligned AArch64 ABI; `module/abi.h` forwards to that shared definition. Request size is 184 bytes and descriptor size is 32 bytes, enforced with size/MAC-offset assertions. It is not wire-compatible with Y. Transport is `syscall(__NR_prctl, option, magic, op, &request, sizeof(request))`; option is the derived low 32-bit value, magic is fixed `0x42414c5a564f5255`, and SipHash authenticates the first 176 request bytes. Invalid transport/authentication is passed to native prctl, normally returning EINVAL. Application integrations can use the [standalone C/C++ API](api/README.md).
 
 The offset table above is normative for both language sections. In particular:
 
@@ -278,13 +280,15 @@ The App SO uses 16384-byte maximum segment alignment; its 32 KB fixture is 16 KB
 
 ### 9. Observed validation, 2026-11-11
 
+The Pixel 6 data below belongs to the original baseline. Later fuxi / Android 13 / Linux 5.15.74 / 4 KB runs passed 73 App checks through the new userspace API with both live and detached BTF, 4152 core checks and five post-unload baseline checks. [AUDIT.md](AUDIT.md) records that evidence and remaining P1 limitations. Public GUP hooks missed actual read paths on this vendor build; strictly BTF-checked internal entries now cover them. Other fixes address signed int GUP returns, short mprotect ranges and armed-state publication after refault. The 1.0.0 release also reran the current API version on Pixel 6 / Android 16 / Linux 6.1.134, passing 73/73 through both BTF paths; see [release validation](RELEASE-1.0.0.md).
+
 Pixel 6/oriole, Android API 36, Linux `6.1.134-android14-11-g66e758f7d0c0-ab13748739`, 4 KB, KernelPatch c00. App UID 10286 ran in the ordinary untrusted_app domain. The device clock differs from the work date.
 
 Strict ARM64 compilation passed. Core selftest passed 4152 checks; baseline passed five; the full App passed 49 with zero failures. Both live and detached BTF paths were exercised. The final detached run completed 48 image updates with 421594 worker reads and zero torn/failed samples; STATUS reported generation 50, hits 422503, replay 0 and failures 0. Wrong Build ID was rejected before hook installation, and a wrong key produced EINVAL. After successful deactivation and unload, baseline passed again and the device boot ID was unchanged.
 
 Coverage includes native execution, independent and target-page readers, two-page/cross-page LDP, FPSIMD/LD2/LD4, libc routines and CRC, proc mem/readv/vmsplice, invalid descriptors, generation conflicts, concurrent updates, mprotect, refault rearm, child snapshot isolation, live-child deactivation refusal, descendant-fork rejection, inline REGISTER/SET and restoration.
 
-`app/compat_check.c` also passed synthetic ABI, invalid signature, FOLL conflict, malformed detached-BTF and geometry checks. Real saved BTF passed for vendor 5.15.74, connected 6.1.134, GKI 6.12, GKI 6.18 and GKI 6.18 16 KB. These are structural checks: the module was not boot-tested on those other kernels. Linux 5.4 has adapter/synthetic coverage only.
+`app/compat_check.c` also passed synthetic ABI, invalid signature, FOLL conflict, malformed detached-BTF and geometry checks. Real saved BTF passed for vendor 5.15.74, connected 6.1.134, GKI 6.12, GKI 6.18 and GKI 6.18 16 KB. The three GKI configurations have structural checks only; the later 5.15 runtime evidence is recorded in AUDIT. Linux 5.4 has adapter/synthetic coverage only.
 
 Development regressions exposed and fixed tagged heap pointers in the test App, missing child PTE arming, and overly broad mapping EBUSY causing a libc abort. Final results are from corrected runs. A separate `pci_pm_suspend` WARN appeared in the kernel log without a urov-z stack; the entire session must not be described as warning-free. No module-attributed kernel Oops or device reboot was observed.
 
