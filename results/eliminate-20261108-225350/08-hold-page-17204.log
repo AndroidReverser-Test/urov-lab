@@ -1,7 +1,0 @@
---------- beginning of main
-10-05 13:28:52.827 17204 17229 I urovdetect: CONTEXT pid=17204 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
-10-05 13:28:52.827 17204 17229 I urovdetect: BEGIN mode=z-quiesce repeats=3
-10-05 13:28:52.893 17204 17229 I urovdetect: ELIM_EXEC name=hold_active n=3 expected=1 match=3 clean=0 unknown=0 accepted=288 failed=288 control_failed=0 total_ns=23215374 max_ns=10148845
-10-05 13:28:52.912 17204 17229 I urovdetect: ELIM_STORE name=hold_active n=3 expected=0 match=0 clean=3 unknown=0 completed=96 stores=0 total_ns=17522583 max_ns=6364502
-10-05 13:28:52.912 17204 17229 I urovdetect: ELIM_HOLD_READY pid=17204 uid=10284 mode=page
-10-05 13:29:04.973 17204 17229 I urovdetect: ELIM_HOLD_QUIESCED pid=17204 mode=page

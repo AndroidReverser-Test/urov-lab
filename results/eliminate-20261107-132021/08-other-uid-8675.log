@@ -1,8 +1,0 @@
---------- beginning of main
-10-04 03:55:47.205  8675  8698 I urovdetect: CONTEXT pid=8675 uid=10285 selinux=u:r:untrusted_app:s0:c29,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
-10-04 03:55:47.205  8675  8698 I urovdetect: BEGIN mode=z-observer repeats=12
-10-04 03:55:47.332  8675  8698 I urovdetect: ELIM_EXEC name=unregistered n=12 expected=0 match=0 clean=11 unknown=1 accepted=1152 failed=1 control_failed=0 total_ns=122530274 max_ns=31720703
-10-04 03:55:47.373  8675  8698 I urovdetect: ELIM_STORE name=unregistered n=12 expected=0 match=0 clean=12 unknown=0 completed=384 stores=0 total_ns=37656087 max_ns=3496827
-10-04 03:55:47.375  8675  8698 I urovdetect: CONTEXT pid=8675 uid=10285 selinux=u:r:untrusted_app:s0:c29,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
-10-04 03:55:47.375  8675  8698 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=58 failures=0 mode=z-observer
-10-04 03:55:47.560  8675  8675 I urovdetect: DETECT_RESULT PASS mode=z-observer worker_ms=351 ui_ticks=126 ui_max_gap_ms=28 native=PASS cases=2 assertions=58 failures=0

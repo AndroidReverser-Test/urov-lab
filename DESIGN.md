@@ -1,298 +1,298 @@
-# UROV-LAB：ARM64 读取异常覆盖完整设计
+# UROV-Z 1.0.0 — 原理与实现 / Design and implementation
 
-> 历史记录（2026-11-02）。设计中的“KPM 内独立异常后端”已于 2026-11-03 实现并完成真机活动覆盖，见 [README.md](README.md) 与 [RESULTS_OVERLAY.md](RESULTS_OVERLAY.md)。下文保留当时设计与证据；其中 CORE-1 常驻内核部分未采用。
->
-> 2026-11-04 增补：普通 app 支持（`__NR_prctl` 控制通道、一页只读可执行文件映射、mm 所有权与死 owner 回收）已实现并验收，见 [APP_OVERLAY.md](APP_OVERLAY.md)。本文 LAB-1 的 sealed memfd/单页 `MAP_SHARED` 约束仍是 root 验收路径；app 路径不再要求 memfd，但页仍需“一页、只读、可执行、文件后备、无 `VM_MAYWRITE`”。
+## 中文
 
-日期：2026-11-02。状态：设计、解码/模拟核心、预检KPM及部分真机测试已完成，活动覆盖后端尚未实现；不是已通过完整真机覆盖验收的 KPM。最新证据见 `IMPLEMENTATION_RESULTS.md`，下一阶段详细实施契约见 `BACKEND_CONTRACT.md`。
+### 1. 目标与边界
 
-本文承接仓库根目录 `ARM64_USER_READ_OVERLAY_DESIGN.md` 与 `../urov-probe/` 的设备验证。原文的通用目标不变；这里明确当前设备能做的受限实验、不能省略的可靠性条件，以及实验到完整后端的实现边界。测试细则见 `TEST_PLAN.md`。
+UROV-Z 为 Android AArch64 提供代码页读取覆盖实验：目标页的指令仍从原映射执行，受支持的数据读取返回另外注册的页影像。唯一后端为 **PAGE_AP**，唯一读取策略为 **all-callers**。既不提供 BRK/UXN 后端，也没有 reader-site / caller 白名单、模式切换或调用栈授权。
 
-## 1. 决策与可交付边界
+all-callers 的准确含义是：对会话所覆盖地址空间与目标页内的受支持读取，不检查读取指令的 PC、LR 或调用者身份。它不表示系统中任意别名、任意设备 DMA、任意内核读取接口都被覆盖。会话控制仍要求模块密钥和 owner mm；fork 子进程的影像继承有明确限制。
 
-采用“原页取指 + 数据读取权限异常 + 软件模拟普通 load”的路线。禁止硬件断点/观察点、单步、每次读取临时开放 PTE、改写读取点、全局关闭 PAN/CFI、修改全局 protection_map。
+本版本是实验模块，优先验证文件映射中保持 RX 的 `.text` 页。内核版本号只是第一层筛选；运行时结构布局、函数签名、页表几何、可选 hook 是否成立共同决定可用能力。未在设备上运行的内核不能仅凭编译或 BTF 检查宣称稳定兼容。
 
-当前 Pixel 6 没有 EPAN，正常 `PROT_EXEC` 仍可数据读取。底层权限分离在架构上可表达，但强制 raw-XOM 会使相关映射失去原有 PAN 读取隔离。上游正因此撤回了这类无 EPAN 的用户 XOM；不可把本实验称为保留内核隔离的生产方案。[上游撤回说明](https://kernel.googlesource.com/pub/scm/linux/kernel/git/jbarnes/linux/+/24cecc37746393432d994c0dbc251fb9ac7c5d72)
+### 2. 对 UROV-Y 的分析与取舍
 
-明确区分两个交付档位：
+分析基线是独立仓库 `dev` 的 `3679b4f`，UROV-Y 2.28.0。旧源码保留在 Git 历史；本分支工作树仅交付 Z。
 
-| 档位 | 范围 | 可靠性上限 | 当前状态 |
-|---|---|---|---|
-| LAB-1 | 精确内核、合作测试进程、一页 sealed memfd、一个 8/16/24/32 字节覆盖 | 可验证的受限实验；接受局部 PAN 退化，不保证任意应用生命周期 | 已在 Pixel 6 上通过活动覆盖验收 |
-| CORE-1 | 匹配内核中的常驻后端 + 薄 KPM 管理 | 可建立异常入口、MM 生命周期及代码释放的完整协议；生产目标要求 EPAN/等价隔离 | 设计方案，需内核/KP 核心集成 |
+| Y 的组成 | 实际职责 | Z 的处理 |
+|---|---|---|
+| `urov_y.c` | KPM 元数据、init/ctl0/exit | 改为 `module/urov_z.c`，新名称与版本 |
+| `urov_y_backend.c` | 多种陷阱、会话、页表、异常模拟、GUP、生命周期 | 提取 PAGE_AP 路径，删除其他后端与 caller 策略 |
+| `urov_y_abi.h` | 多模式控制与页描述符 | 独立 ABI v1，184 字节请求；没有 mode/sites/callers |
+| `urov_y_compat.h` 与 BTF reader | 动态成员偏移、函数原型和页大小 | 保留运行时适配；使用模块本地头文件 |
+| decode/emulate/selftest | A64 解码与寄存器效果模型 | 保留通用核心，自检 4152 项 |
+| readers/window/prewin | 双 epoch 引用与独占指令窗口模型 | 保留；这里的 window 指 LL/SC 指令窗口，并非 caller-window 模式 |
+| X 的认证辅助函数 | SipHash-2-4 与密钥派生 | 使用独立 `UROVZ/1` 派生域 |
 
-**本机现有 KP 上“独立、任意装卸的 KPM + 任意用户代码 + 通用稳定”不是目前已证明可实现的交付组合。** LAB-1 的入口和卸载条件不成立时，必须停在能力检查，不通过关闭保护或忽略失败继续启用。
+Z 同时修正了若干与所保留路径直接相关的问题：
 
-## 2. 已验证事实与未验证事项
+1. `process_vm_readv` 不再存在重读用户 iovec 后改写目的缓冲区的兼容路径。使用独立 order-0 影像页和 Linux grab/unpin helper，读者引用覆盖整个 syscall。
+2. 内部 `access_remote_vm` 抑制标记改为按 task 占用的槽位，避免多个线程覆盖单个全局指针。
+3. fork 对每个子进程保留一个 mm 引用；复制时建立影像快照、主动 fault-in 并重新设置 AP。仅依赖父 PTE 复制不可靠：Linux 可跳过文件页的页表复制。[Linux 6.1 `copy_page_range`](https://raw.githubusercontent.com/torvalds/linux/v6.1/mm/memory.c)
+4. clone 与控制事务串行化。容量不足返回 `ENOSPC`；无可用 `copy_mm` hook 时拒绝非共享 mm 的 clone；已继承快照的子进程再 fork 返回 `EOPNOTSUPP`。存在存活子快照时注销返回 `EBUSY`。
+5. 映射 syscall 的修改与 after-hook 更新使用同一个控制事务；在 native syscall 前等待控制锁，不向普通 libc `mprotect` 注入瞬时 `EBUSY`。
+6. rwsem 回退统一通过正确的 `mm + mmap_lock_offset` 包装函数；陷阱修复检查 VMA 可读性；子 mm 的 fault-rearm 持有读者引用。
+7. FOLL 标志优先读取 BTF，pin helper 的 bool/int 返回类型分别处理。用于页替换的临时页以非阻塞、零 GFP mask 分配，避免假定跨版本的 `GFP_ATOMIC` 位组合。
 
-设计初稿时只做只读核对；本次已运行预检KPM并卸载，最终列表为空、内核版本和boot_id未变。未修改页表或异常入口。
+### 3. PAGE_AP 的工作过程
 
-| 项目 | 证据 |
-|---|---|
-| 设备 | Pixel 6 / oriole，Android 16，4 KiB 页 |
-| 内核 | `6.1.134-android14-11-g66e758f7d0c0-ab13748739` |
-| KP | 先前探测为 `0xc00`；不能等同于当前源码 checkout |
-| 硬件/权限 | 先前逐核测试 CPU 0–7：PAN 字段 2，EPAN 位 0；PROT_EXEC 下数据读全部可读 |
-| BTF | 5,636,966 字节、130,615 类型；SHA-256 `ef6ffa2e5d2f10ad1438a89a77d42747e80c7b78367c1d191140c5e623ff4970` |
-| decoder 复验 | `PASS checks=211127 vectors=50 random=100000 independent_assembler=verified`；ASAN/UBSAN 和 NDK freestanding 编译通过 |
-| 新增证据 | 模拟核心288090检查通过；8核26类原生指令41600次差分通过；预检内核核心4114检查通过；slot与KCFI类型匹配 |
-| 失败门槛 | 真实KP在exit返回EBUSY后仍移除模块；缺少候选Tasks-Rude同步符号；root首次触页复制基线异常 |
-| 尚无证据 | fault_info 实际可写性、完整入口反汇编/回收协议、PTE事务、真实异常覆盖、活动更新/恢复/卸载的真机结果 |
+ARM64 普通 stage-1 leaf PTE 中，Linux 的 `PTE_USER` 对应 AP[1]；它参与 EL0 数据访问权限检查。注册时验证可读可执行、非 writable 的普通文件页，并清除 AP[1]，保持输出物理页与执行权限。EL0 仍执行原始指令，数据读取发生 permission fault。相关位定义及 execute-only 编码见 [Linux ARM64 pgtable-prot.h](https://raw.githubusercontent.com/torvalds/linux/v5.4/arch/arm64/include/asm/pgtable-prot.h)。
 
-50 条独立汇编器向量只核对编码；随机 opcode 测试主要验证不变量，不是随机寄存器状态下的原生指令差分。BTF 证明数据布局/声明，不证明函数体、锁协议、可写性和模块回收安全。
-
-## 3. LAB-1 固定语义
-
-1. 只允许注册发起调用者自己的 `current->mm`，不接受 PID/任意 mm 地址；同 mm 的线程共享覆盖。
-2. 一次全系统仅一个实验实例、一页 4096 字节，页面起址必须对齐。只接受低位、无 tag 的用户地址；首版拒绝 TBI 指针、MTE、AArch32、大端和未审计的用户调试/单步状态。
-3. 后备文件必须为验证过的 shmem memfd，大小恰好一页，offset 为 0；映射必须为独立的、恰好一页的 `MAP_SHARED`、RX、Normal Cacheable 基础页。拒绝匿名页、MAP_PRIVATE、可写页、THP/hugetlb、DAX、PFN/device/special、contiguous PTE、userfaultfd 等未支持形态。
-4. 创建过程：RW 填充并逐字节校验 → 同步指令缓存 → 撤销可写映射 → 加 seals → 只读重开文件 → 建立 RX → 预触页。当前设备这条完整路径需已有授权root上下文；不放宽全局策略。要求 `F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL`；`F_SEAL_FUTURE_WRITE` 不能代替 `F_SEAL_WRITE`。内核重新检查，不能相信用户自报。root首次触页复制异常须先隔离，不能仅以标量填充规避后宣布平台可靠。
-5. 覆盖区间 `[page+offset, page+offset+8)`，`0 <= offset <= 4088`。覆盖值按数值 uint64_t 解释：`8877665544332211` 对应内存字节 `11 22 33 44 55 66 77 88`。
-6. 一条被支持的 load 的全部访问字节必须落在该页内；pair 最多 16 字节。跨页一律明确失败；跨页能力不能用一次 nofault 读取拼凑冒充。
-7. 同页未覆盖字节来自同一不可变原页；取指仍执行原始字节。其他别名、内核辅助读取、ptrace/proc/process_vm_readv 不承诺返回覆盖值。
-8. 活动期间合作程序不得改变目标 VMA、创建新的写入者、执行 JIT 修改读取点、fork/exec 或附加调试器。预先创建工作线程，先停读者再注销。违反合作契约不在 LAB-1 的无泄漏承诺内，不能声称所有违规都能在事后检测到。
-9. 明确设置本页 `VM_DONTCOPY`，正常 fork 子进程不获得该映射；这不是透明 fork 继承。不得把可由用户撤销的标志当作强制安全隔离。
-
-sealed、pin、mlock 均不能单独证明 VA/PTE 永远不变。seal 限制内容变更，pin 保留页引用，mm 引用保留地址空间生命周期；三者各有职责。
-
-## 4. 必须先通过的实现门槛
-
-### 4.1 运行时 ABI 清单
-
-正式构建需要精确设备构建的源代码/反汇编、配置、工具链与 ABI manifest。仅 `uname` 相同仍不足。下列偏移已由本机 BTF 验证，**只适用于这份 BTF**：
-
-| 类型（大小） | 字段与字节偏移 |
-|---|---|
-| mm_struct（960） | pgd=56，mm_users=68，mm_count=72，mmap_lock=96 |
-| task_struct（4800） | mm=1440，pid=1584，tgid=1588 |
-| vm_area_struct（200） | start=0，end=8，mm=16，page_prot=24，flags=32，ops=120，pgoff=128，file=136 |
-| file（264） | inode=32，f_op=40，mode=68，mapping=232 |
-| inode（704） | sb=40，mapping=48，size=80 |
-| super_block（1536） | magic=96 |
-| shmem_inode_info（840） | seals=4，vfs_inode=128 |
-| pt_regs（336） | regs=0，sp=248，pc=256，pstate=264 |
-
-`tools/inspect_btf.js` 可复验。函数原型、pte_t/pgprot_t 的真实类型、VA/PA宽度、页表级数、ASID/KPTI、页属性、BTI/PAC/KCFI、current 获取方式均要单独核实。BTF 类型名称相似或 C 结构大小相同不等于 KCFI 类型相同。
-
-### 4.2 KP 基础设施：真正阻断项
-
-当前仓库源代码存在以下事实；其中“exit错误不能阻止卸载”还已由无外部资源的预检模块在设备KP上直接验证：
-
-- `kernel/patch/module/module.c`：init 失败后调用 exit 并释放；unload 也不因 exit 返回错误而保留模块。
-- 同文件：控制回调处于 RCU 读侧；ctl0 在该区段内分配、替换共享 `ctl_args`，并发调用可互相释放参数。仅让模块回调不睡眠不能修复 loader 自己的问题。
-- `kernel/linux/include/linux/rcupdate.h`：`synchronize_rcu()` 包装指向错误的同步函数；不能据其函数名证明宽限期。
-- `kernel/base/hook.c`：动态 trampoline 删除缺少在途执行排空。
-
-正式启用 LAB-1 前，需要在**实际运行的** KP 中证明：
-
-1. 模块管理状态为 LIVE / STOPPING / RETAINED / DEAD；并发 load/ctl/unload 有真实互斥和调用引用。模块名称在回收完成前不得重用。
-2. 控制参数是每次调用私有副本；分配/释放在可睡眠且不持 RCU 读锁的上下文。获取模块引用后退出查找锁，执行回调，最后释放引用。
-3. STOPPING 阻止新的修改命令并排空已有管理调用；exit 在无 RCU 读锁、无全局自死锁的上下文调用。
-4. init 回滚或 exit 未完成时，模块代码/数据/参数/资源保留为 RETAINED，允许查询和重试清理，不得调用 `kp_free_exec`。init 失败的残留实例也必须可发现。
-5. 只有模块确认无入口、无回调、无资源后，loader 才做真实读者排空并释放。等待超时只能报告/保留，不能转成强制释放。
-
-不修改 preset ABI 或 `MAP_SYMBOL_NUM`。这些是模块运行时生命周期改进，不应改变持久化 preset 布局。本轮只设计，不部署 KP 核心更新。
-
-### 4.3 异常入口的两个实现
-
-**根据新增实测，下一阶段选定 CORE-1 的常驻分发器**，见第11节及 `BACKEND_CONTRACT.md`。以下LAB-1动态入口保留为条件研究，不是当前部署路线。若重新研究替换 `fault_info[15].fn`，须满足所有条件：
-
-- 精确确认结构大小/字段、槽 15 为 L3 permission、原函数为预期原生处理器、真实机器码确实间接读取该槽。源码中的 `static const` 不是动态注册 API，kallsyms 的 `d` 也不是可写证明。
-- 先证明实验期间没有其他入口写入者，再在不改页属性的条件下用有异常修复的 nofault 同值写测试可写性；失败即拒绝。若存在竞争，同值写也可能把别人刚安装的指针覆盖成旧值，因此不能只依赖后续接管时的 CAS 补救；无法建立排他条件就不做此测试。该检查本身属于后续实验写操作，本轮未做。
-- CFI 采用目标内核实际模式及精确函数原型，由编译器生成类型信息并比对本机原函数。不能伪造 hash、关闭 CFI 或依赖已有绕过来通过测试；同时核对 BTI/PAC/SCS。
-- 原生回退须是可验证的真尾跳转：模块栈/SCS 已退出、返回地址直接属于原生调用者。C 源码写 `return original(...)` 不是反汇编证据。
-- CAS 只在预期原指针仍在时接管/归还；不覆盖其他模块。完整状态先 release 发布，入口独立 acquire 读取；不能把原生普通指针加载误认为 acquire。
-- 所有可能执行模块代码的分支（含错误路径和外部 helper）均须没有 voluntary quiescent state。退出等待真实 Tasks-RCU；由于入口还可能由 EL1/idle 路径访问，另需证明这些路径的排空机制，例如经核实的 Tasks-Rude。普通 RCU 仅保护真实参与其读侧协议的对象，不能代替以上证明。
-
-任一条件不能成立，就放弃该动态入口，不自动退回 KP inline hook。Tasks-RCU 的适用边界见[内核 RCU 文档](https://docs.kernel.org/RCU/Design/Requirements/Requirements.html#tasks-rcu)。
-
-## 5. 对象、所有权与线性化
-
-LAB-1 不需要多页 XArray 或每次更新分配对象：
-
-- `session`：mm 引用、page 引用、页起址、文件身份、原属性与修改位掩码、原生入口、只读 4096 字节快照、清理阶段位图。
-- 永不并发修改的配置：页边界、覆盖偏移与长度、原页快照、注册时身份。
-- 动态数据：8/16/24/32 字节 `fake` 向量，由控制路径以有界 seqlock 发布；fault 每条指令只取一份完整快照，pair 的两半共用这一份。极端重试耗尽时 fail-closed。
-- 原子状态：PREPARING / ARMED / ACTIVE / DRAINING / RETAINED / DEAD。ARMED 已拥有完整可模拟上下文；直到恢复完成并排空旧异常之前都不能销毁上下文。
-- 统计独立于正确性。功能测试可用 relaxed 原子计数；高并发性能版本再用经验证的 per-CPU 计数，不能因未经验证的 per-CPU ABI 换来错误。status 多字段为近似快照。
-
-线性化点：启用在权限变更和跨 CPU TLB 同步完成后向测试程序开放读取；更新在 seqlock 快照发布；注销在恢复权限/TLB、排空旧异常并返回后完成。注销重叠的读允许完成旧视图，注销完成后的新读必须为原值。
-
-不声明“禁用过程中同时读到原值就是泄漏”：禁用边界按上述协议定义。ACTIVE 期间若 MM 重建出可读 PTE，根本不会进入 handler，异常内检查无法补救。
-
-## 6. 注册事务与 MM 协议
-
-注册只能在调用者进程、允许睡眠的控制上下文执行，不能放进当前 ctl0 的 RCU 读侧。
-
-1. 验证第 4 节所有门槛、参数、配额和互斥所有权。构造全部缓冲区及恢复记录，尚不改变目标。
-2. `get_task_mm(current)` 取得 mm_users 引用。只保存 mm，不持有无引用的任务指针。
-3. 在映射仍 RX 时使用已核实的 `pin_user_pages_unlocked(start, 1, &page, 0)`，必须恰好返回 1，失败不发布。不能在持 mmap 写锁时调用这个会自行加锁的接口；不能传 FOLL_GET、FOLL_WRITE、FOLL_FORCE、手工 FOLL_PIN 或 FOLL_LONGTERM。
-4. 取得 mmap 写锁，重新验证 current mm、VMA、seals、文件/offset、映射属性及 pin 对应页。两次检查之间可能发生变化，不能沿用前一次 VMA 指针。锁顺序为管理互斥 → mmap_lock → 短期 PTE 锁，不在 PTE 锁内睡眠。
-5. 对原页取得稳定内核访问方式并复制快照；缓存只在 seal 和页身份已证明时可信。禁止任意转换用户 VA 为内核指针；不在启用 XOM 后以普通 uaccess 读取目标页。
-6. 发布完整 ARMED 上下文，然后接入异常分发。此时任何新权限异常都已有处理记录。
-7. 在 mmap 写锁下保存/修改 VMA 自己拥有的属性位：清 VM_READ、设置 VM_DONTCOPY，vm_page_prot 清除用户数据可访问位。保留其他合法属性，不改全局 protection_map，不递归调用自行加 mmap 锁的 mprotect 路径。
-8. 使用核实后的非分配页表遍历；候选是 `apply_to_existing_page_range`。进入前排除 huge/block 等不支持层级，不能依赖可能 BUG 的 walker 去探测。回调在真实 PTE 锁下再次检查 present、页身份、只读、Normal、非 special/contiguous，必须恰好处理一个 leaf。
-9. 通过精确内核的页表更新 helper 改权限，保持 PFN、缓存属性、AF/dirty、只读和 PXN；不擅自清已有执行保护。原页必须已允许 EL0 执行，仅撤销其 EL0 数据权限。
-10. 使用目标内核正确的 TLB/ASID/KPTI 协议和屏障，完成远端可见性；不可用未经验证的几条内联 TLBI 替代。此路径只在注册/恢复，非读取热路径。
-11. 复核属性与阶段位图，发布 ACTIVE，释放锁，再让用户工作线程通过 barrier 开始读取。
-
-`pin_user_pages_unlocked` 在核对的 Android 6.1 实现中拒绝 FOLL_LONGTERM；不能直接照搬新内核 API。[GUP 实现](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1/mm/gup.c)
-
-PTE pin 不阻止所有临时替换/重建。迁移恢复会从 `vma->vm_page_prot` 生成 PTE，所以仅改 PTE 不足。必须同步 VMA 模板，并审计目标分支的 fault/migration/reclaim/NUMA 路径；mmap 锁不替代 PTE 锁。[迁移实现](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1/mm/migrate.c)
-
-临时 translation/access-flag fault 交原生路径；原生重建保持预期 XOM 后，再重试进入读取权限异常。是否确实如此必须对精确设备实现验证，不能仅从一份通用 6.1 源码推断。
-
-每一步失败按已完成阶段逆向清理；出现恢复不确定性就 RETAINED，不返回“可安全释放”。不会写回一份过期的整 PTE，不会用保存的 PFN 覆盖 migration/swap/新映射。
-
-## 7. 读取异常处理
-
-### 7.1 路由与严格过滤
-
-先 acquire 获取上下文状态，再按 mm 和地址匹配。正常无关异常走原生路径，不改变它们的寄存器、错误码或信号。
-
-只允许：EL0、A64、小端、有效 FAR、预期 L3 stage-1 data-read permission fault。拒绝将 write、instruction abort、FnV、S1PTW、CM、external-abort、MTE、alignment、未定义 syndrome 等解释成普通读取。
-
-对属于目标页但不支持的读取，保持全部 pt_regs 不变，记录原因并终止测试进程；LAB-1 采用 SIGKILL，避免应用信号处理器无限重试。信号 helper 的非睡眠性质也必须审核；CORE-1 让常驻分发器在离开模块读侧后负责发信号。store 不模拟成功，保留原生只读错误。
-
-### 7.2 获取指令与解码
-
-- `PC` 对齐、在合法 EL0 范围、`PC+4` 无溢出；必须验证读取点是可信且未并发修改的可执行映射。
-- PC 在受保护 sealed 页：从不可变原页快照取 4 字节，不使用覆盖值取指。
-- PC 在普通读取点：只用已审核的 nofault 取指及映射/内容稳定性条件，失败即终止；不能调用会 fault-in 的普通 uaccess。首批真机用例全部把读取 stub 放进 sealed 页，先消除外部取指变量。
-- 不把 ESR.ISV 当通用指令描述；始终用 `uro_decode()` 白名单解码，有有效 syndrome 时再交叉核对。
-- FAR 必须位于完整访问区间内，pair 可在第二个元素故障，不能要求 FAR 永远等于首地址。
-- 首版拒绝带 tag 地址，不用随意清高位来绕过地址/权限检查；完整区间及基址写回都要检查。decoder 保留 tag 不代表后端支持 tag。
-
-### 7.3 支持与拒绝矩阵
-
-| 支持 | 约束 |
-|---|---|
-| LDRB/H/W/X，LDRSB/SH/SW，LDUR 系列 | 正确符号扩展、W写入清高位 |
-| scaled/unscaled、pre/post、register offset、literal | SP/XZR 区分；UXTW/LSL/SXTW/SXTX；writeback 事务提交 |
-| LDP/LDNP/LDPSW | 8/16字节页内；拒绝目的重叠/不可预测写回 |
-| 同页部分覆盖、非对齐普通访问 | 全字节范围合法；不扩展到对齐异常模拟 |
-
-拒绝 SIMD/FP、SVE/SME、exclusive、atomic、acquire、LDTR、认证 load、MTE、PRFM 及未知编码。PRFM 可能不产生异常，本机制不承诺观察或改变预取行为。16 字节支持表示 GPR pair，不是 NEON Q。
-
-### 7.4 合并与零部分提交
-
-1. 保存 decoder 输出，不直接修改真实 pt_regs。
-2. 从不可变原页复制至最多 16 字节临时缓冲。
-3. **一次** seqlock 读取一份完整 fake 快照；按小端字节覆盖读取区间与配置区间的交集。
-4. 构造两个临时目的值，先符号扩展再按 W/X 宽度处理；rt=31 丢弃结果但不跳过访问验证。
-5. 检查所有访问、两个目的值、writeback 和下一 PC 全部合法。
-6. 提交 GPR、必要 SP/基址写回，最后 PC+=4。PSTATE 不变。
-
-成功路径不分配、不睡眠、不打印、不做 TLB flush、不临时修改权限。只执行有界页内工作；seqlock 必须有界重试并在耗尽时 fail-closed。归属不符走原生；归属明确但不能模拟则失败，不返回原字节来“保证兼容”。
-
-## 8. 更新、注销、回滚与卸载
-
-建议控制协议版本 `abi=1`，仅状态与固定值更新使用 ctl0；参数长度严格限制，输出缓冲预触且 nofault 拷出，输出不足返回错误。
-
-```text
-init:   <pagebase_hex> <offset_decimal> <16hex_fake>
-ctl0:   status
-ctl0:   set <16hex_fake>
+```mermaid
+flowchart LR
+    A[App 注册目标页与影像] --> B[复制快照和影像]
+    B --> C[清除 PTE AP1 并刷新 TLB]
+    C --> D[取指执行原代码]
+    C --> E[EL0 数据读取触发异常]
+    E --> F[校验 ESR FAR mm 与目标页]
+    F --> G[解码 A64 load]
+    G --> H[从影像取数并更新寄存器]
+    H --> I[PC 前进并返回 EL0]
 ```
 
-status 至少包含 abi、profile、state、active、last_error、restore_pending、近似 hits/errors 和已通过的能力位；不输出物理地址、内核地址、原字节或密钥。set 只允许注册 mm 的合作调用者；状态/清理允许持已有 KP 管理授权的监督进程。命令不得与卸载并行，即使未来 loader 修复也保留明确串行测试协议。
+`do_mem_abort` before-hook 只接管 AArch64 EL0 的 data abort（EC=0x24）、level-3 permission fault（FSC=0x0f），排除无效 FAR、页表遍历、外部异常及未知 ISS2 情况。地址必须落在会话覆盖范围。其他异常交还 Linux。[Linux 6.1 ARM64 fault.c](https://raw.githubusercontent.com/torvalds/linux/v6.1/arch/arm64/mm/fault.c)
 
-拟定错误契约如下；返回错误和资源是否仍被持有必须分别表达：
+对已支持的 load，先计算有效地址、长度和 writeback，再按页切分访问。覆盖页读影像；未覆盖片段通过 nofault uaccess 获取。只有模拟成功才提交目标 GPR、SP/writeback 和 PC。读取指令本身位于目标页时，从 native snapshot 解码该指令，而非从替代影像取操作码。无法可靠模拟时计入 failures 并产生 SIGSEGV，不把任意未知指令直接当作成功。
 
-| 情况 | 返回及状态 |
+标量支持由通用解码器覆盖的大小、符号扩展、寄存器/立即数寻址、pair、literal、非特权 load 等形式。向量路径处理支持的 SIMD load、LDR Q 和 LD1–LD4 结构访问，最大一次解码访问 64 字节。其 FPSIMD 数据结构和保存/恢复 helper 必须经过 BTF 验证；活动 SVE/SME 等不受支持状态不会被当作普通 FPSIMD 随意覆盖。能力以 QUERY 返回值为准。
+
+不在注册时改写代码字节，不以 UXN 禁止执行，不插入 BRK。后端中的 debug exception / `__switch_to` hook 用于可选的原生单步重放，属于 PAGE_AP 的写入/独占指令辅助路径。
+
+### 4. 会话、影像和并发
+
+全局最多一个会话；owner 为注册线程的 mm，线程组 ID 用于区分 owner exec 与 vfork child exec。会话 ID 固定为 1，初始 generation 为 1。其他 mm 无权 SET 或 DEACTIVATE；QUERY/STATUS 的会话视图是调用者局部的，`ctl0 status` 才是全局状态。
+
+每页保留 7 页主存储：当前 image、备用 spare、native snapshot、原生重放 pre/post、外部写入 pre/drain。影像覆盖窗口以外的内容来自 snapshot；注册按地址排序，但保存原输入描述符序号，SET_PAGE 仍使用该序号。
+
+`readers.h` 将 open/closed、当前 epoch、两个引用计数放入同一 64 位原子字。SET 在 spare 中准备完整新影像，原子交换 image，翻转 epoch，等待旧 epoch 的读者离开，才回收旧 image 为 spare。这保护 image 的内存生命周期，防止读者使用已经重用的缓冲区。一次多指令 memcpy 或多个页的读取没有跨所有指令的统一 generation 快照保证。
+
+`process_vm_readv` before-hook 为当前 task 建立有界槽位并持有 session reader；after-hook 释放它。独立 pin 替换页在 native syscall 自己的 unpin 流程中回收，模块的 SET/注销不会提前释放 syscall 正在读取的来源。
+
+控制请求、映射事务与 fork 使用控制锁协调。直接读取不获取控制锁；映射 syscall 在进入 native 函数前等待控制事务完成。REGISTRATION 先提供 snapshot replay，再逐页 arm，全部成功后启用替代值；失败进入恢复流程。
+
+主影像预算默认 8 MiB，实际最大页数为 `min(max_pages, max_kb*1024/(7*page_size))`：默认 4 KB 时 292 页，16 KB 时 73 页。fork 池按 `4*page_count` 个槽预留，每槽 2 页，受 4096 槽及 16 MiB 上限限制；它不是整个模块总内存限制。LL/SC 的分支图另有最多 24 MiB arena、1024 个区域和扫描工作量限制。
+
+### 5. 内核辅助读取
+
+这些接口可能绕过 EL0 异常，分别由可选 hook 覆盖。功能缺失应检查 capability 并跳过相应测试，不能把 native 返回值误认成影像。
+
+| 路径 | 实现与限制 |
 |---|---|
-| 参数/区间/格式错误 | `-EINVAL`，尚未发布或已完整回滚 |
-| ABI、入口、页型或架构条件不满足 | `-EOPNOTSUPP`，不得启用权限覆盖 |
-| 另一实例/状态不允许修改 | `-EBUSY`，不修改已有实例 |
-| 可重试的临时映射状态 | `-EAGAIN`，仅在已完整回滚时供调用者重试注册 |
-| 用户输入/输出缓冲不可访问 | `-EFAULT`；status失败不改变实例；set不得因回复失败而重复假定未生效 |
-| 清理/回滚不能证明完成 | `-EIO` + RETAINED + restore_pending，loader保留全部仍需资源 |
+| `/proc/<pid>/mem`、使用相同 helper 的 ptrace | hook `__access_remote_vm` / `access_remote_vm`，仅覆盖 Linux 已允许且实际成功读取的范围；模块内部读取通过 task 槽位排除 |
+| `process_vm_readv` | hook syscall 和 `pin_user_pages_remote`；在已成功 pin 的源页数组中，以独立影像页替换目标页；保持 Linux 原本的权限检查和目的 iovec 导入逻辑 |
+| `vmsplice` 等普通 fast-GUP 读者 | hook `get_user_pages_fast`，为受支持读路径提供独立、普通引用计数影像页 |
+| 写 GUP / slow GUP | 保留 native 写入/COW，尝试捕获并同步写后数据和重新 arm；不将长期 pin 转换成临时影像页 |
 
-set 命令只发布数值，不依赖附带回复才能生效；重试设置同一数值是幂等的。已退出 DEAD 的实例不得用旧句柄或旧 mm 指针重新激活。
+pin 替换用 `try_grab_page` 的正确 bool/int 约定以及 `unpin_user_page`；不能通过硬编码修改 `struct page` 引用计数来代替 Linux helper。新旧 FOLL 编码及 pin 类型有差异，参考 [Linux 6.1 gup.c](https://raw.githubusercontent.com/torvalds/linux/v6.1/mm/gup.c)、[Linux 6.6 gup.c](https://raw.githubusercontent.com/torvalds/linux/v6.6/mm/gup.c)。BTF 未提供可用签名或必要 helper 缺失时不报告 READV 能力；不存在目的缓冲区重写回退。
 
-正常退出：
+### 6. 映射和退出生命周期
 
-1. 用户停止 updater 和所有读者，join 完成；内核设置 DRAINING，禁止新配置修改，但保留旧 fault 处理能力。
-2. mmap 写锁下重新定位 VMA，验证文件/offset/mm/页身份及自己拥有的修改位。
-3. 按目标内核协议处理临时非 present/migration 状态，必要时释放锁后有界重试；不能在 PTE 锁内等待。若无法确认所有受影响映射均已恢复/不存在，转 RETAINED。
-4. 只恢复本模块改变的 VMA/PTE 权限位，保留运行期间内核更新的其他位。若映射已变成新对象，不恢复到新对象上；无法排除原 XOM 被移动的情况不能盲目认定安全。
-5. 完成 TLB 同步。权限仍可能 XOM 时绝不先删除 handler。
-6. 归还异常入口；若 CAS 失败或存在未知链式引用，保留模块并报告，不能覆盖竞争者或释放代码。
-7. 按入口协议等待真实读者排空：动态入口的 Tasks-RCU/额外上下文证明，或常驻桥接的原生 RCU 协议；并排空管理回调。所有等待均在无 mmap/PTE 锁、无 RCU 读锁的上下文。
-8. 释放 page pin、mm 引用、快照/状态；置 DEAD；此时 loader 才可释放模块。
+- `mprotect`/`pkey_mprotect`：Linux 先完成原始权限变更；after-hook 更新 want/armed，并在仍可读的页上重新设置 AP。PROT_NONE 暂停该页；execute-only 不被假定为可读。
+- `MADV_DONTNEED` / fault-in：`handle_mm_fault` before-hook 保存仍有效的 VMA 身份，after-hook 排除 ERROR/RETRY/COMPLETED 再 rearm。不能假定返回后原 VMA 指针仍有效。
+- `munmap`/`MAP_FIXED`/`mremap`：成功后更新目标范围或标记 gone；失败 syscall 不应错误结束会话。复杂并发迁移仍受第 10 节限制。
+- fork：父进程的每页影像在 copy_mm 后快照到子 mm 私有池；保留 mm 引用，主动填充子 PTE，避免只靠父 PTE 继承。父 SET 不更新子快照。子进程再 fork 被拒绝，共享 mm 的线程不占新快照。
+- 退出/exec：死 owner 的会话在下次认证控制调用时回收；存活子快照会阻止回收。成功注销必须先等待原生重放结束、停止 rearm、恢复 owner 页 AP、广播 TLBI、关闭并清空读者，再释放影像与 mm 引用。
 
-unpin 与 pin 类型必须匹配，不能拿 `__put_task_struct` 代替引用递减。mmput 在上述锁外执行，因为可能触发旧 mm 的最终拆除。
+fork 槽在本会话内不循环复用；持续 fork 应分批创建新会话。子进程在注销前必须退出或 exec。fork 初始化中的资源/映射失败可设置 degraded，不能把此类情况视为可靠继承。REGISTER/SET 的用户缓冲区在操作结束前应保持稳定。
 
-owner 异常退出/exec：额外 mm_users 引用使旧地址空间仍存在，外部监督程序按记录进行清理。它可能保留整个旧进程地址空间，不能宣传为仅占一页。实验设短时限和配额，超时告警/停止负载后清理；不在模块里加未经证明的自卸载定时器。
+### 7. ABI v1
 
-回滚和 exit 共用幂等清理逻辑，逐阶段记录资源所有权；重复调用不能二次 unpin/mmput。RETAINED 是故障隔离状态，不是成功，也不是后台已自动修复。
+头文件 [module/abi.h](module/abi.h) 为唯一线格式定义：小端 AArch64，自然 8 字节对齐，184 字节请求、32 字节页描述符，编译期静态断言大小。它与 UROV-Y ABI 不兼容。
 
-## 9. 测试二进制设计
+传输为 `syscall(__NR_prctl, option, magic, op, &request, sizeof(request))`。option 为 `uz_derive` 得到的低 32 位，magic 固定为 `0x42414c5a564f5255`（小端 “UROVZLAB”）。用派生 MAC key 对前 176 字节计算 SipHash-2-4。错误 option/magic/size/version/op/MAC 不会执行控制操作，交还原始 prctl，通常得到 EINVAL。
 
-完整覆盖测试文件仍计划为 `tests/urov_lab_test.c`（尚未实现）。已有 `emulate_test.c`、`native_test.c`、`kpm_check_test.c`、`copy_probe.c` 分别验证软件核心、原生差分、预检模块和平台基线，不能互相冒充。完整测试须在自己的mm中直接发起注册；不能用另一个kpatch进程替它注册地址。
+| 偏移 | 字段 | 含义 |
+|---:|---|---|
+| 0 / 4 / 6 | size:u32 / version:u16 / op:u16 | 必须为 184 / 1 / 操作号 |
+| 8 | request_id:u64 | 调用方关联值，原样保留；不是防重放 nonce |
+| 16 / 24 / 32 | session / address / expected_generation | 会话号、单页注册基址、SET 的预期版本 |
+| 40 / 48 / 52 / 56 | value / offset:u32 / length:u32 / value_hi[3] | 内联影像、窗口参数，总计最多 32 字节内联 |
+| 80 / 88 / 92 | generation / state:u32 / last_error:s32 | 版本、状态；last_error 保留，错误以 syscall 返回值为准 |
+| 96 / 104 / 112 | hits / replays / failures | 统计字段 |
+| 120 / 128 / 136 | flags / fake_addr / reserved | flags 输入为 0；用户影像指针；SET_PAGE 的输入索引或 STATUS 的输出 armed 数 |
+| 144 / 148 / 152 | page_count:u32 / page_stride:u32 / pages_addr | 页描述数组；QUERY 中 stride 为 page_shift |
+| 160 / 168 / 176 | session_flags / reserved2 / mac | capabilities 输出、保留零字段、请求 MAC |
 
-- `--module PATH`、`--iterations N`、负向 case 选择；凭据从交互/继承描述符读取优先，若兼容 CLI 参数绝不回显/写日志，测试文件不保存密钥。
-- memfd 原数据填充固定模式，原函数 `BTI c; MOV W0,#42; RET; NOP`，把覆盖区放到执行代码字节上；**执行必须始终返回42，同时读取得到不同预设值**，不是只验证无关数据。
-- 预建线程和两个完整 32 字节 fake 向量；更新时读者只接受完整 old/new，pair 的所有覆盖字节使用同一版本。先单CPU再逐核/迁核，再多核。
-- 检查宽度、符号扩展、非覆盖、双向部分覆盖、写回、XZR、literal、pair、原页取指；逐条与原生 RX 执行和独立软件模型对比。
-- 负向 case 独立进程运行，先输出 READY；监督者检查实际退出信号，然后清理留存 session。不能只依据 adb/CLI 的255推断内核 errno。
-- 普通错误路径先清理后 munmap；清理失败不继续进行破坏性映射操作，报告需监督者处理。
-- 每组记录 boot_id 前后、模块列表、内核新增告警、恢复后的原值/执行结果。不能把设备重启后状态正常算成卸载成功。
+操作如下；每次构造新的零初始化请求，重新计算 MAC，不要直接重用包含输出 capability 的旧请求：
 
-## 10. 性能与验收口径
+| op | 操作 | 输入 / 结果 |
+|---:|---|---|
+| 1 | QUERY | 返回最大页数、page_shift、capabilities；也触发死 owner 回收 |
+| 2 | REGISTER | `page_count>0` 使用描述数组，stride=32；count=0 使用 address/offset/length 与内联 value 或 fake_addr |
+| 3 | SET | 仅单页会话；session=1，expected_generation 必须匹配，保持原覆盖窗口长度 |
+| 4 | STATUS | session=1 查询调用者会话；reserved 输出 armed 页数 |
+| 5 | DEACTIVATE | session=0 或 1；owner 执行，空会话幂等；存活 child / 未完成 replay 返回 EBUSY |
+| 6 | SET_PAGE | session=1、expected_generation、reserved=原描述符索引、offset/length/fake_addr |
 
-稳态一条受保护 load 至少一次 EL0→EL1→EL0 异常；整个页的数据读取受影响，不只是配置的覆盖区。避免 PTE 切换只消除额外成本，不保证高频扫描低开销。
+页描述符为 `base:u64, fake_addr:u64, fake_off:u32, fake_len:u32, flags:u32, reserved:u32`。base 按运行时页大小对齐；flags 仅允许 SRC_USER=1；reserved=0；窗口长度为 8 的正整数倍且不超过页，`fake_len=0` 表示整页。偏移只须保证窗口不越界。单页内联形式 `length=0` 则表示 8 字节；超过 32 字节必须传用户缓冲区。
 
-分别测 RX 基线、覆盖读、同页不覆盖读、纯执行、set、注册/注销；记录 ns/op、分位数、吞吐、CPU/频率/热状态、线程数和错误数。先小循环确保恢复，再扩大压力；不预设或编造性能数字。纯执行应无额外 UROV fault，但缓存/调度干扰仍可能影响耗时。
+capability：MULTI=0x1、LD1/2/3/4=0x2/4/8/10、CROSS=0x20、16K=0x80、PAGE_AP=0x400、REMOTE_VM=0x800、READV=0x1000、GUP=0x2000、STEP=0x4000、FORK_SNAPSHOT=0x8000（均为十六进制）。没有 capability 表示旧模式或 caller 过滤。
 
-进阶优化顺序：稳定正确性 → 减少每次异常外部 helper → 可选 per-CPU 统计 → 经测量再考虑解码缓存。若缓存 opcode，键必须含不可变代码身份与 PC，不能仅按 PC 缓存可变进程代码。不得用跳过异常/放宽权限优化到泄漏原值。
+常见错误：EINVAL 参数/范围不合法；EFAULT 用户缓冲区访问失败；ENOENT 非 owner/会话无效；EAGAIN generation 冲突或暂时无 PTE；EBUSY 控制事务/child/replay 未结束；ENOMEM 内存不足；ENOSPC fork 快照容量不足；EOPNOTSUPP 缺少必要内核能力。
 
-发布条件：所有门槛通过、全部白名单原生差分通过、未知指令零提交、更新无混合版本、装卸/死亡/失败注入完全恢复、无 UAF/RCU stall/内核告警。压力通过只提升证据，不消除 LAB-1 的合作假设和 PAN 风险。详见 `TEST_PLAN.md` 的 S0–S7。
+输出写回前先进行可写性探测，避免常见的“执行后才发现结果不可写”。但用户映射仍可能并发改变，最后写回 EFAULT 不能证明操作没有提交：停止并发映射变化，用 STATUS 重新同步。返回结构的 MAC 不重新签名，不能作为认证响应使用。密钥也不是对 root 的安全边界，kpatch 可记录加载参数；不要把测试密钥写入源码。
 
-## 11. CORE-1：要获得通用可靠性必须补上的常驻后端
+### 8. 5.x / 6.x 兼容策略
 
-推荐把真正异常处理和 MM 状态放在匹配内核的常驻代码；KPM 只做经过版本校验的管理客户端。这不是已安装功能，也不能仅复制当前 KPM 实现而省略内核集成。
+| 项目 | 适配策略 |
+|---|---|
+| 版本范围 | 当前明确接受 5.4 ≤ kernel < 7.0；不保证所有厂商 backport |
+| 结构偏移 | 从当前 BTF 解析 task/mm/VMA/FPSIMD/pt_regs，检查成员大小与范围；不用固定机型偏移 |
+| MM fault | 识别 3 参数旧版、4 参数新版、5 参数 vendor 内部入口；无公开原型时，仅对已知公共 ABI 使用保守包装 |
+| access_remote_vm | 5 参数公共入口 / 6 参数内部入口，按 BTF 选择 |
+| mmap 锁 | mmap helper 或动态 mmap_lock/mmap_sem 偏移加 down_write/up_write |
+| nofault uaccess | copy_*_user_nofault 或 probe_user_*；睡眠控制路径允许访问 helper 回退 |
+| 分配与 FPSIMD | 解析常见及 `_noprof` 分配符号；适配不同 FPSIMD save helper |
+| 页表 | TCR_EL1 检查 4 KB / 16 KB、VA 范围与遍历深度；拒绝 64 KB、LPA2、不匹配深度及不兼容 TCR2 扩展 |
+| 目标叶子 | 拒绝 block、contiguous、special、devmap、PROT_NONE 等不能安全单页操作的形态 |
 
-### 11.1 常驻分发解决代码生命周期
+旧 5.x 如没有内置 BTF，需要提供该设备**同一内核构建**的外置 BTF。包格式为 80 字节头（8 字节 `UZBTF01\0`、u32 BTF 长度、u32 Build ID 长度、64 字节 Build ID）加原始 BTF，最大 64 MiB。加载时和运行内核 notes 的 GNU Build ID 匹配后再解析。ID 是匹配检查，不是签名；必须信任本机提供的 BTF 文件。
 
-在原生 EL0 data-abort 路径、通用 VMA 权限检查前增加明确路由。优先整个 decoder/emulator 均常驻，不保存 KPM 函数地址。
+测试 SO 的最大 ELF segment alignment 设置为 16384，fixture 按 16 KB 对齐、保留 32 KB 空间，测试长度使用 `sysconf(_SC_PAGESIZE)`。这提供 16 KB 构建条件，不能代替 16 KB 设备测试。[Android 16 KB page-size guidance](https://source.android.com/docs/core/architecture/16kb-page-size/16kb)
 
-若允许可卸载扩展 callback，则由**常驻**分发器在加载函数指针之前进入真实 RCU 读侧，执行非睡眠 callback 后退出。callback 返回 HANDLED / NOT_MINE / FATAL，常驻代码在退出读侧后再调用可睡眠的原生 fault 或发信号。注销撤销指针再等待对应宽限期；因此没有“进入模块前尚未记引用”的空隙，也不要求模块回退原生函数的尾调用技巧。
+### 9. 实际验证记录（2026-11-11）
 
-控制 UAPI 建议有 size、abi_version、flags、reserved-zero、opaque session_id；提供 inspect/register/update/deactivate/status。KPM 卸载失败时，残留状态由常驻后端继续拥有，不依赖即将释放的 KPM text。管理并发本身仍要使用已修复的 KP loader，或改用原生可睡眠 ioctl 接口。
+设备 Pixel 6/oriole，API 36，内核 `6.1.134-android14-11-g66e758f7d0c0-ab13748739`，4 KB，KernelPatch c00。App UID 10286，在 `untrusted_app` 域运行。设备自身时钟与主机日期不同，因此记录以本次工作日期为准。
 
-### 11.2 原生 MM 生命周期
+| 验证 | 结果 |
+|---|---|
+| KPM 严格 ARM64 编译 | `-Wall -Wextra -Werror` 通过，AArch64 ELF REL |
+| 模块核心自检 | 4152 项通过 |
+| App 基线 | 5 项通过，原函数返回 1235，原数据 0x11 |
+| App 完整测试 | 49 项通过，失败 0；内部 BTF 与外置 BTF 路径均运行过 |
+| 最终外置 BTF 轮次并发 | 48 次 SET_PAGE，421594 次 worker 读取，torn_or_failed=0 |
+| 最终轮次 STATUS | generation=50，hits=422503，replays=0，failures=0 |
+| 错误 Build ID | 加载被拒绝，日志为 header/build ID mismatch |
+| 错误模块密钥 | QUERY 返回 EINVAL，无控制操作 |
+| 注销、卸载、再基线 | inactive / pages=0 / armed=0；卸载后 5 项基线通过，boot ID 未改变 |
 
-使用真实内核类型/helper，注册记录绑定 mm；mprotect/mremap/破坏性 madvise 要么在改变映射前拒绝，要么事务撤销；munmap/MAP_FIXED 在删除前撤销；远程强制写和可写别名与注册互斥；文件失效/迁移/NUMA/reclaim 用原生协议维持权限和页身份。
+49 项包含：原代码执行、独立读取者和页内读取者、两页与跨页 LDP、FPSIMD/LD2/LD4、memcpy/memcmp/strlen/CRC、proc mem/readv/vmsplice、重复/越界描述符拒绝、generation 冲突、并发影像更新、mprotect、丢弃 PTE 后 rearm、fork 快照隔离、存活子进程阻止注销、子进程再次 fork 拒绝，以及内联 REGISTER/SET 与注销恢复。
 
-fork 初期明确不继承；若后续支持继承，须在子进程可运行前完成 mm 状态/配置克隆，失败使 fork 失败。exec/exit 由 mm 销毁路径回收，不永久额外持有 mm_users。引用、失效、映射锁和 fault 慢路径必须形成同一协议，不能靠多个独立 hook 补丁拼接。
+`app/compat_check.c` 另检查合成 3/4/5 参数 ABI、错误原型、FOLL 值冲突、外置 BTF 错误包、页表几何。保存的真实 BTF 检查通过：5.15.74（vendor `do_handle_mm_fault/5`）、6.1.134、GKI 6.12、GKI 6.18、GKI 6.18 16 KB。后三者及 5.15 **没有在相应内核启动运行本模块**；5.4 仅有 ABI 适配/合成检查。
 
-### 11.3 多页、跨页与 SIMD 的后续扩展
+测试期间修正了 App tagged heap pointer 导致注册失败、子进程文件页未 arm，以及过于宽泛的映射 EBUSY 导致 libc abort；最终结果取修正后的回归。内核日志还存在一次 `pci_pm_suspend` 的 WARN，不在 urov-z 调用栈；不能把整个测试期间描述为零内核告警。没有观察到本模块引起的内核 Oops 或设备重启。
 
-多页/多区间使用每 mm 的不可变配置根，一次发布整个版本；单条 load 只持一份根快照，不能每页各取一个版本。跨页慢路径先拿对象引用，再退出 RCU 后做允许睡眠的页操作，最后一次性提交；回到提交点前重新确认会话/映射有效。
+### 10. 明确限制与后续验证条件
 
-SIMD 需要原生 FPSIMD/SVE 状态保存与返回恢复 helper，不直接写不存在于 pt_regs 的向量寄存器。acquire/exclusive/atomic/认证指令另建架构语义和顺序证明，不能复用普通 LDR 接口假装支持。
+1. **页表锁**：当前继承 Y 的页表遍历、CAS、mmap 锁/RCU 与 TLBI 方案，没有在每次 leaf 访问中获取 Linux 原生 split PTE lock。CAS 防止覆盖新值并不构成完整 MM 并发证明；不能宣称对 reclaim、迁移、页表回收和 per-VMA 锁并发安全。升级为可生产使用的实现，应增加经目标内核验证的 native PTL 路径与压力测试。[Linux split page table lock](https://docs.kernel.org/6.6/mm/split_page_table_lock.html)
+2. **写入与原子**：标量/向量 store、LSE、LL/SC 和 native replay 是继承的辅助机制。页影像就地写入的 sequence 重试有上限，fallback 与并发 native write 仍可能撕裂；外部写入同步不是任意内核 writer 的线性化事务。当前 App 没有覆盖这些机制的所有指令或竞争。
+3. **LL/SC 不能完全透明**：异常可能破坏独占监视器。前向/反向窗口、分支图和单步无法重建任意真实执行历史、间接跳转及其他 CPU 的 reservation 竞争，因此可能有额外失败或不符合原生历史的成功。保持 RX、避免在独占序列中读取覆盖页是本次验证范围。
+4. **原生重放与映射变化**：单步重放临时恢复 AP，其他线程可能观察到原始值；不同页/不同指令不保证同一代影像。并发 mremap、munmap、权限变化与读取未获得完整形式化或压力验证；调用方应静止相关读者后进行复杂映射修改。
+5. **覆盖范围**：文件的新别名、直接读磁盘、DMA/长期 pin、未 hook 的内核读取路径、AArch32、MTE/tagged ABI 指针、SVE/SME 负载均不在已验证保证内。PAGE_AP 的异常开销与内核状态可被观察，不提供“不可检测”保证。
+6. **卸载约束**：旧 KernelPatch loader 可能在 RCU read section 内调用 exit，且不可靠地尊重 exit 错误；本模块的 `sleepable-v2` 元数据不能改造旧 loader。必须在 sleepable owner 控制路径完成 DEACTIVATE、确认全局 inactive 后卸载。[KernelPatch 0.12.0 module loader](https://raw.githubusercontent.com/bmax121/KernelPatch/0.12.0/kernel/patch/module/module.c)
 
-生产安全档要求系统范围 EPAN 与真实 XOM 验证，或另行设计并完整验证等价的用户/内核页表隔离。现有无 EPAN 的 raw-XOM 即使不崩溃，也仍不满足该安全档。
+## English
 
-## 12. 实施顺序与本轮停止点
+### 1. Purpose and scope
 
-1. 已完成：能力报告、BTF inspector、普通GPR解码/模拟核心、host复验、预检KPM、8核原生差分、loader拒绝卸载实测、详细常驻后端契约及测试计划。
-2. 下一门槛：解决root首次触页复制基线异常，实施并验证loader安全保留/并发/同步及原生常驻后端；当前不启用权限覆盖。
-3. 门槛通过后完成：常驻 `backend_abi`、`mapping`、`fault`、原生MM生命周期，薄KPM管理层、完整 `tests/urov_lab_test.c` 和反汇编检查。已有 `emulate.c` 仍须在真实入口下重新验证。
-4. 严格按 S2–S7 递增测试，先一次启用/读取/执行/恢复，再扩大范围；每一阶段保留真实证据。
+UROV-Z is an Android AArch64 code-page read-overlay experiment. Original instructions execute from their existing mappings; supported data reads receive a separately registered image. **PAGE_AP and all-callers are the only backend and read policy.** The source contains no BRK/UXN backend, reader-site registration, caller allowlist or mode switch.
 
-本轮新增的是 `urov-lab-check.kpm`，不声称已有活动 `urov-lab.kpm` 或完整Android覆盖测试通过。没有刷写、重启、安装硬件断点、改变PAN/CFI、安装fault hook或启用raw-XOM。部署修复后的KP/常驻后端涉及新的启动环境操作，必须另行确认，不能把编写/设计工作当作刷写授权。
+All-callers means that a supported read of a covered page is not filtered by its PC, LR or calling function. It does not cover every alias, DMA engine or kernel interface. Control operations still authenticate the module key and owner mm. Fork inheritance is bounded and explicitly managed.
 
-## 13. 核对资料
+The validated use case is ordinary file-backed `.text` remaining RX. Kernel version alone is insufficient: BTF layouts, function signatures, translation geometry and available hooks determine compatibility. Static checks are not runtime certification.
 
-以下 Android 6.1 分支源码用于核对机制；它们不是本机厂商构建机器码等价证明，正式实现须锁定实际提交：
+### 2. Relationship to UROV-Y
 
-- [异常分发与原生权限检查](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1/arch/arm64/mm/fault.c)
-- [非分配 PTE walker](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1/mm/memory.c)
-- [页 pin 接口与限制](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1/mm/gup.c)
-- [迁移与 PTE 重建](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1/mm/migrate.c)
-- [memfd seals](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1/mm/memfd.c)
-- [ARM64 TLB helper](https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1/arch/arm64/include/asm/tlbflush.h)
-- [Tasks-RCU 适用边界](https://docs.kernel.org/RCU/Design/Requirements/Requirements.html#tasks-rcu)
-- [Arm 官方 A64 ISA 文档](https://documentation-service.arm.com/static/67e40f3398aa3c3b6eea6a85)
+The reference is UROV-Y 2.28.0 at `dev:3679b4f`. Z extracts the PAGE_AP path from `urov_y_backend.c`; removes the other trap backends and caller policy; retains the common A64 decoder/emulator, 4152-check selftest, epoch reader lifetime mechanism and LL/SC instruction-window helpers. The latter windows are instruction analysis, not caller filtering. KPM metadata now lives in `module/urov_z.c`. Authentication is adapted from X with a separate `UROVZ/1` derivation domain. The new 184-byte ABI v1 is deliberately independent of Y.
+
+Relevant corrections include independent pin replacement pages instead of a destination-iovec rewrite fallback; syscall-wide reader references; task-specific internal-access markers; referenced child mm snapshots and explicit child PTE population; guarded clone lifetime; mapping transactions serialized with control updates; correct rwsem offset fallback; VMA readability checks before trap repair; and BTF-aware FOLL/helper conventions. Temporary replacement pages use a zero, nonblocking GFP mask rather than assuming the same GFP_ATOMIC bit pattern on every kernel.
+
+Linux may skip copying page tables for file-backed mappings at fork. Consequently, inheriting a parent's modified PTE is insufficient; the copy_mm hook populates and arms the child before it can run. See the linked Linux `copy_page_range` source in the Chinese implementation analysis.
+
+### 3. Permission-fault read path
+
+For supported ARM64 stage-1 leaf PTEs, Linux `PTE_USER` is AP[1]. Registration validates the RX file mapping and clears that bit while preserving the output page and execution permission. Instruction fetch continues normally; EL0 data access raises a permission fault. The diagram above shows registration, fault decoding and register commit.
+
+The `do_mem_abort` before-hook accepts AArch64 EL0 data aborts with EC 0x24 and level-3 permission FSC 0x0f. It excludes invalid FAR, stage-1 walk, external-abort and unsupported extended-syndrome cases. Other exceptions remain native.
+
+The decoder computes the effective address, width and writeback. A read spanning pages is split: covered portions come from images and uncovered portions use nofault uaccess. Destination GPRs, SP/writeback and PC are committed only after successful emulation. If the reader instruction itself lies in a target page, its opcode comes from the native snapshot. Unsupported emulation records a failure and raises SIGSEGV instead of fabricating success.
+
+Scalar forms include supported immediate/register addressing, sign extension, pair/literal and unprivileged loads. Supported SIMD paths include LDR Q and LD1–LD4 structures, with a maximum decoded access of 64 bytes. FPSIMD layout and save/update helpers must be validated. Unsupported active SVE/SME state is not treated as ordinary FPSIMD. QUERY reports the usable capabilities.
+
+Registration does not patch code bytes, set UXN or insert BRK. Optional debug-exception and context-switch hooks support PAGE_AP native single-step replay for writes/exclusive sequences.
+
+### 4. Session and publication model
+
+There is one global session. Its owner is the registering mm; its thread-group ID distinguishes owner exec from a vfork child's exec. Session ID is 1 and generation starts at 1. Foreign address spaces cannot SET or DEACTIVATE it. QUERY/STATUS are caller-local; `ctl0 status` reports global state.
+
+Each descriptor allocates seven main pages: image, spare, native snapshot, replay pre/post, and external-writer pre/drain buffers. Bytes outside the overlay window originate from the snapshot. Descriptors are sorted by address while preserving their original input index for SET_PAGE.
+
+One atomic 64-bit word holds a closed bit, an epoch bit and two reader counters. SET prepares a complete spare image, atomically publishes it, flips epochs and waits for old readers before reusing the former image. This protects buffer lifetime. It does not make every instruction of a large memcpy, or every page in an operation, observe one generation.
+
+The readv syscall retains a reader reference from before-hook through after-hook. Its replacement source pages are separately allocated and released by the native unpin flow. SET and deactivation cannot reclaim the source images underneath that syscall.
+
+Control operations, mapping transactions and non-shared-mm forks are serialized. Direct loads use reader references rather than the control lock. Mapping syscalls wait before native execution, avoiding unexpected mprotect EBUSY in libc. Registration first exposes snapshot replay, arms every page, then enables the image; failure invokes restoration.
+
+The default main pool is 8 MiB. Effective capacity is `min(max_pages, max_kb*1024/(7*page_size))`: 292 pages at 4 KB or 73 at 16 KB. A child snapshot consumes two pages per descriptor. The pool starts with four descriptor sets, capped at 4096 slots and 16 MiB. A separate LL/SC branch-map arena can reach 24 MiB with 1024 regions and bounded scans; `max_kb` is not a total memory limit.
+
+### 5. Kernel-assisted reads
+
+Optional hooks cover paths that bypass the EL0 exception:
+
+| Path | Mechanism |
+|---|---|
+| proc mem and consumers of remote-VM helpers | Overlay the successfully authorized, returned range in `__access_remote_vm`/`access_remote_vm`; exclude module-internal snapshots |
+| process_vm_readv | Retain a syscall reader reference and replace successfully pinned source pages in `pin_user_pages_remote`; leave native access checks and imported destination iovecs intact |
+| vmsplice / ordinary fast GUP | Return independent image pages with ordinary page references for supported read calls |
+| Write / slow GUP | Keep native COW/write behavior and attempt image synchronization/rearming; do not turn long-term pins into temporary overlays |
+
+The pin path uses the correct bool or int return convention of `try_grab_page` and Linux's `unpin_user_page`. It does not patch raw page reference counts. Missing helpers/signatures disable READV capability; there is no destination-buffer rewrite fallback. The Linux GUP sources linked above show the version-dependent conventions.
+
+### 6. Mapping and child lifetime
+
+Successful mprotect/pkey_mprotect calls update the page's desired and armed state; readable mappings are rearmed, PROT_NONE is suspended and execute-only is not assumed readable. The MM fault before-hook captures VMA identity before Linux may invalidate the pointer; the after-hook excludes incomplete/error returns before rearming. Successful unmap, fixed replacement and remap update or retire the relevant descriptors. Complex concurrent mapping changes remain subject to the limitations below.
+
+copy_mm snapshots each child's images, retains one mm reference, populates its PTEs and installs AP traps before the child runs. Parent SET does not alter the child snapshot. Shared-mm threads need no snapshot. A snapshot child cannot create another independent mm through fork; it receives EOPNOTSUPP. Exhausted fork capacity returns ENOSPC. Slots are retained until the session ends, so repeated fork workloads should use bounded batches.
+
+DEACTIVATE returns EBUSY while a retained child mm still has users or native replay cannot quiesce. Let children exit or exec first. Dead-owner cleanup occurs on the next authenticated control call. Successful release stops rearm, restores owner AP bits, broadcasts TLBI, closes and drains readers, then frees images and mm references. Fork setup resource/mapping failures may set degraded and are not certified as successful inheritance. Keep user request/image buffers stable until the operation completes.
+
+### 7. Wire protocol
+
+`module/abi.h` defines the little-endian, naturally aligned AArch64 ABI: request 184 bytes, descriptor 32 bytes, enforced by static assertions. It is not wire-compatible with Y. Transport is `syscall(__NR_prctl, option, magic, op, &request, sizeof(request))`; option is the derived low 32-bit value, magic is fixed `0x42414c5a564f5255`, and SipHash authenticates the first 176 request bytes. Invalid transport/authentication is passed to native prctl, normally returning EINVAL.
+
+The offset table above is normative for both language sections. In particular:
+
+- size/version/op are at 0/4/6; request_id at 8 is an echoed correlation value, not replay protection.
+- session/address/expected_generation occupy 16/24/32. Inline value, offset, length and value_hi begin at 40/48/52/56.
+- generation/state/last_error occupy 80/88/92. last_error is reserved; syscall return values are authoritative. Counters begin at 96/104/112.
+- flags/fake_addr/reserved are at 120/128/136. reserved is the SET_PAGE input index or the STATUS armed-page count.
+- page_count/page_stride/pages_addr are at 144/148/152; session_flags/reserved2/mac at 160/168/176. session_flags is an output capability mask; registration input is zero.
+
+Operations: QUERY=1 returns quota, page shift and capabilities and reaps a dead owner; REGISTER=2 creates one or more pages; SET=3 updates a single-page session preserving its window; STATUS=4 queries session 1; DEACTIVATE=5 accepts session 0/1 and is idempotent when inactive; SET_PAGE=6 uses reserved as the original descriptor index. Both SET forms require an exact expected_generation and advance generation on success.
+
+A descriptor contains `base, fake_addr, fake_off, fake_len, flags, reserved` with widths 64/64/32/32/32/32. Base must be page-aligned, flags must equal SRC_USER=1, reserved must be zero. Length must be a positive multiple of eight within one page; descriptor fake_len=0 means a full page. Offset only needs to fit the window. For the inline registration form, page_count=0 and length=0 means eight bytes; at most 32 bytes can be inline, otherwise fake_addr is required. Initialize a fresh zeroed request and MAC for each operation rather than reusing output capability fields.
+
+Capabilities in hexadecimal: MULTI=1; LD1/2/3/4=2/4/8/10; CROSS=20; 16K=80; PAGE_AP=400; REMOTE_VM=800; READV=1000; GUP=2000; STEP=4000; FORK_SNAPSHOT=8000. No capability selects an alternative backend or caller policy.
+
+Errors include EINVAL for invalid parameters, EFAULT for user-memory access, ENOENT for invalid ownership/session, EAGAIN for generation or transient PTE conflict, EBUSY for control/child/replay activity, ENOMEM for allocation, ENOSPC for child capacity and EOPNOTSUPP for unsupported kernel facilities. Output memory is preflighted, but concurrent unmapping can still make final copy-out fail after an operation committed. Resynchronize with STATUS. Responses are not re-MACed. The key is not a security boundary against root; kpatch can log module arguments.
+
+### 8. Kernel compatibility
+
+The explicit admission range is 5.4 through 6.x. Runtime BTF resolves task/mm/VMA/FPSIMD layouts and verifies the AArch64 pt_regs prefix. The adapter handles three/four/five-argument MM fault signatures and the conservative public-symbol fallback; five/six-argument remote VM helpers; mmap helpers or rwsem offset fallback; nofault/probe user access variants; conventional and `_noprof` allocator names; and FPSIMD save-helper changes.
+
+TCR validation accepts matching ordinary 4 KB or 16 KB user/kernel granules and compatible walk depths. It rejects 64 KB, LPA2, unsupported address sizes/depths and incompatible TCR2 extensions. Registration rejects block, contiguous, special, devmap and other unsuitable leaves. Vendor backports still require validation.
+
+An older kernel without live BTF needs exact-build detached BTF. The package is an 80-byte header (`UZBTF01\0`, u32 BTF length, u32 Build-ID length, 64-byte Build ID) followed by raw BTF, capped at 64 MiB. Its GNU Build ID is matched against running kernel notes before use. This is identity checking, not a signature; the supplied BTF must be trusted.
+
+The App SO uses 16384-byte maximum segment alignment; its 32 KB fixture is 16 KB aligned and uses runtime page size. This enables a 16 KB build but does not prove runtime behavior on a 16 KB kernel.
+
+### 9. Observed validation, 2026-11-11
+
+Pixel 6/oriole, Android API 36, Linux `6.1.134-android14-11-g66e758f7d0c0-ab13748739`, 4 KB, KernelPatch c00. App UID 10286 ran in the ordinary untrusted_app domain. The device clock differs from the work date.
+
+Strict ARM64 compilation passed. Core selftest passed 4152 checks; baseline passed five; the full App passed 49 with zero failures. Both live and detached BTF paths were exercised. The final detached run completed 48 image updates with 421594 worker reads and zero torn/failed samples; STATUS reported generation 50, hits 422503, replay 0 and failures 0. Wrong Build ID was rejected before hook installation, and a wrong key produced EINVAL. After successful deactivation and unload, baseline passed again and the device boot ID was unchanged.
+
+Coverage includes native execution, independent and target-page readers, two-page/cross-page LDP, FPSIMD/LD2/LD4, libc routines and CRC, proc mem/readv/vmsplice, invalid descriptors, generation conflicts, concurrent updates, mprotect, refault rearm, child snapshot isolation, live-child deactivation refusal, descendant-fork rejection, inline REGISTER/SET and restoration.
+
+`app/compat_check.c` also passed synthetic ABI, invalid signature, FOLL conflict, malformed detached-BTF and geometry checks. Real saved BTF passed for vendor 5.15.74, connected 6.1.134, GKI 6.12, GKI 6.18 and GKI 6.18 16 KB. These are structural checks: the module was not boot-tested on those other kernels. Linux 5.4 has adapter/synthetic coverage only.
+
+Development regressions exposed and fixed tagged heap pointers in the test App, missing child PTE arming, and overly broad mapping EBUSY causing a libc abort. Final results are from corrected runs. A separate `pci_pm_suspend` WARN appeared in the kernel log without a urov-z stack; the entire session must not be described as warning-free. No module-attributed kernel Oops or device reboot was observed.
+
+### 10. Limits that remain
+
+1. **Native page-table locking:** Y's mmap lock/RCU/CAS/TLBI approach remains. Not every leaf access acquires Linux's native split PTE lock. CAS is not a complete MM concurrency proof. Reclaim, migration, page-table freeing and per-VMA locking require a verified native PTL adapter and stress testing before production claims; see the Linux PTL reference above.
+2. **Writes and atomics:** store, LSE, LL/SC and native replay are inherited auxiliary mechanisms. Bounded sequence retries and fallback reads can tear against concurrent in-place native writes. External writer synchronization is not a linearizable transaction for every kernel writer. The App does not exhaustively test those instruction/concurrency cases.
+3. **LL/SC transparency:** an exception can invalidate the local exclusive monitor. Instruction windows, branch maps and single stepping cannot recover arbitrary execution history, indirect entry or other CPUs' reservation conflicts. Extra failures or successes inconsistent with native history remain possible. RX pages read outside exclusive sequences are the validated use case.
+4. **Replay and mapping races:** native replay temporarily restores AP, allowing another thread to observe original bytes. Multi-page/multi-instruction reads need not share a generation. Complex concurrent remap/unmap/protection changes are not comprehensively verified; quiesce relevant readers for such changes.
+5. **Coverage:** new aliases, direct file reads, DMA/long-term pins, unhooked kernel paths, AArch32, MTE/tagged ABI pointers and SVE/SME loads are outside the verified guarantee. Fault overhead and kernel state remain observable; there is no undetectability guarantee.
+6. **Legacy unload:** an old KernelPatch loader can invoke exit inside RCU and fail to honor an exit error. `sleepable-v2` metadata cannot repair an older loader. Complete owner DEACTIVATE in sleepable context and verify global inactive state before unloading, as required by the linked loader implementation.

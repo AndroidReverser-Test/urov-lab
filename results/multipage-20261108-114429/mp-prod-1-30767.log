@@ -1,9 +1,0 @@
---------- beginning of main
-10-05 02:19:14.180 30767 30791 I urovdetect: CONTEXT pid=30767 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
-10-05 02:19:14.181 30767 30791 I urovdetect: BEGIN mode=mp-prod repeats=5
-10-05 02:19:14.181 30767 30791 I urovdetect: MP_QUERY caps=0x73f max_pages=682 page_shift=12 abi=8
-10-05 02:19:14.321 30767 30791 I urovdetect: MP_PROD pages=24 bytes=98304 image_crc=a9960dad
-10-05 02:19:14.422 30767 30791 I urovdetect: MP_PROD_DONE paths=5 child_overlay=1 kmem_errno=0
-10-05 02:19:14.422 30767 30791 I urovdetect: CONTEXT pid=30767 uid=10284 selinux=u:r:untrusted_app:s0:c28,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
-10-05 02:19:14.422 30767 30791 I urovdetect: NATIVE_RESULT PASS cases=1 assertions=4 failures=0 mode=mp-prod
-10-05 02:19:14.539 30767 30767 I urovdetect: DETECT_RESULT PASS mode=mp-prod worker_ms=351 ui_ticks=126 ui_max_gap_ms=19 native=PASS cases=1 assertions=4 failures=0

@@ -1,9 +1,0 @@
---------- beginning of main
-10-04 15:30:32.709  8713  8737 I urovdetect: CONTEXT pid=8713 uid=10285 selinux=u:r:untrusted_app:s0:c29,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
-10-04 15:30:32.709  8713  8737 I urovdetect: BEGIN mode=z-observer repeats=6
-10-04 15:30:32.788  8713  8737 I urovdetect: ELIM_EXEC name=unregistered n=6 expected=0 match=0 clean=6 unknown=0 accepted=576 failed=0 control_failed=0 total_ns=74512939 max_ns=18792725
-10-04 15:30:32.824  8713  8737 I urovdetect: ELIM_STORE name=unregistered n=6 expected=0 match=0 clean=6 unknown=0 completed=192 stores=0 total_ns=30600464 max_ns=6192749
-10-04 15:30:32.843  8713  8737 I urovdetect: ELIM_BRIDGE name=unregistered expected=0 verdict=0 trials=32 successes=0 elapsed_ns=3985555 nop_expected=0 nop_verdict=0 nop_trials=32 nop_successes=0 nop_elapsed_ns=3745890 indirect_verdict=0 indirect_trials=32 indirect_successes=0 indirect_elapsed_ns=3642578 cross_page_expected=0 cross_page_verdict=0 cross_page_trials=32 cross_page_successes=0 cross_page_elapsed_ns=3489258
-10-04 15:30:32.843  8713  8737 I urovdetect: CONTEXT pid=8713 uid=10285 selinux=u:r:untrusted_app:s0:c29,c257,c512,c768 CapEff: 0000000000000000 Seccomp: 2
-10-04 15:30:32.843  8713  8737 I urovdetect: NATIVE_RESULT PASS cases=2 assertions=39 failures=0 mode=z-observer
-10-04 15:30:33.064  8713  8713 I urovdetect: DETECT_RESULT PASS mode=z-observer worker_ms=350 ui_ticks=127 ui_max_gap_ms=20 native=PASS cases=2 assertions=39 failures=0
