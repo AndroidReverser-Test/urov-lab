@@ -26,6 +26,18 @@ foreach ($name in @('decode','emulate','core_selftest','backend','urov_z')) {
     if ($LASTEXITCODE -ne 0) { throw "Compile failed for $name" }
     $objects += $object
 }
+$kclfDir = Join-Path $PSScriptRoot 'module\kclf'
+# KCLF includes KP cache.h, whose existing CurrentEL inline helper triggers
+# Clang's operand-width warning. Keep that compatibility exception scoped to
+# these vendor units; do not modify the user's KernelPatch headers.
+foreach ($name in @('kclf','kclf_exec','kclf_compat','kclf_elf','kclf_manual','kclf_codegen')) {
+    $object = Join-Path $out ($name + '.o')
+    & $clang @flags @includes ('-I' + $kclfDir) -DUROV_KCLF_EMBEDDED `
+        -Wno-unused-parameter -Wno-asm-operand-widths -fno-strict-aliasing `
+        -c (Join-Path $kclfDir "$name.c") -o $object
+    if ($LASTEXITCODE -ne 0) { throw "Compile failed for $name" }
+    $objects += $object
+}
 & $linker -r -o (Join-Path $out 'urov-z.kpm') @objects
 if ($LASTEXITCODE -ne 0) { throw 'KPM link failed' }
 & (Join-Path $bin 'llvm-readelf.exe') -h (Join-Path $out 'urov-z.kpm')

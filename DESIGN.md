@@ -1,5 +1,11 @@
 # UROV-Z 1.0.0 — 原理与实现 / Design and implementation
 
+> 本文保留 1.0.0 的底层设计和历史验证。当前 1.1.0 已将 KCLF 链入同一 KPM，
+> 默认关闭 native step；完整集成设计与本次证据见 [INTEGRATION.md](INTEGRATION.md)。
+> 当前宿主上全局 inactive 不能证明热卸载安全，更新 KPM 使用受控重启。
+> This document retains the 1.0.0 design and historical results. See the integration
+> document for 1.1.0; native step is disabled by default and hot unload is not validated.
+
 ## 中文
 
 ### 1. 目标与边界
@@ -181,7 +187,7 @@ capability：MULTI=0x1、LD1/2/3/4=0x2/4/8/10、CROSS=0x20、16K=0x80、PAGE_AP=
 3. **LL/SC 不能完全透明**：异常可能破坏独占监视器。前向/反向窗口、分支图和单步无法重建任意真实执行历史、间接跳转及其他 CPU 的 reservation 竞争，因此可能有额外失败或不符合原生历史的成功。保持 RX、避免在独占序列中读取覆盖页是本次验证范围。
 4. **原生重放与映射变化**：单步重放临时恢复 AP，其他线程可能观察到原始值；不同页/不同指令不保证同一代影像。并发 mremap、munmap、权限变化与读取未获得完整形式化或压力验证；调用方应静止相关读者后进行复杂映射修改。
 5. **覆盖范围**：文件的新别名、直接读磁盘、DMA/长期 pin、未 hook 的内核读取路径、AArch32、MTE/tagged ABI 指针、SVE/SME 负载均不在已验证保证内。PAGE_AP 的异常开销与内核状态可被观察，不提供“不可检测”保证。
-6. **卸载约束**：旧 KernelPatch loader 可能在 RCU read section 内调用 exit，且不可靠地尊重 exit 错误；本模块的 `sleepable-v2` 元数据不能改造旧 loader。必须在 sleepable owner 控制路径完成 DEACTIVATE、确认全局 inactive 后卸载。[KernelPatch 0.12.0 module loader](https://raw.githubusercontent.com/bmax121/KernelPatch/0.12.0/kernel/patch/module/module.c)
+6. **卸载约束**：旧 KernelPatch loader 可能在 RCU read section 内调用 exit，且不可靠地尊重 exit 错误；本模块的 `sleepable-v2` 元数据不能改造旧 loader。sleepable owner 中的 DEACTIVATE 只清理覆盖会话，不证明 callback 和 hook 跳板已排空；当前集成测试保持 KPM 驻留，更新使用受控重启。[KernelPatch 0.12.0 module loader](https://raw.githubusercontent.com/bmax121/KernelPatch/0.12.0/kernel/patch/module/module.c)
 
 ## English
 
@@ -299,4 +305,4 @@ Development regressions exposed and fixed tagged heap pointers in the test App, 
 3. **LL/SC transparency:** an exception can invalidate the local exclusive monitor. Instruction windows, branch maps and single stepping cannot recover arbitrary execution history, indirect entry or other CPUs' reservation conflicts. Extra failures or successes inconsistent with native history remain possible. RX pages read outside exclusive sequences are the validated use case.
 4. **Replay and mapping races:** native replay temporarily restores AP, allowing another thread to observe original bytes. Multi-page/multi-instruction reads need not share a generation. Complex concurrent remap/unmap/protection changes are not comprehensively verified; quiesce relevant readers for such changes.
 5. **Coverage:** new aliases, direct file reads, DMA/long-term pins, unhooked kernel paths, AArch32, MTE/tagged ABI pointers and SVE/SME loads are outside the verified guarantee. Fault overhead and kernel state remain observable; there is no undetectability guarantee.
-6. **Legacy unload:** an old KernelPatch loader can invoke exit inside RCU and fail to honor an exit error. `sleepable-v2` metadata cannot repair an older loader. Complete owner DEACTIVATE in sleepable context and verify global inactive state before unloading, as required by the linked loader implementation.
+6. **Legacy unload:** an old KernelPatch loader can invoke exit inside RCU and fail to honor an exit error. `sleepable-v2` metadata cannot repair an older loader. Owner DEACTIVATE clears the overlay session but does not prove callback/trampoline retirement. Current integrated tests leave the KPM loaded and use a controlled reboot to replace it.

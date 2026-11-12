@@ -114,9 +114,23 @@ int ret = urov_register_pages(&client, pages, 2, &result);
 /* 成功后 urov_set_page 的 index 仍对应输入顺序，即使 base 没有排序。 */
 ```
 
+## 与 Dobby hook 联合使用的限制
+
+UROV 只替换受支持的数据读取结果，不负责安装 Dobby hook，也不会让 hook 代码自动获得读取豁免。取指仍执行物理页中的代码：先安装 Dobby hook、再注册原始读取影像后，执行的是已修改代码，CRC 等数据读取才得到修改前的字节。
+
+1. **不能依赖覆盖页中的已修改 literal。** Dobby 的远跳转可能使用 `LDR literal; BR; address`，其中 LDR 是数据读取，同样受 `all-callers` 覆盖。若读取影像保存的是 hook 前字节，跳转地址会被替换成原始指令数据，可能导致崩溃；本次实测曾因此发生 App SIGBUS。替换函数、原函数及 trampoline 对覆盖页的其他数据读取也没有例外。
+2. **近跳转必须验证，不能只打开开关。** 本仓库测试在 `DobbyHook` 前调用 `dobby_set_near_trampoline(true)`，并在 REGISTER 前检查实际入口为 AArch64 `B imm26`；不能生成该布局时撤销 hook 并报错。还应检查转发 trampoline 及其 literal 所在位置，避免它们落入提供旧字节的覆盖范围。近跳转开关本身不证明任意目标函数、重定位指令或内存布局都兼容。
+3. **先保存原页，再 patch，最后注册。** 顺序为：等待注入完成 → 保存 hook 前字节 → `DobbyHook` 并确认跳转布局、参数/返回值 → 确认目标页恢复为 RX 且不可写 → `urov_register_pages` 提交 hook 前影像。UROV 在 REGISTER 时取得的真实快照已经包含 patch，与调用方保存的原始读取影像不同。页大小使用 `info.page_shift`；必须覆盖实际改写的全部字节及涉及的页，不能假定 hook 永远只修改固定长度或单页。
+4. **覆盖活动期间不要直接重新 patch 或销毁 hook。** `DobbyHook` / `DobbyDestroy` 会读取或修改代码并切换页权限，可能与影像、映射跟踪及并发执行冲突。调用方须同步相关线程，避免在 patch/恢复期间执行目标函数；API 不提供通用的线程暂停或原子安装保证。正常结束顺序为：成功 `urov_deactivate` → `DobbyDestroy` → 确认无线程、回调或函数指针继续使用 payload 后再释放 SO。注销失败时不得继续释放；若 mutation 返回 `-EFAULT`，先查询实际会话状态再决定如何恢复。
+5. **目标映射仍须符合 REGISTER 条件。** Dobby 修改后的目标必须是满足条件的普通 RX 文件映射。KCLF manual 注入的 SO 和通常由匿名内存分配的 Dobby trampoline 不能因此直接注册；manual 注入的 payload 可以控制宿主已有文件代码页。需要覆盖注入 SO 自身时应使用 linker 后端，并重新检查映射条件。
+
+当前验证目标是本仓库带有 NOP 入口的 ARM64 测试函数：manual/linker 各 3 轮，参数和返回值修改、直接读取、`process_vm_readv`、`/proc/self/mem` CRC 均通过。该结果不证明任意函数的 literal、独占/原子序列、并发改映射或任意 Dobby 版本都可透明运行。
+
+随仓库恢复的 Dobby 版本中，可选 SymbolResolver 插件与 `RuntimeModule` 定义不一致，测试构建关闭了 `Plugin.SymbolResolver`，由测试 App 提供目标函数地址；不要据此假设 `DobbySymbolResolver` 已构建或验证。实现示例见 [payload.c](../integration/payload.c)，完整说明见 [集成设计](../INTEGRATION.md) 和 [实测记录](../integration/RESULTS-2026-11-12.md)。
+
 ## 使用边界
 
-会话是进程地址空间所有，当前实现全局最多一个会话；client 对象本身没有独立内核句柄。fork 子进程可以继承快照，但不能用复制的 client 控制父进程会话。`QUERY/STATUS` 仅反映调用者的视图，判断是否可以卸载必须使用 root 的 `kpm ctl0 urov-z status`。存活的子快照使注销返回 `-EBUSY`。
+会话是进程地址空间所有，当前实现全局最多一个会话；client 对象本身没有独立内核句柄。fork 子进程可以继承快照，但不能用复制的 client 控制父进程会话。`QUERY/STATUS` 仅反映调用者的视图，全局状态使用 root 的 `kpm ctl0 urov-z status` 查询。存活的子快照使注销返回 `-EBUSY`。全局 inactive 不证明 hook 跳板已排空；当前 1.1.0 集成测试不热卸载 KPM，详见 [集成生命周期](../INTEGRATION.md)。
 
 输入目标/影像地址必须未带标签；MTE、带标签的外部 ABI 指针、AArch32、SVE/SME load 不在验证范围。API 对自己分配的描述符地址去除 Android heap top-byte tag，不承诺支持任意 MTE 内存。不要把库中的 4096 常量当作设备页大小，读取 `info.page_shift`。
 

@@ -23,6 +23,12 @@
 #include "window.h"
 #include "prewin.h"
 
+/* Ordinary RX reads need no scheduler/debug replay hook. Retirement of
+ * scheduler trampolines is not safe on the stock test host. */
+#ifndef UROV_Z_NATIVE_STEP
+#define UROV_Z_NATIVE_STEP 0
+#endif
+
 #ifndef __NR_mmap
 #define __NR_mmap 222
 #endif
@@ -491,6 +497,19 @@ static int uz_access_vm(void *mm, unsigned long addr, void *buf,
     else ret = f_access_vm_task(0, mm, addr, buf, len, flags);
     __atomic_store_n(&g_internal_access[slot], 0, __ATOMIC_RELEASE);
     return ret;
+}
+
+/* Statically linked KCLF only; each nested call owns a separate task slot.
+ * uz_access_vm releases its slot on every return, including partial reads.
+ * No task/PID-wide or userspace exemption survives this synchronous call. */
+int urov_z_read_current_real(unsigned long addr, void *buf, int len)
+{
+    void *mm;
+    if (!__atomic_load_n(&g_ready, __ATOMIC_ACQUIRE)) return -EOPNOTSUPP;
+    if (len < 0 || !uz_user_range(addr, (uint64_t)len)) return -EFAULT;
+    mm = mm_of_task(current);
+    if (!mm) return -ESRCH;
+    return uz_access_vm(mm, addr, buf, len, 0);
 }
 
 /* For sleepable control only. Early 5.x has probe_user_read() but may lack a
@@ -6154,12 +6173,12 @@ long urov_z_backend_init(const char *args)
     /* Deferred native replay needs the software-step consumer and the
      * migration re-arm.  A failure here only keeps the pre-2.17 store
      * handoff; init still succeeds. */
-    if (f_debug_exception) {
+    if (UROV_Z_NATIVE_STEP && f_debug_exception) {
         ret = hook_wrap(f_debug_exception, 3, uz_dbg_before, 0, 0);
         g_dbg_hooked = ret ? 0 : 1;
         if (ret && g_verbose) pr_info("urov-z: hook debug exception failed: %ld\n", ret);
     }
-    if (f_switch_to) {
+    if (UROV_Z_NATIVE_STEP && f_switch_to) {
         ret = hook_wrap(f_switch_to, 2, 0, uz_switch_after, 0);
         g_switch_hooked = ret ? 0 : 1;
         if (ret && g_verbose) pr_info("urov-z: hook __switch_to failed: %ld\n", ret);
