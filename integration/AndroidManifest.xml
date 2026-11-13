@@ -1,13 +1,16 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.urovzinject">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.urovzinject"
+    android:versionCode="120" android:versionName="1.2.0">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35"/>
-    <application android:label="UROV Injection Lab" android:extractNativeLibs="true"
+    <application android:label="UROV CRC Lab" android:extractNativeLibs="true"
         android:allowBackup="false" android:debuggable="true" android:allowNativeHeapPointerTagging="false">
         <activity android:name=".MainActivity" android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@android:style/Theme.Material.Light.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <service android:name=".RunnerService" android:exported="false" android:process=":runner"/>
     </application>
 </manifest>

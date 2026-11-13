@@ -1,197 +1,120 @@
-# UROV-Z / KCLF / Dobby 集成说明
+# UROV / KCLF / Dobby 实现与应用内复测
 
-2026-11-12。本次在独立仓库 `urov-lab` 的 `main` 上实现，基于 UROV-Z
-`0647f40`、KCLF `eb30b39` / 1.5.7。产物只有一个 `urov-z.kpm`，版本为
-1.1.0，不需要同时加载独立 `kclf.kpm`。实测数据见
-[验证记录](integration/RESULTS-2026-11-12.md)。
+当前测试流程（2026-11-13）：**10 个独立页面上的 Dobby hook、三通道 CRC、4 线程压力测试、模块/覆盖前后耗时对比**。测试直接在 **UROV CRC Lab** 中运行，结果通过内存、Binder 和 logcat 显示。构建仍使用 build.ps1；复测不需要 PowerShell 脚本，不生成报告、命令、上下文地址或密钥文件。历史单页结果见 integration/RESULTS-2026-11-12.md，不代表当前十页测试。
 
-## 原框架如何工作
+## 框架的实际实现
 
-| 层 | 实现 | 行为 |
+| 层次 | 源码 | 行为 |
 |---|---|---|
-| KPM 入口 | `module/urov_z.c` | 初始化后端；`ctl0 status` 返回全局状态 |
-| 用户态控制 | `api/src/urov.c`、`api/include/urov/{abi,auth}.h` | 私有 prctl 请求、独立密钥派生/SipHash MAC；QUERY/REGISTER/SET/STATUS/DEACTIVATE，ABI v1 不变 |
-| 会话与注册 | `module/backend.c`，`validate_target_vma`、注册路径 | 单一活动 owner mm；只接收 RX、当前非 writable 的普通文件页；记录文件、pgoff、映射范围及真实快照 |
-| 读执行分离 | `module/backend.c` 的 PAGE_AP、`uz_abort_before` | 清除叶子 PTE 的 PTE_USER/AP[1] 并刷新 TLB；取指仍访问原物理页，EL0 数据读取产生权限异常 |
-| 指令模拟 | `decode.c`、`emulate.c`、`uz_emulate_load` | 解码故障 load，按地址从替代影像取数，更新通用/FPSIMD 寄存器、writeback 和 PC；不支持的指令不能视作成功 |
-| 内核辅助读取 | `uz_kread_after`、GUP/PIN 相关 hook | 覆盖 remote-vm、process_vm_readv 和相关 GUP 返回；不是对任意物理别名、DMA 或所有内核接口的覆盖承诺 |
-| 并发影像与生命周期 | `readers.h`、映射 syscall/copy_mm hook | 双 epoch 读者引用，SET 准备 spare 后切换影像并排空旧读者；跟踪映射变化和 fork 快照 |
+| KPM 入口 | module/urov_z.c | 先初始化 UROV，再初始化内置 KCLF 1.5.7；status/selftest 查询覆盖状态，kclf, 前缀转发加载器控制 |
+| 认证 API | api/src/urov.c、api/include/urov/auth.h | 16 字节模块密钥派生私有 prctl option 和 SipHash MAC；校验 ABI、结构大小、操作码、请求地址和 MAC |
+| 会话注册 | module/backend.c | 全局一个活动 owner mm；验证完整、可读可执行、当前不可写的普通文件页；排序并拒绝重复描述符，保存原始/替代影像及映射身份 |
+| 取指与数据读取 | ap_arm_pages、uz_abort_before | 清除叶子 PTE_USER/AP[1] 并刷新 TLB；取指执行真实代码，支持的 EL0 数据读取产生权限异常 |
+| 指令模拟 | decode.c、emulate.c、uz_emulate_load | 解码 A64 load、按影像拼接数据，更新 GPR/FPSIMD、writeback 和 PC；不支持的指令不是成功 |
+| 内核辅助读取 | uz_kread_after、GUP/PIN/process-vm 回调 | 替换相关读取缓冲区/页面，使 process_vm_readv、proc-mem 也取得注册影像 |
+| 并发生命周期 | readers.h、release_session、copy_mm/映射回调 | 双 epoch 读者计数保护影像更新和回收；跟踪 fork、映射变化；注销恢复页权限并排空读者 |
+| SO 加载 | module/kclf/ | 4 个请求槽，核对 task/mm；task_work 准备映射、重定向 EL0；manual 做 ELF 映射/重定位，linker 调用 bionic loader |
 
-`all-callers` 表示目标地址空间中针对覆盖页的数据读取不按 PC/LR 来源区分。
-注入的 SO 也遵守这一规则。默认 8 MiB 主影像预算中，每个目标页占七页，
-4 KiB 设备默认上限 292 页；子快照等开销另计。
+UROV 不修改函数指令。Dobby 修改真实入口，payload 在 hook **之前**保存十个原页，之后一次 REGISTER 十个描述符。CRC 数据读取取得原影像，函数执行仍进入 hook。UROV 在 REGISTER 时另存的真实快照已经包含 patch，用于真实页语义与指令读取。
 
-KCLF 接收管理员通过 `kpatch` 提交的目标 TID、SO 路径和后端选择。其四个
-请求槽持有 PID 引用并检查 task/mm 身份；在目标线程的 `task_work` 中准备
-映射、保存寄存器并重定向返回用户态的 PC/SP。manual 后端读取文件快照、
-解析 ELF、依赖和重定位，以匿名内存构建镜像；linker 后端调用目标 bionic
-loader。生成的 EL0 程序执行初始化函数、恢复上下文并发布完成 token，
-70 个 syscall 观察 hook 或控制端 poll 确认完成，之后 task_work 清理临时映射、
-应用延后的 RELRO。它不是完整的任意 JNI/C++ 加载环境。
+host 在启动协作线程前，将测试上下文地址发布到进程内环境项 UROV_LAB_CONTEXT_V2；之后保持不变。payload/probe 经共享 libc 的 getenv 取得地址，并核对 magic 和 PID。该项不包含密钥，不写文件，也不新增 libuzhost.so 的 DT_NEEDED 依赖，因此 linker 的 default namespace 无需解析 App classloader namespace 中的宿主库。
 
-## 冲突处理与集成边界
+KCLF 内部通过 kclf_urds → urov_z_read_current_real → uz_access_vm 取得真实字节，以免加载器解析到覆盖影像；这只用于同 KPM 的内部同步访问。新注入的 probe 仍遵守 all-callers，不享有读取豁免。manual 匿名 SO 自身不满足 RX 文件页注册条件，本测试覆盖的是 Android loader 加载的 libuzhost.so。
 
-本次落实了工作区 `KPM_COEXISTENCE_ANALYSIS.md` 中适合 RX 测试的措施：
+默认主影像预算 8 MiB，每个注册页占七页；4 KiB 设备对应 292 页上限。默认关闭可选 native step。可支持的指令、文件 VMA、BTF/内核布局、4K/16K 页配置仍是明确边界；十页测试不会证明任意程序的透明性。
 
-1. **统一入口和生命周期。** KCLF 六个 C 编译单元作为 `module/kclf/` 内置组件
-   链入同一 KPM。`UROV_KCLF_EMBEDDED` 去掉第二套 KPM 元数据和入口；外层维护
-   初始化成功标志，处理失败初始化后的 exit。共享 syscall 上仍使用 KP 支持的
-   callback 链，KCLF 观察回调不改 syscall 参数、返回值或 UROV 的 local 数据。
-2. **加载器读取协调。** `kclf_urds` 改用 `urov_z_read_current_real`，后者进入现有
-   `uz_access_vm` 的 current-task 内部槽。每个嵌套同步调用独占一个槽，所有返回
-   路径释放；64 个槽耗尽时拒绝访问，不回退为错误影像。该接口仅在同一 KPM 内
-   链接，不暴露给 EL0，不改变 payload 或 App 的 all-callers 读语义。
-3. **RELRO 页尾 padding。** 新增 `ke_relro_contains`，要求起点位于真实 writable
-   PT_LOAD 字节中，允许末尾延伸至该段最后一个映射页的边界，拒绝空区间、越界、
-   非 writable 段和整数溢出。只用于 `protect_image` 的 GNU_RELRO；其他 ELF
-   结构继续使用严格的 `ke_contains`。
-4. **默认关闭可选单步。** `UROV_Z_NATIVE_STEP=0` 跳过 `do_debug_exception` 和
-   `__switch_to` hook。普通 RX 读取、FPSIMD 模拟、remote/GUP、影像更新和 fork
-   路径保留；实测能力值 `0xbc3f` 不再声明 STEP。
-5. **不做热卸载验证。** 合并模块没有修复宿主 KP 的 callback/trampoline 回收。
-   `inactive`、`quiesce=idle` 和延时均不是跳板无人使用的证明；测试保持 KPM 驻留，
-   替换二进制需要受控重启。未修改外层 KernelPatch 工作树中的既有内核改动。
+## 十个 hook 如何保证分属不同页
 
-manual SO 仍是匿名映射，不能将其自身的 `.text` 直接 REGISTER。此次覆盖的是
-App 由 Android loader 加载的 `libuzhost.so` 文件代码页，所以两种注入后端均可用。
-需要覆盖被注入 SO 本身时，应采用 linker 后端并另外验证 VMA 条件。
+integration/target.S 定义 uz_test_target_0 到 uz_test_target_9，每个入口使用 .balign 16384，末尾再次对齐，确保完整目标页位于可执行段。构建链接使用 max-page-size=16384。运行时用 sysconf(_SC_PAGESIZE) 检查 4K/16K，计算每个入口的实际页基址，逐对检查不重复，并检查完整页位于唯一 executable PT_LOAD 内。布局不符直接失败；日志输出十个地址和页基址。
 
-认证边界保持两层：KCLF 注入及全局状态走 kpatch superkey 管理通道；用户态
-覆盖 API 走独立的 16 字节模块密钥及 MAC，不要求 App 拥有 root。会话 ownership
-仍按调用者 mm 校验，SET 仍使用 generation 拒绝过期更新。嵌入 KCLF 不把设备
-superkey 传进 payload，也没有新增免认证的用户态读取豁免命令。
+每个目标有独立 replacement 和 original trampoline。第 i 个原函数为 a*7+b+17*i；输入 (3+i,4+2*i)，hook 调用 original(a+10,b*3)，再加 1000。每个检查阶段执行十个函数各 256 次，核对实参、原返回值和最终返回值，不能只靠一个函数或总 CRC 判定成功。
 
-## 状态与故障恢复
+payload 强制 near trampoline，并逐个验证入口为 B imm26、目标页实际发生改变、跳转目的地位于所有覆盖页之外。覆盖页内的 LDR literal 远跳转会读到旧影像，不能用于此测试。部分安装失败按逆序撤销已安装 hook；撤销失败时保留记录和快照。REGISTER 错误后查询真实会话状态，避免把已提交但 copy-out 失败的注册误当作未生效。
 
-| 状态/故障 | 处理方式 |
-|---|---|
-| 初始化前置条件失败 | 返回错误；成功初始化标志避免对未启动组件调用退出函数；KCLF 布局/符号预检在其 syscall hook 安装之前 |
-| KCLF 请求进行中 | ARMED → PREPARING → READY → RUNNING → DONE；错误为 FAILED，取消为 CANCELLED；等待 token 和清理，不只看 inject 返回 queued |
-| payload 构造完成 | 只发布测试操作入口；脚本先确认 DONE，再让 App 执行 hook，避免把 hook/REGISTER 放进 loader 构造阶段 |
-| HOOK 后、REGISTER 前 | 物理代码已修改，CRC 应失败；这是必须验证的负对照 |
-| REGISTER 成功 | 读取旧影像、执行新代码；同一 mm 中新注入 SO 也读旧影像 |
-| REGISTER 或运行检查失败 | 报告失败并保留现场；不能把失败当作已开启覆盖，也不能直接 release 带有活动 hook 的 SO |
-| 正常结束 | DEACTIVATE → CRC 再次检测到 patch → DobbyDestroy → 原返回值/CRC 恢复 → 目标进程退出 → reap |
-| owner 异常退出 | 用认证 QUERY 在 sleepable 路径回收死亡会话，再检查全局 inactive；KCLF reap 清理已死 mm 的镜像/请求 |
-| 子快照仍存活 | DEACTIVATE 返回 EBUSY；先结束或 exec 子进程，不强制释放父影像 |
-| KPM 替换 | 受控重启后加载新文件；不在当前宿主执行 unload/load 循环 |
+## 测试流程与判定
 
-测试 App 的 command 序列号和报告序列号一一对应，拒绝旧文件被误判为本轮结果。
-失败后不会自动重复注入。每个后端开始前新建 App 进程；结束时核对 inactive、
-no requests、no manual images，并比较前后 boot ID。测试不将普通线程的 syscall
-边界推断为通用安全点，而是显式提供不持锁的协作线程。
+1. 新建独立 :runner 进程，找到整段 RX 并保存整段和十页基线 CRC。
+2. 使用设备 SuperKey 查询 KPM 数量。如果为零，先测 module_absent，再由 /data/local/tmp/kpatch 加载 /data/local/tmp/urov-z.kpm。若已有模块，明确输出 module_absent=SKIP，校验固定密钥和 inactive 状态。
+3. 测 loaded_inactive；启动不持用户锁、SVC 返回后 x16 已死的 uz-inject 协作线程。
+4. KCLF 注入 payload；根据本次请求 id 等待 DONE、非零 handle、没有 pending/map/err，再独立核对 constructor cookie。
+5. 每轮执行 HOOK → CRC 检出十页修改 → OVERLAY → 三通道 CRC 恢复基线 → 压力测试 → 活动覆盖下再次注入 probe → DEACTIVATE → CRC 再次检出修改 → UNHOOK → 原函数和 CRC 恢复。
+6. 每轮 probe 使用 unload 释放本次无后台工作的探针引用，核对构造次数递增、十个 hook 返回值和基线 CRC；驻留的 hook payload 不使用 unload。
+7. 检查 inactive、无在途请求，结果发送给界面后退出测试进程。下次复测先 reap 死亡目标；每次均使用新进程，manual/linker 构造和 Dobby 分配不会串轮。
 
-## Dobby 的关键兼容条件
+三通道是直接 EL0 数据读取、process_vm_readv、/proc/self/mem。每个阶段不仅比较整段 CRC，还分别核对十页在三通道上的 CRC。hooked_uncovered/deactivated 要求每一页都不同于原页；其他阶段要求每一页恢复原值。覆盖期间要求 registered=10、armed=10、hits>0、failures=0。
 
-`Dobby/` 的 237 个文件原样恢复自 `dev` / `3679b4f`，目录 Git tree 为
-`90f0aae0979e05fdd26403bc0e5b44a28a5f62c2`。未修改 Dobby 源码。
-该版本可选 SymbolResolver 插件引用不存在的 `RuntimeModule.load_address`；
-测试构建禁用此插件，通过测试 App 提供的函数地址调用 DobbyHook。
+压力测试使用起跑同步的 4 个线程，每线程 8 轮，每轮十个函数各调用 64 次，再轮换顺序完成三通道整段 CRC。合计每周期 **20,480 次调用和 96 次 CRC**；所有线程 join 后才能注销或撤销 hook。日志单独显示 mismatch、armed、hits、failures。
 
-仅“调用 DobbyHook，再提供原始影像”不足以保证运行：当替换函数离目标较远，
-Dobby 默认可能生成 `LDR literal; BR; address`。这个 LDR 读取的是覆盖页中的
-数据，也会拿到原始 NOP 字节，跳转失效。首次 manual 测试确实因该原因发生
-App SIGBUS，内核没有重启；这项失败没有计入通过结果。
+## CRC 与定时返回值显示
 
-最终 payload 在 hook 前调用 `dobby_set_near_trampoline(true)`，并在注册覆盖前
-验证目标首条指令为 AArch64 `B imm26`。若 Dobby 无法生成近跳转，撤销 hook 并
-报告失败。必要的远跳转由独立的邻近 trampoline 完成。本测试目标入口是专门
-保留的 NOP 序列，不依赖会在覆盖页中读取改写后 literal 的原函数代码。
+界面独立展示整段 CRC 的基线、direct/readv/proc 三个实际值、完整性结论和阶段判定。hooked_uncovered/deactivated 阶段应当“检出代码修改”，该负对照符合预期时阶段判定仍为 PASS；覆盖启用或 hook 撤销后应当“与基线一致”。“展开 10 页 CRC 明细”显示每页的基线、三通道实际 CRC 和判定，成功页也输出 PAGE 日志。
 
-两种“快照”必须区分：payload 在 hook **之前**保存原始页作为 CRC 读取影像；
-UROV 在 REGISTER 时保留的真实快照已经包含 Dobby patch，供真实页语义及指令
-解码使用。UROV 本身不写入 Dobby patch，也不替 App 修改 CRC 参考值。
+测试运行期间，uz-returns 线程按约 1 秒周期重新调用全部十个函数入口；阶段切换后立即追加一组采样。RETURNS 行标明采样序号、时间、阶段和 hook/覆盖状态，接着十条 RETURN 行分别记录实际返回值、期望值、原始返回值、最近一次覆盖期实测值和 PASS/FAIL。任意一次实际值与期望不符，都计入最终失败。参数与原函数返回值仍由原有 256 次/函数及压力测试断言校验。
 
-## 测试实现
+采样和安装/撤销 hook、注册/注销、KCLF 注入、单次 CRC 计时互斥：临界区内到期的采样延后，计时两端之间不执行采样调用或日志。压力测试期间继续采样。测试结束即停止定时线程；界面保留最后采样及覆盖期证据，不把清理后的原返回值误标为覆盖时返回值。
 
-```mermaid
-sequenceDiagram
-    participant R as 电脑测试脚本
-    participant K as urov-z / KCLF
-    participant A as 普通测试 App
-    participant P as 注入 SO / Dobby
-    R->>A: 启动，记录整段 RX 基线 CRC
-    R->>K: kclf,inject,TID,SO,manual 或 linker
-    K->>P: 目标线程 task_work + EL0 构造函数
-    P->>A: 发布测试操作入口
-    R->>A: 等待加载完成后执行 HOOK
-    A->>P: 保存原页，DobbyHook
-    A->>A: 参数/返回值改变，CRC 与基线不同
-    R->>A: OVERLAY
-    P->>K: REGISTER 原始页影像
-    A->>A: hook 仍生效，三种读取 CRC 均等于基线
-    R->>K: 活动覆盖期间注入 probe SO
-    K->>A: probe 构造函数检查 CRC 和 hook 返回值
-    R->>A: DEACTIVATE，再 UNHOOK
-    A->>A: CRC 先重新变化，最后与原函数一起恢复
-```
+CRC、返回值和简短计时使用独立内存快照传到界面，最近日志使用 96 KiB 按完整行滚动的缓冲区。多轮运行超过日志缓冲区后，当前结果和最终 PASS/FAIL 仍可更新，logcat 持续接收输出。所有显示均不写文件。
 
-- `integration/host.c`、`target.S`：提供 `uz_test_target(a,b)`，实际函数为
-  `a*7+b`，记录真实到达原函数的两个参数。独立工作线程 `uz-inject` 在不持有
-  用户锁、x16 已死的 nanosleep SVC 边界接受注入。
-- `payload.c`：构造函数只发布测试接口。HOOK 保存页并使用 Dobby；替换函数调用
-  `original(a+10,b*3)` 再加 1000。初始 `(3,4)` 返回 25；hook 后原函数收到
-  `(13,12)`、返回 103，调用者得到 1103。每个 App 报告验证 256 次调用。
-- `host.c`：从 ELF program headers 找到宿主的整个 executable PT_LOAD，本次
-  49,568 字节。直接 volatile LDRB 实现 IEEE CRC32；readv 和 proc-mem 分块读取
-  后用 zlib CRC32 独立计算。基线仅在注入前计算一次，后续从不更新参考值。
-- `probe.c`：在 overlay 已活动时再次注入，其构造函数读取整段代码 CRC 并调用
-  被 hook 的目标，证明新 SO 也遵守同一 mm 的读取覆盖。
-- `relro_test.c`：14 个断言覆盖合法页尾、越界、权限、空区间、溢出和 4K/16K。
+## 耗时含义
 
-App 只主动加载 `libuzhost.so`。另外两个 SO 被打包进 APK，使其位于目标 namespace
-允许访问的目录，但由 KCLF 注入；脚本先检查目标 maps 中它们不存在，再独立检查
-KCLF DONE、构造函数 cookie、参数、返回值和 CRC。测试上下文文件仅位于本测试 App
-沙箱，不包含模块密钥。payload 无后台线程；退出前先 DEACTIVATE、DobbyDestroy，
-再结束测试进程并 reap。Dobby 本身保留的 trampoline 分配随进程退出释放。
+使用 CLOCK_MONOTONIC 纳秒计时，统一转换为微秒。每个阶段每通道 2 次预热、9 次正式采样；每轮轮换通道顺序，每个样本核对 CRC。仅输出三通道的前/后中位数，每组比较一行 TIME；不再逐阶段输出均值、最小值、P95、差值和百分比。
 
-## 构建与复现
+计时范围是一次完整 executable PT_LOAD 的读取与 CRC。直接通道用明确的 LD1 四向量指令每次取 64 字节，再软件计算 IEEE CRC32，尾部按字节读取；这样避免逐字节扫描十页带来的每字节一次异常。内核辅助通道使用 4 KiB 缓冲区加 zlib CRC32，proc 通道计入 open/close。比较只在**同一通道**前后进行，不把不同算法/读取方式的时间直接解释为模块开销。
 
-在 `urov-lab` 根目录执行（SDK/NDK 路径按本机修改）：
+简短的 TIME compare= 日志提供（direct_us、readv_us、proc_us 的值均为“前/后”）：
 
-```powershell
+- module_absent_to_loaded_inactive：真正未加载与已加载但未覆盖（仅本次起始无 KPM 时有效）。
+- module_absent_to_overlay：真正未加载与十页覆盖生效（同上）。
+- hooked_uncovered_to_overlay：相同 hook、相同进程、相同字节范围，仅覆盖关闭/开启。
+- deactivated_to_overlay：覆盖测试后的关闭值，便于观察温度、调频、缓存和调度漂移。
+
+hook、注册、注入、定时函数采样、日志和压力线程启动不在 CRC 计时区间。压力阶段的 elapsed_ms 是另一项并发总耗时。2 次预热和短样本不能消除所有 DVFS/调度影响，单次比值不能解释为精确固定开销。复测不为获得无模块基线而热卸载 KPM；需要新无模块样本时受控重启，再运行相同 APK。
+
+## 构建与使用
+
+固定模块测试密钥为 UTF-8 项目名 urov-lab（无换行）的 MD5：
+
+    59f5c4618474864a61d5469295548064
+
+唯一源码常量是 test_config.h，CRC payload、host、原有回归 App 和查询工具共享。设备 kpatch SuperKey 是另一层管理凭据，界面输入只保留在内存，不写入源码、配置或结果文件。测试中的错误密钥断言仍故意使用无效凭据。
+
+在 urov-lab 根目录构建：
+
+~~~powershell
 .\build.ps1 -KernelPatchRoot E:\KernelPatch -Ndk D:\androidSDK\ndk\26.1.10909125
 .\integration\build.ps1 -Sdk D:\androidSDK -Ndk D:\androidSDK\ndk\26.1.10909125
 .\app\build.ps1 -Sdk D:\androidSDK -Ndk D:\androidSDK\ndk\26.1.10909125
-```
+~~~
 
-设备已有 root/KernelPatch；首次测试要求 KPM 数量为零。脚本不会自动热卸载旧模块：
+首次部署仅需：
 
-```powershell
-$KP_KEY = Read-Host 'KernelPatch superkey'
-.\integration\device-test.ps1 -SuperKey $KP_KEY -Serial '<adb serial>' -LoadModule -Cycles 3
-```
-
-`-LoadModule` 生成独立随机模块密钥，仅保存到忽略的
-`out/integration/session.key`。脚本不打印密钥。当前 KPM 仍在且未 quiesce 时，
-可省略 `-LoadModule` 复测；指定 `-Backend manual` 或 `-Backend linker` 可单独测试。
-`-Quiesce` 是可选结束操作，会停止接受后续注入，重新测试需受控重启加载。
-
-统一控制命令示例：
-
-```powershell
-adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z status
-adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z kclf,probe
-adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z "kclf,inject,<tid>,<absolute-so-path>,manual,wake"
-adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z "kclf,inject,<tid>,<absolute-so-path>,linker,wake"
-adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z kclf,status
-adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z kclf,images
-adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z kclf,reap
-```
-
-原有回归在集成测试结束、全局 inactive 后运行：
-
-```powershell
+~~~text
+adb push out/urov-z.kpm /data/local/tmp/urov-z.kpm
+adb install -r out/integration/urov-injection-test.apk
 adb install -r out/app/urov-z-test.apk
-$MODULE_KEY = [IO.File]::ReadAllText((Join-Path $PWD 'out/integration/session.key')).Trim()
-.\app\test.ps1 -ModuleKey $MODULE_KEY
-```
+~~~
 
-输出为 `out/urov-z.kpm`、`out/integration/urov-injection-test.apk`、
-`out/integration/native/libuzpayload.so` 和 `libuzprobe.so`。每次测试的逐阶段报告、
-加载器状态、前后 maps 和结果保存在 `out/integration/run-*/`。失败时保留进程
-和模块供检查，不尝试自动卸载仍在使用的 SO/KPM。
+打开 **UROV CRC Lab**，输入设备 kpatch SuperKey，选择 manual 或 linker、轮数 1–20（默认 3），点“运行 / 复测”。两种后端分别运行。状态、逐页检查、耗时和最终 PASS/FAIL 直接显示在界面；日志实时查看：
 
-这些结果证明了该受控 App、设备及 RX 入口布局的集成行为，未证明任意 App 的
-线程安全注入、完整 JNI/TLS 兼容、所有指令透明性或热卸载安全。KCLF 的 x16
-恢复限制、目标 namespace/SELinux 限制、UROV 的映射/写入限制仍然适用。
+~~~text
+adb logcat -v brief -s UROVZ-CRC:I *:S
+~~~
+
+也支持无需脚本的命令行启动；设备密钥替换占位符：
+
+~~~text
+adb shell am start -S -W -n com.example.urovzinject/.MainActivity --es superkey <device-superkey> --es backend manual --ei cycles 3 --ez autorun true
+~~~
+
+不要在上一轮仍运行时使用 -S。正常复测直接点击按钮。应用不从日志文件恢复结果；关闭界面进程后内存报告丢失。
+
+原有 **UROV-Z Lab** 无需填写模块密钥，点击“运行完整测试”，或：
+
+~~~text
+adb shell am start -S -W -n com.example.urovz/.MainActivity --ez autorun true
+adb logcat -v brief -s UROVZ:I *:S
+~~~
+
+integration/control.c 使用与 kpatch 相同的认证 supercall ABI 查询/控制 KPM，保持被测进程为普通应用 UID；只有首次加载模块时，临时子进程获取 root 并 exec 设备的 kpatch。活动覆盖期间不 fork 被测 owner，也不在注入期间让控制子进程继承测试页。
+
+应用服务不导出，Binder 结果有大小上限，不保存密钥。注入超时/在途操作未知时不再操作 hook；进程退出后由认证 QUERY 和 reap 回收死亡会话。模块缺失、密钥不符、控制失败、CRC 错误、probe 失败或进程崩溃都不得判为通过。KPM 保持驻留；更新二进制仍采用受控重启，不热卸载。

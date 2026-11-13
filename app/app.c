@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <zlib.h>
 #include "urov/urov.h"
+#include "../test_config.h"
 
 extern int uz_fixture(void);
 extern unsigned uz_self_read(const void *);
@@ -427,14 +428,13 @@ done:
     report(t, "RESULT %s checks=%u failures=%u", t->failed ? "FAIL" : "PASS", t->checks, t->failed);
 }
 JNIEXPORT jstring JNICALL
-Java_com_example_urovz_MainActivity_runNative(JNIEnv *env, jclass cls, jstring key, jboolean baseline)
+Java_com_example_urovz_MainActivity_runNative(JNIEnv *env, jclass cls, jboolean baseline)
 {
     (void)cls;
     struct test_context *t = calloc(1, sizeof(*t));
     if (!t) return (*env)->NewStringUTF(env, "RESULT FAIL allocation");
-    const char *hex = key ? (*env)->GetStringUTFChars(env, key, NULL) : NULL;
+    const char *hex = UROV_TEST_KEY;
     run_tests(t, hex, baseline);
-    if (hex) (*env)->ReleaseStringUTFChars(env, key, hex);
     jstring result = (*env)->NewStringUTF(env, t->output);
     urov_client_destroy(&t->client);
     free(t);

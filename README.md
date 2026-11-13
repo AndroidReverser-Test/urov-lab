@@ -4,9 +4,9 @@
 
 Android ARM64 用户态代码页读取覆盖实验模块，基于 UROV-Y 2.28.0，固定使用 **PAGE_AP / all-callers**。取指执行物理代码页，数据读取由注册的影像替代；无需配置读取指令地址或调用者白名单。详细原理、ABI、兼容条件和限制见 [DESIGN.md](DESIGN.md)。
 
-当前 `main` 工作版本为 **1.1.0：单 KPM 集成 KCLF 1.5.7**。`module/kclf/` 是内置加载器，`integration/` 提供 Dobby 注入 SO、独立 CRC 测试 App 和设备脚本；`Dobby/` 原样恢复自 `dev`。实现分析、控制命令和复现步骤见 [INTEGRATION.md](INTEGRATION.md)，本次实测见 [集成验证记录](integration/RESULTS-2026-11-12.md)。
+当前 `main` 工作版本为 **1.2.0：十页 CRC / 定时返回值 / 应用内复测**，单 KPM 集成 KCLF 1.5.7。`module/kclf/` 是内置加载器，`integration/` 提供 Dobby 注入 SO、十页 CRC 测试 App 和应用内复测入口；`Dobby/` 原样恢复自 `dev`。实现分析、控制命令和复现步骤见 [INTEGRATION.md](INTEGRATION.md)，历史单页实测见 [集成验证记录](integration/RESULTS-2026-11-12.md)。
 
-`app/` 保留原有 73 项回归，`api/` 保留独立用户态库；`out/` 中的 KPM、APK、测试日志、密钥与 BTF 不进入 Git。1.1.0 编译产物与 SHA-256 校验值见 [Release v1.1.0](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.1.0)，发布验证见 [RELEASE-1.1.0.md](RELEASE-1.1.0.md)，当前实现解析见 [1.1.0 源码分析](docs/implementation-1.1.0.zh-CN.md)。原实现可从 `dev` / `3679b4f` 查看；之前的审查见 [AUDIT.md](AUDIT.md)，历史 1.0.0 发布记录见 [RELEASE-1.0.0.md](RELEASE-1.0.0.md)。
+`app/` 保留原有 73 项回归，`api/` 保留独立用户态库；`out/` 中的 KPM、APK、签名材料与 BTF 不进入 Git。当前 APK、KPM 与 SHA-256 校验文件见 [Release v1.2.0](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.0)，版本说明见 [RELEASE-1.2.0.md](RELEASE-1.2.0.md)。内核实现分析见 [1.1.0 源码分析](docs/implementation-1.1.0.zh-CN.md)，当前测试实现见 [INTEGRATION.md](INTEGRATION.md)。原实现可从 `dev` / `3679b4f` 查看；之前的审查见 [AUDIT.md](AUDIT.md)，历史 1.0.0 发布记录见 [RELEASE-1.0.0.md](RELEASE-1.0.0.md)。
 
 用户态 C/C++ 接口见 [api/README.md](api/README.md)：查询、注册、更新、状态和注销均已封装；无需应用自己实现 syscall 参数和 MAC。构建静态库/动态库：`.\api\build.ps1 -Ndk <NDK目录>`。
 
@@ -34,13 +34,13 @@ Android ARM64 用户态代码页读取覆盖实验模块，基于 UROV-Y 2.28.0�
 
 ### 加载集成模块
 
-设备须已安装可加载 KPM 的 KernelPatch。以下命令在电脑的 **PowerShell** 中、从本仓库根目录执行；假定 ADB 已选中一台设备，多设备时给命令增加 `-s <serial>`。`KP_KEY` 是设备的 kpatch superkey，用于模块管理和注入；`MODULE_KEY` 是另外生成的 16 字节模块密钥，仅供 App/注入 SO 调用读取覆盖 API，二者不同。不要将实际密钥提交到仓库。
+设备须已安装可加载 KPM 的 KernelPatch。以下命令在电脑的 **PowerShell** 中、从本仓库根目录执行；假定 ADB 已选中一台设备，多设备时给命令增加 `-s <serial>`。`KP_KEY` 是设备的 kpatch superkey，用于模块管理和注入；测试 `MODULE_KEY` 固定为项目名 `urov-lab`（UTF-8、无换行）的 MD5：`59f5c4618474864a61d5469295548064`。模块密钥与设备 SuperKey 不同；设备 SuperKey 不写入源码或文件。
 
 仅加载 `urov-z.kpm`，不再单独加载 `kclf.kpm`。已有模块需要替换时按后文的受控重启流程处理，不直接热卸载重载。
 
 ```powershell
 $KP_KEY = '<device-superkey>'
-$MODULE_KEY = python -c 'import secrets; print(secrets.token_hex(16))'
+$MODULE_KEY = '59f5c4618474864a61d5469295548064' # MD5(urov-lab)
 adb push out/urov-z.kpm /data/local/tmp/urov-z.kpm
 adb shell "/data/local/tmp/kpatch $KP_KEY kpm load /data/local/tmp/urov-z.kpm 'key=$MODULE_KEY verbose'"
 adb shell /data/local/tmp/kpatch $KP_KEY kpm list
@@ -54,7 +54,7 @@ KPM 管理层也可使用以下查询，与后文的模块内部控制命令区�
 
 | 命令 | 用途 |
 |---|---|
-| `adb shell /data/local/tmp/kpatch $KP_KEY kpm num` | 已加载 KPM 的数量；自动测试的 `-LoadModule` 要求为 0 |
+| `adb shell /data/local/tmp/kpatch $KP_KEY kpm num` | 已加载 KPM 的数量；应用首次自动加载要求为 0 |
 | `adb shell /data/local/tmp/kpatch $KP_KEY kpm list` | 列出已加载模块名；集成模块名为 `urov-z` |
 | `adb shell /data/local/tmp/kpatch $KP_KEY kpm info urov-z` | 查看版本、描述和加载参数；加载参数包含 `key=`，分享输出前须脱敏 |
 
@@ -187,31 +187,27 @@ adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z kclf,quiesce
 
 对读取覆盖 API，密钥错误或模块缺失通常返回 `-EINVAL`；这与 KCLF 命令参数错误属于不同控制通道。相关失败的状态核对见 [API 文档](api/README.md)。
 
-### 读取覆盖 API 与自动测试
+### 复测流程（无需 PowerShell 脚本）
 
-REGISTER、SET/SET_PAGE、STATUS、DEACTIVATE 由 owner 进程通过 [用户态 API](api/README.md) 调用，不是 `ctl0` 字符串命令。注入命令本身不会自动注册 CRC 影像或安装 Dobby hook；这些动作由 payload 实现。`urov_client_destroy` 也不替代 DEACTIVATE。
+1. 从 [Releases](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.0) 下载 `urov-z.kpm`、`urov-injection-test.apk` 和 `urov-z-test.apk`。在下载目录执行：
 
-原有 73 项回归：
+   ~~~text
+   adb push urov-z.kpm /data/local/tmp/urov-z.kpm
+   adb install -r urov-injection-test.apk
+   adb install -r urov-z-test.apk
+   ~~~
 
-```powershell
-adb install -r out/app/urov-z-test.apk
-.\app\test.ps1 -ModuleKey $MODULE_KEY
-adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z status
-```
+2. 设备首次加载前应无 KPM；若已有旧版或使用其他密钥的模块，先受控重启。打开 **UROV CRC Lab**，输入设备 kpatch SuperKey，选择 `manual`、默认 3 轮，点“运行 / 复测”。App 自动加载设备端 KPM；模块测试密钥固定为 `MD5(urov-lab) = 59f5c4618474864a61d5469295548064`，无需填写模块密钥。
+3. 等待最终 **PASS** 后，切换 `linker`，再运行 3 轮。界面显示整段及十页三通道 CRC；10 个函数每秒实测并输出实际/期望返回值，切换及单次计时期间延后。覆盖生效时，应同时看到 **CRC 与基线一致、返回值为 hook 后值、10/10 页通过**；未覆盖的 hook 阶段应检出代码修改。计时仅简要显示三通道前/后中位数。
+4. 最终 PASS 表示该轮检查通过，覆盖已注销、hook 已撤销。后续可直接点击“运行 / 复测”。需要原有 73 项回归时，等待 CRC 测试结束，再打开 **UROV-Z Lab** 点击“运行完整测试”。
 
-也可打开 **UROV-Z Lab**，填写模块密钥后点“运行完整测试”。App 在普通 `untrusted_app` 域运行；测试前后验证原始值，测试结束自动 `DEACTIVATE`，结果保存在 App 的 `files/report.txt`，同时输出 `UROVZ` logcat。`test.ps1` 会重启此测试 App，请等上一轮结束再运行。
+每轮包含 10 个独立内存页上的 Dobby hook、4 线程的 96 次整段 CRC 和 20,480 次调用，以及活动覆盖期间再次注入探针。结果只显示在界面和 logcat，不写结果或密钥文件；日志可实时查看：
 
-运行完整注入/Dobby/CRC 测试有两种入口，按设备当前状态二选一：
+~~~text
+adb logcat -v brief -s UROVZ-CRC:I UROVZ:I *:S
+~~~
 
-```powershell
-# 已按上文加载集成 KPM，复用相同 MODULE_KEY；不要再次指定 -LoadModule
-.\integration\device-test.ps1 -SuperKey $KP_KEY -ModuleKey $MODULE_KEY -Cycles 3
-
-# 或：在 KPM 数量为 0 的设备上，让脚本生成密钥并加载模块
-# .\integration\device-test.ps1 -SuperKey $KP_KEY -LoadModule -Cycles 3
-```
-
-脚本默认依次测试 manual 和 linker，自动查找本仓库 App 的协作线程及 SO 路径。可加 `-Serial '<serial>'`、`-Backend manual` 或 `-Backend linker`；只有希望停止后续注入时才加 `-Quiesce`。`-LoadModule` 生成的模块密钥保存在忽略的 `out/integration/session.key`，后续不传 `-ModuleKey` 时脚本读取该文件；手动加载模块时应显式传入对应密钥。脚本会安装并重启本仓库的注入测试 App，逐阶段证据写入 `out/integration/run-*/`。完整步骤见 [INTEGRATION.md](INTEGRATION.md)。
+只有首次运行前 KPM 数量为零时才采集“模块未加载”耗时；已有模块时明确跳过该项，比较同一进程中的“已 hook 未覆盖 / 十页覆盖”。更新 KPM 使用受控重启，不热卸载。实现与计时口径见 [INTEGRATION.md](INTEGRATION.md)。
 
 ### 清理与更换模块
 
@@ -228,7 +224,7 @@ adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z kclf,images
 ```powershell
 adb push out/app/urovz-query /data/local/tmp/urovz-query
 adb shell chmod 755 /data/local/tmp/urovz-query
-adb shell /data/local/tmp/urovz-query $MODULE_KEY
+adb shell /data/local/tmp/urovz-query
 adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z status
 ```
 
@@ -262,7 +258,7 @@ Use Windows PowerShell, Android NDK/SDK, JDK and a KernelPatch source tree provi
 
 ### Load and use
 
-The device must already support KernelPatch modules. Set `KP_KEY` to its kpatch superkey and generate a separate random 32-hex-character `MODULE_KEY`. Follow the load/install/test commands above, or enter the module key in **UROV-Z Lab** and press **Run tests**. The App runs as an ordinary `untrusted_app`, automatically deactivates its session and writes `files/report.txt` and the `UROVZ` logcat tag. The PowerShell test script restarts this App; wait for any previous run to finish.
+The device must support KernelPatch modules. The test module key is always MD5 of the UTF-8 project name `urov-lab` without a newline: `59f5c4618474864a61d5469295548064`. The device superkey is separate. Open **UROV CRC Lab**, enter that device superkey, select manual/linker and 1–20 cycles, and tap **Run / Retest**. Results stay in the UI and logcat (`UROVZ-CRC`); no report, command, address or key files are written. **UROV-Z Lab** uses the same fixed module key for its original checks and logs to `UROVZ`.
 
 After testing, deactivate the overlay, remove the Dobby hook, stop the test process and reap KCLF. Leave the KPM loaded: the current host does not prove safe retirement of in-flight hook trampolines. Use a controlled reboot to replace the KPM. Native step is disabled by default, but this does not repair host-level hot unloading. If the owner crashed, `urovz-query` triggers dead-owner cleanup in a sleepable syscall; its state is caller-local. Global inactivity is not proof of unload safety.
 
@@ -315,7 +311,7 @@ Quiesce has no resume command. The `resume` notification option does not re-enab
 
 Overlay REGISTER/SET/STATUS/DEACTIVATE are owner-process [API calls](api/README.md), not ctl0 commands. Injection does not automatically install a Dobby hook or register an overlay. Follow the [Dobby constraints](api/README.md#与-dobby-hook-联合使用的限制): save the original page before hook installation, register only after patching, and deactivate before removing hooks or releasing the payload.
 
-For automated integration testing with an already loaded module, run `integration/device-test.ps1 -SuperKey $KP_KEY -ModuleKey $MODULE_KEY -Cycles 3`. On a device with zero KPMs, use `-LoadModule` instead of `-ModuleKey` to generate a key and load the module. The generated key is stored only in ignored `out/integration/session.key`; later runner calls can reuse it. Optional `-Backend manual` or `-Backend linker` selects one backend, `-Serial` selects the device, and `-Quiesce` permanently stops further injections for that loaded instance. The runner installs/restarts the integration App and writes phase reports under `out/integration/run-*/`.
+Integration tests now run in a fresh private Android service process for every button press. Ten 16-KiB-aligned Dobby targets are checked for distinct runtime pages. Each cycle validates per-page and whole-code CRCs through three read paths, performs 96 concurrent CRC scans and 20,480 function calls using four threads, reinjects a probe while the overlay is active, then deactivates and removes every hook. The UI shows baseline and actual CRCs with stage verdicts, plus ten fresh function return values sampled every second (deferred during mutations, injection and timed reads). Timing uses two warmups and nine samples per channel, with a single concise before/after median line per comparison. A truly module-absent baseline is collected only before the first load; subsequent runs explicitly skip it and compare inactive/active overlays in the same process. Build scripts remain, but the PowerShell retest scripts and file-based result exchange have been removed. See [INTEGRATION.md](INTEGRATION.md).
 
 ### Compatibility
 

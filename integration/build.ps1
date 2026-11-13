@@ -23,7 +23,8 @@ Check 'CMake configuration'
 & $Cmake --build (Join-Path $out 'native') --target uzhost uzpayload uzprobe relro-test --parallel 8
 Check 'Native build'
 & javac -encoding UTF-8 -source 8 -target 8 -Xlint:-options -bootclasspath $android `
-    -d (Join-Path $out 'classes') (Join-Path $PSScriptRoot 'MainActivity.java')
+    -classpath (Join-Path $bin 'core-lambda-stubs.jar') `
+    -d (Join-Path $out 'classes') (Join-Path $PSScriptRoot 'MainActivity.java') (Join-Path $PSScriptRoot 'RunnerService.java')
 Check 'Java compilation'
 $classes = @(Get-ChildItem -LiteralPath (Join-Path $out 'classes') -Filter '*.class' -Recurse | ForEach-Object FullName)
 & (Join-Path $bin 'd8.bat') --min-api 26 --lib $android --output (Join-Path $out 'dex') @classes

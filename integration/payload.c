@@ -5,21 +5,36 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
-
 static struct test_context *ctx;
 static struct urov_client client;
-static int (*original)(int, int);
-static void *page;
-static unsigned char *snapshot;
+static test_target original[TEST_TARGETS];
+static void *pages[TEST_TARGETS];
+static unsigned char *snapshots;
 static size_t page_size;
-
-static int replacement(int a, int b)
+static unsigned installed;
+#define REPLACEMENT(i) static int replacement_##i(int a, int b) { \
+    int result = original[i](a + 10, b * 3); \
+    __atomic_store_n(&ctx->original_result[i], result, __ATOMIC_RELAXED); \
+    return result + 1000; }
+REPLACEMENT(0) REPLACEMENT(1) REPLACEMENT(2) REPLACEMENT(3) REPLACEMENT(4)
+REPLACEMENT(5) REPLACEMENT(6) REPLACEMENT(7) REPLACEMENT(8) REPLACEMENT(9)
+static const test_target replacements[TEST_TARGETS] = {
+    replacement_0, replacement_1, replacement_2, replacement_3, replacement_4,
+    replacement_5, replacement_6, replacement_7, replacement_8, replacement_9
+};
+static int unhook(void)
 {
-    int result = original(a + 10, b * 3);
-    ctx->original_result = result;
-    return result + 1000;
+    int failure = 0;
+    for (int i = TEST_TARGETS - 1; i >= 0; --i) {
+        if (!(installed & (1U << i))) continue;
+        int rc = DobbyDestroy((void *)ctx->targets[i]);
+        if (rc) { failure = rc; continue; }
+        installed &= ~(1U << i);
+    }
+    ctx->hooked = __builtin_popcount(installed);
+    if (!installed) { free(snapshots); snapshots = NULL; }
+    return failure;
 }
-
 static int action(int command)
 {
     struct urov_status st;
@@ -31,36 +46,53 @@ static int action(int command)
             ctx->overlay_hits = st.hits;
             ctx->overlay_failures = st.failures;
             ctx->armed = st.armed_pages;
+            ctx->registered_pages = st.page_count;
+            ctx->overlaid = st.state == UROV_Z_ACTIVE;
         }
         return rc;
     case HOOK:
-        if (ctx->hooked || ctx->overlaid) return -EBUSY;
-        snapshot = malloc(page_size);
-        if (!snapshot) return -ENOMEM;
-        memcpy(snapshot, page, page_size);
-        /* A far LDR-literal jump reads its destination out of the covered
-         * page and would receive the original bytes too. Force a B immediate
-         * to Dobby's nearby forwarding trampoline outside this page. */
+        if (installed || ctx->overlaid) return -EBUSY;
+        snapshots = malloc(TEST_TARGETS * page_size);
+        if (!snapshots) return -ENOMEM;
+        /* Snapshot ALL pages before the first Dobby mutation. */
+        for (unsigned i = 0; i < TEST_TARGETS; ++i)
+            memcpy(snapshots + i * page_size, pages[i], page_size);
         dobby_set_near_trampoline(true);
-        rc = DobbyHook((void *)ctx->target, (void *)replacement, (void **)&original);
-        if (rc) { free(snapshot); snapshot = NULL; return rc; }
-        uint32_t first;
-        memcpy(&first, (const void *)ctx->target, sizeof(first));
-        if ((first & 0xfc000000U) != 0x14000000U) {
-            DobbyDestroy((void *)ctx->target);
-            free(snapshot);
-            snapshot = NULL;
-            return -EOPNOTSUPP;
+        for (unsigned i = 0; i < TEST_TARGETS; ++i) {
+            rc = DobbyHook((void *)ctx->targets[i], (void *)replacements[i], (void **)&original[i]);
+            if (rc) { int rollback = unhook(); return rollback ? rollback : rc; }
+            installed |= 1U << i;
+            ctx->hooked = __builtin_popcount(installed);
+            uint32_t first;
+            memcpy(&first, (void *)ctx->targets[i], sizeof(first));
+            if ((first & 0xfc000000U) != 0x14000000U ||
+                !memcmp(snapshots + i * page_size, pages[i], page_size)) {
+                int rollback = unhook();
+                return rollback ? rollback : -EOPNOTSUPP;
+            }
+            /* The forwarding trampoline must be outside EVERY covered page. */
+            intptr_t delta = (intptr_t)((int32_t)(first << 6) >> 4);
+            uintptr_t destination = (uintptr_t)ctx->targets[i] + delta;
+            for (unsigned j = 0; j < TEST_TARGETS; ++j) {
+                if ((destination & ~(page_size - 1)) == (uintptr_t)pages[j]) {
+                    int rollback = unhook();
+                    return rollback ? rollback : -EOPNOTSUPP;
+                }
+            }
         }
-        ctx->hooked = 1;
-        /* A hook must have changed real text, independent of return checks. */
-        return memcmp(snapshot, page, page_size) ? 0 : -EIO;
+        return 0;
     case OVERLAY: {
-        if (!ctx->hooked || ctx->overlaid || !snapshot) return -EINVAL;
-        struct urov_page descriptor = {page, snapshot, 0, (uint32_t)page_size};
-        rc = urov_register_pages(&client, &descriptor, 1, &st);
+        if (ctx->hooked != TEST_TARGETS || ctx->overlaid || !snapshots) return -EINVAL;
+        struct urov_page descriptors[TEST_TARGETS];
+        for (unsigned i = 0; i < TEST_TARGETS; ++i)
+            descriptors[i] = (struct urov_page){pages[i], snapshots + i * page_size, 0, (uint32_t)page_size};
+        rc = urov_register_pages(&client, descriptors, TEST_TARGETS, &st);
         if (!rc) ctx->overlaid = 1;
-        return rc;
+        /* Copy-out errors can follow a committed operation. Reconcile before
+         * cleanup, and do not unhook if the registration outcome is unknown. */
+        int inspect_rc = action(INSPECT);
+        if (inspect_rc) ctx->overlaid = 1;
+        return rc ? rc : inspect_rc;
     }
     case DEACTIVATE:
         rc = urov_deactivate(&client);
@@ -68,31 +100,24 @@ static int action(int command)
         return rc;
     case UNHOOK:
         if (ctx->overlaid) return -EBUSY;
-        if (!ctx->hooked) return 0;
-        rc = DobbyDestroy((void *)ctx->target);
-        if (!rc) {
-            ctx->hooked = 0;
-            free(snapshot);
-            snapshot = NULL;
-        }
-        return rc;
+        return unhook();
     default: return -EINVAL;
     }
 }
-
 __attribute__((constructor)) static void payload_init(void)
 {
     ctx = test_find_context();
-    if (!ctx || ctx->action) return;
-    int rc = urov_client_init(&client, ctx->key);
-    if (rc) return;
+    if (!ctx || __atomic_load_n(&ctx->action, __ATOMIC_ACQUIRE)) return;
+    if (urov_client_init(&client, UROV_TEST_KEY)) return;
     page_size = (size_t)sysconf(_SC_PAGESIZE);
-    if ((page_size != 4096 && page_size != 16384) ||
-        ((uintptr_t)ctx->target & (page_size - 1)) + 64 > page_size) return;
-    page = (void *)((uintptr_t)ctx->target & ~(page_size - 1));
+    if (page_size != 4096 && page_size != 16384) return;
+    for (unsigned i = 0; i < TEST_TARGETS; ++i) {
+        uintptr_t address = (uintptr_t)ctx->targets[i];
+        if ((address & (page_size - 1)) + 64 > page_size) return;
+        pages[i] = (void *)(address & ~(page_size - 1));
+        for (unsigned j = 0; j < i; ++j) if (pages[i] == pages[j]) return;
+    }
     ctx->cookie = PAYLOAD_COOKIE;
     ctx->constructors++;
-    /* Constructors only publish the test entry. The runner waits for KCLF
-     * DONE before asking the cooperative App thread to patch/register. */
     __atomic_store_n(&ctx->action, action, __ATOMIC_RELEASE);
 }

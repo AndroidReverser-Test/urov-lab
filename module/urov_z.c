@@ -9,7 +9,7 @@
 #include "kclf/embedded.h"
 
 KPM_NAME("urov-z");
-KPM_VERSION("1.1.0");
+KPM_VERSION("1.2.0");
 KPM_LICENSE("GPL v2");
 KPM_AUTHOR("UROV-Z");
 KPM_DESCRIPTION("ARM64 code-page read overlay with integrated KCLF loader");

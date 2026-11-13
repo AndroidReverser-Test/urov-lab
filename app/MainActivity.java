@@ -2,21 +2,15 @@ package com.example.urovz;
 
 import android.app.Activity;
 import android.os.Bundle;
-import android.text.InputType;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.nio.charset.StandardCharsets;
 
 public final class MainActivity extends Activity {
     static { System.loadLibrary("urovz"); }
-    private static native String runNative(String key, boolean baseline);
+    private static native String runNative(boolean baseline);
     private boolean running;
-    private EditText keyField;
     private TextView output;
 
     @Override public void onCreate(Bundle state) {
@@ -29,13 +23,9 @@ public final class MainActivity extends Activity {
         heading.setText("UROV-Z · PAGE_AP / all-callers");
         heading.setTextSize(21);
         layout.addView(heading);
-        keyField = new EditText(this);
-        keyField.setSingleLine(true);
-        keyField.setHint("模块密钥 / Module key · 32 hex");
-        keyField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        String key = getIntent().getStringExtra("key");
-        if (key != null) keyField.setText(key);
-        layout.addView(keyField);
+        TextView keyInfo = new TextView(this);
+        keyInfo.setText("模块密钥固定为 MD5(urov-lab)\n结果仅显示在界面和 UROVZ logcat");
+        layout.addView(keyInfo);
         Button test = new Button(this);
         test.setText("运行完整测试 / Run tests");
         test.setOnClickListener(v -> start(false));
@@ -60,19 +50,13 @@ public final class MainActivity extends Activity {
     private void start(boolean baseline) {
         if (running) return;
         running = true;
-        String key = keyField.getText().toString().trim();
         output.setText("正在测试 / Running…");
         new Thread(() -> {
             String result;
             try {
-                result = runNative(key, baseline);
+                result = runNative(baseline);
             } catch (Throwable e) {
                 result = "RESULT FAIL " + e;
-            }
-            try (FileOutputStream file = new FileOutputStream(new File(getFilesDir(), "report.txt"))) {
-                file.write(result.getBytes(StandardCharsets.UTF_8));
-            } catch (Exception e) {
-                result += "\nReport file error " + e;
             }
             final String text = result;
             runOnUiThread(() -> {
