@@ -1416,8 +1416,9 @@ int kclf_exec_probe(char *out, int outlen)
 {
     int off = 0;
     struct pt_regs *regs = kclf_find_regs();
-    off += kclf_scnprintf(out + off, outlen - off, "kernel=%x btf=%d mm_off=%d mmap_lock_off=%d vma=%d/%d\n", kver,
-                          kclf_btf_ok, kclf_mm_off, kclf_mmap_lock_off, kclf_vma_start_off, kclf_vma_end_off);
+    off += kclf_scnprintf(out + off, outlen - off, "kernel=%x btf=%d source=%s mm_off=%d mmap_lock_off=%d vma=%d/%d\n", kver,
+                          kclf_btf_ok, kclf_btf_source, kclf_mm_off, kclf_mmap_lock_off,
+                          kclf_vma_start_off, kclf_vma_end_off);
     off += kclf_scnprintf(out + off, outlen - off, "pt_regs=%s size=%d thread_size=%d page=%d\n",
                           regs ? "ok" : "unavailable", kclf_regs_size, thread_size, kclf_page_size);
     off += kclf_scnprintf(out + off, outlen - off, "user_limit=%llx tbi=%d\n", (unsigned long long)kclf_user_limit,

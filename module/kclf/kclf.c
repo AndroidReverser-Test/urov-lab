@@ -59,6 +59,7 @@ int kclf_mm_off = -1;
 
 static u64 kclf_next_id = 1;
 static int kclf_control_busy;
+static int kclf_preflight_done;
 static void (*kclf_rcu_read_lock)(void);
 static void (*kclf_rcu_read_unlock)(void);
 static u64 (*kclf_ktime_get)(void);
@@ -1270,14 +1271,14 @@ static long kclf_ctl0(const char *args, char *__user out_msg, int outlen)
 /* lifecycle                                                            */
 /* ------------------------------------------------------------------ */
 
-static long kclf_init(const char *args, const char *event, void *reserved)
+/* No hooks or asynchronous work here. The embedded overlay invokes this
+ * before installing its own hooks, so missing loader facilities cannot make
+ * module_init fail after publishing module callbacks to the running kernel. */
+static int kclf_preflight(void)
 {
     int rc;
 
-    (void)args;
-    (void)event;
-    (void)reserved;
-
+    if (kclf_preflight_done) return 0;
     for (rc = 0; rc < KCLF_MAX_REQ; rc++)
         kclf_slot_reset(&kclf_reqs[rc]);
     kclf_page_size = kclf_detect_page_size();
@@ -1295,7 +1296,21 @@ static long kclf_init(const char *args, const char *event, void *reserved)
 
     rc = kclf_compat_init();
     if (rc) return rc;
-    kclf_exec_init();
+    rc = kclf_exec_init();
+    if (rc) return rc;
+    kclf_preflight_done = 1;
+    return 0;
+}
+
+static long kclf_init(const char *args, const char *event, void *reserved)
+{
+    int rc;
+
+    (void)args;
+    (void)event;
+    (void)reserved;
+    rc = kclf_preflight();
+    if (rc) return rc;
 
     rc = kclf_hook_install();
     if (rc) {
@@ -1366,6 +1381,7 @@ static long kclf_exit(void *reserved)
 
 #ifdef UROV_KCLF_EMBEDDED
 #include "embedded.h"
+int urov_kclf_preflight(void) { return kclf_preflight(); }
 long urov_kclf_init(void) { return kclf_init(0, 0, 0); }
 long urov_kclf_control(const char *args, char *out, int len) { return kclf_ctl0(args, out, len); }
 long urov_kclf_exit(void) { return kclf_exit(0); }

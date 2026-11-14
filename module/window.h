@@ -247,15 +247,13 @@ static unsigned uz_win_cls(uint64_t value, unsigned bits)
  * class is not modeled; the caller then leaves the window native. */
 static int uz_win_alu(struct uro_regs *model, uint32_t insn)
 {
-    /* NOP, BTI landing pads, HINT #imm and the DMB/DSB/ISB barriers change no
-     * register, no monitored address and no memory.  PACIASP/AUTIASP and the
-     * other pointer-authentication instructions do not match these masks. */
+    /* Only explicit no-ops are safe in this register-only model. The HINT
+     * space also contains PAC/AUT/XPACLRI, waits, events and speculation
+     * barriers. In particular PACIASP matches the old generic HINT mask
+     * and must not be silently skipped. Memory barriers likewise require
+     * ordering effects this deferred-commit model cannot reproduce. */
     if (insn == UZ_NOP || insn == UZ_BTI_C || insn == UZ_BTI_J || insn == UZ_BTI_JC)
         return 1;
-    if ((insn & 0xfffff01fU) == 0xd503201fU) return 1;
-    if ((insn & 0xfffff0ffU) == 0xd503309fU) return 1;
-    if ((insn & 0xfffff0ffU) == 0xd50330bfU) return 1;
-    if ((insn & 0xfffff0ffU) == 0xd50330dfU) return 1;
 
     /* Add/subtract (immediate).  Rn==31 is SP when S is clear. */
     if ((insn & 0x1f000000U) == 0x11000000U) {
@@ -678,7 +676,7 @@ static int uz_win_branch(struct uro_regs *model, uint32_t insn, uint64_t at)
 /* Destination of one uz_win_alu() instruction:
  *   0..30  GPR number
  *   31     discard (XZR/WZR)
- *   32     no GPR destination (NOP, barrier, CCMP/CCMN, flags-only ADDS)
+ *   32     no GPR destination (NOP/BTI, CCMP/CCMN, flags-only ADDS)
  *   33     SP (add/sub immediate with Rd==31 and S==0)
  *   34     not an instruction uz_win_alu() accepts.
  * Used by the pre-load verifier, which may only prove an in-place update of
@@ -689,10 +687,6 @@ static inline unsigned uz_win_dst(uint32_t insn)
 
     if (insn == UZ_NOP || insn == UZ_BTI_C || insn == UZ_BTI_J || insn == UZ_BTI_JC)
         return 32U;
-    if ((insn & 0xfffff01fU) == 0xd503201fU) return 32U;  /* HINT #imm */
-    if ((insn & 0xfffff0ffU) == 0xd503309fU) return 32U;  /* DMB */
-    if ((insn & 0xfffff0ffU) == 0xd50330bfU) return 32U;  /* DSB */
-    if ((insn & 0xfffff0ffU) == 0xd50330dfU) return 32U;  /* ISB */
     if ((insn & 0x3fe00010U) == 0x3a400000U) return 32U;  /* CCMP/CCMN */
 
     if ((insn & 0x1f000000U) == 0x11000000U) {           /* add/sub immediate */
@@ -741,10 +735,6 @@ static inline uint32_t uz_win_srcs(uint32_t insn)
 
     if (insn == UZ_NOP || insn == UZ_BTI_C || insn == UZ_BTI_J || insn == UZ_BTI_JC)
         return 0;
-    if ((insn & 0xfffff01fU) == 0xd503201fU) return 0;   /* HINT #imm */
-    if ((insn & 0xfffff0ffU) == 0xd503309fU) return 0;   /* DMB */
-    if ((insn & 0xfffff0ffU) == 0xd50330bfU) return 0;   /* DSB */
-    if ((insn & 0xfffff0ffU) == 0xd50330dfU) return 0;   /* ISB */
 
     if ((insn & 0x1f000000U) == 0x11000000U) {           /* add/sub immediate */
         if (rn != 31U) mask |= 1U << rn;
@@ -820,7 +810,7 @@ static inline void uz_win_fp_put(struct uz_fpstate *fp, unsigned reg, unsigned o
     unsigned i;
 
     for (i = 0; i < bytes; ++i)
-        fp->vregs[reg][off + i] = (uint8_t)(value >> (8U * i));
+        fp->vregs[reg][off + i] = i < 8U ? (uint8_t)(value >> (8U * i)) : 0;
 }
 
 /* FMOV between one GPR and one scalar/128-bit-lane FPSIMD register.  These

@@ -9,7 +9,7 @@
 #include "kclf/embedded.h"
 
 KPM_NAME("urov-z");
-KPM_VERSION("1.2.1");
+KPM_VERSION("1.2.2");
 KPM_LICENSE("GPL v2");
 KPM_AUTHOR("UROV-Z");
 KPM_DESCRIPTION("ARM64 code-page read overlay with integrated KCLF loader");
@@ -23,8 +23,9 @@ static long module_init(const char *args, const char *event, void *reserved)
     long ret;
     (void)event;
     (void)reserved;
-    /* KCLF's fallible layout/symbol preflight precedes its hook installation.
-     * Start UROV first so loader reads always have their internal accessor. */
+    /* The backend shares its verified BTF and runs KCLF's fallible preflight
+     * before publishing any hooks. Start overlay hooks first so subsequent
+     * loader work always has its internal accessor available. */
     ret = urov_z_backend_init(args);
     if (ret) return ret;
     overlay_started = 1;

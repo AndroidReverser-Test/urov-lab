@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -145,15 +147,22 @@ int main(void)
     CHECK(waitpid(child, &child_status, 0) == child && WIFEXITED(child_status) &&
           WEXITSTATUS(child_status) == 0);
     CHECK(perf_self(perf_pages + 256) == 0x6a);
-    CHECK(!mprotect(perf_pages, page, PROT_READ | PROT_WRITE | PROT_EXEC));
-    CHECK(perf_ldadd(perf_pages, 1) == UINT64_C(0x6a6a6a6a6a6a6a6a));
-    CHECK(perf_read(perf_pages) == UINT64_C(0x6a6a6a6a6a6a6a6b));
-    CHECK(!mprotect(perf_pages, page, PROT_READ | PROT_EXEC));
+    /* LSE is optional on older ARM64 SoCs. Keep the remaining regression
+     * useful there instead of terminating it with an illegal instruction. */
+    if (getauxval(AT_HWCAP) & HWCAP_ATOMICS) {
+        CHECK(!mprotect(perf_pages, page, PROT_READ | PROT_WRITE | PROT_EXEC));
+        CHECK(perf_ldadd(perf_pages, 1) == UINT64_C(0x6a6a6a6a6a6a6a6a));
+        CHECK(perf_read(perf_pages) == UINT64_C(0x6a6a6a6a6a6a6a6b));
+        CHECK(!mprotect(perf_pages, page, PROT_READ | PROT_EXEC));
+        puts("PASS LSE");
+    } else {
+        puts("SKIP LSE: CPU does not advertise HWCAP_ATOMICS");
+    }
     CHECK(!urov_get_status(&client, &status) && status.failures == 0);
     CHECK(!urov_deactivate(&client));
     active = 0;
     munmap(image, page);
-    puts("PASS scale/LLSC-8192/CLREX/indirect-skip/native-code-change/proc-write/child-code-view/LSE");
+    puts("PASS scale/LLSC-8192/CLREX/indirect-skip/native-code-change/proc-write/child-code-view");
     return 0;
 fail:
     if (active) (void)urov_deactivate(&client);

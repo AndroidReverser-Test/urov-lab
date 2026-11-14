@@ -236,6 +236,11 @@ static inline int kclf_btf_signal_abi(const struct kclf_btf *b)
     if (!p) return -1;
     if ((p->info & 0xffff) != 3) return -2;
     params = (const void *)(p + 1);
+    t = kclf_btf_resolve(b, p->size);
+    if (!t || ((t->info >> 24) & 31) != 1 || t->size != 4 ||
+        !kclf_btf_points_to(b, kclf_btf_resolve(b, params[1]), "task_struct") ||
+        !kclf_btf_points_to(b, kclf_btf_resolve(b, params[3]), "callback_head"))
+        return -2;
     t = kclf_btf_resolve(b, params[5]);
     if (kclf_btf_is_bool(t)) return 0;
     if (!t) return -2;

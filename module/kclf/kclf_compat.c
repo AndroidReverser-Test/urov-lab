@@ -5,7 +5,10 @@
 #include <common.h>
 #include <log.h>
 #include <uapi/asm-generic/errno.h>
-#include "kclf_btf.h"
+#include "kclf_compat_profile.h"
+#ifdef UROV_KCLF_EMBEDDED
+#include "embedded.h"
+#endif
 
 int kclf_regs_size;
 int kclf_btf_ok;
@@ -16,6 +19,29 @@ int kclf_vma_direct;
 int kclf_wake_supported;
 u64 kclf_trace_mask, kclf_vector_mask;
 const char *kclf_wake_abi = "version";
+const char *kclf_btf_source = "none";
+static struct kclf_compat_profile kclf_profile;
+static int kclf_profile_ready;
+
+#ifdef UROV_KCLF_EMBEDDED
+int urov_kclf_set_btf(const struct kclf_btf *btf)
+{
+    struct kclf_compat_profile profile;
+
+    if (kclf_ready) return -EBUSY;
+#ifdef KCLF_TEST_NO_BTF
+    (void)btf;
+    (void)profile;
+    return 0; /* preserve the explicit fallback-test configuration */
+#else
+    if (!btf || kclf_compat_profile_read(&profile, btf)) return -EOPNOTSUPP;
+    kclf_profile = profile;
+    kclf_profile_ready = 1;
+    kclf_btf_source = "shared";
+    return 0;
+#endif
+}
+#endif
 
 struct mm_struct *kclf_task_mm(struct task_struct *task)
 {
@@ -84,39 +110,24 @@ int kclf_compat_init(void)
     /* Bit 27 is reserved before SME; checking it unconditionally also covers
      * vendor SME backports. The generated code only preserves base FPSIMD. */
     kclf_vector_mask = (1ULL << 23) | (1ULL << 27);
-    if (start && end) {
-        const struct kclf_btf_type *t;
-        int signal_abi;
+    if (!kclf_profile_ready && start && end) {
         if (end <= start || end - start > 64 * 1024 * 1024 || kclf_btf_open(&b, (const void *)start, end - start))
             return -EOPNOTSUPP;
-        signal_abi = kclf_btf_signal_abi(&b);
-        if (signal_abi == -2) return -EOPNOTSUPP;
-        if (signal_abi >= 0) {
-            kclf_wake_supported = signal_abi;
+        if (kclf_compat_profile_read(&kclf_profile, &b)) return -EOPNOTSUPP;
+        kclf_profile_ready = 1;
+        kclf_btf_source = "live";
+    }
+    if (kclf_profile_ready) {
+        if (kclf_profile.signal_abi >= 0) {
+            kclf_wake_supported = kclf_profile.signal_abi;
             kclf_wake_abi = "btf";
         }
-        cancel_abi = kclf_btf_cancel_abi(&b);
-        kclf_mm_off = kclf_btf_member_range(&b, "task_struct", "mm", 8, 8);
-        kclf_vma_start_off = kclf_btf_member_range(&b, "vm_area_struct", "vm_start", 8, 8);
-        kclf_vma_end_off = kclf_btf_member_range(&b, "vm_area_struct", "vm_end", 8, 8);
-        t = kclf_btf_find(&b, "rw_semaphore", 0);
-        if (t && t->size >= 16 && t->size <= 512) {
-            kclf_mmap_lock_off = kclf_btf_member_range(&b, "mm_struct", "mmap_lock", t->size, 8);
-            if (kclf_mmap_lock_off < 0)
-                kclf_mmap_lock_off = kclf_btf_member_range(&b, "mm_struct", "mmap_sem", t->size, 8);
-        }
-        t = kclf_btf_find(&b, "pt_regs", 0);
-        if (t && (t->size < 288 || t->size > 512 || (t->size & 15) ||
-            kclf_btf_member_offset(&b, "pt_regs", "regs") != 0 || kclf_btf_member_offset(&b, "pt_regs", "sp") != 248 ||
-            kclf_btf_member_offset(&b, "pt_regs", "pc") != 256 ||
-            kclf_btf_member_offset(&b, "pt_regs", "pstate") != 264 ||
-            kclf_btf_member_offset(&b, "pt_regs", "orig_x0") != 272 ||
-            kclf_btf_member_offset(&b, "pt_regs", "syscallno") != 280))
-            return -EOPNOTSUPP;
-        if (t) kclf_regs_size = t->size;
-        t = kclf_btf_find(&b, "thread_info", 0);
-        if (t && kclf_btf_member_range(&b, "thread_info", "flags", 8, 8) != 0)
-            return -EOPNOTSUPP;
+        cancel_abi = kclf_profile.cancel_abi;
+        kclf_mm_off = kclf_profile.mm_off;
+        kclf_vma_start_off = kclf_profile.vma_start;
+        kclf_vma_end_off = kclf_profile.vma_end;
+        kclf_mmap_lock_off = kclf_profile.mmap_lock;
+        kclf_regs_size = kclf_profile.regs_size;
         kclf_btf_ok = 1;
     }
     if (!kclf_ks.task_work_cancel_match && !kclf_ks.task_work_cancel_func) {
@@ -148,7 +159,7 @@ int kclf_compat_init(void)
                       kclf_vma_start_off != kclf_vma_end_off && kclf_ks.find_vma &&
                       ((kclf_mmap_lock_off >= 0 && kclf_ks.down_read && kclf_ks.up_read) ||
                        (kclf_mmap_lock_off < 0 && kclf_ks.mmap_read_lock && kclf_ks.mmap_read_unlock));
-    logki("kclf: kernel=%x btf=%d mm=%d mmap_lock=%d regs=%d vma=%s\n", kver, kclf_btf_ok, kclf_mm_off,
+    logki("kclf: kernel=%x btf=%s mm=%d mmap_lock=%d regs=%d vma=%s\n", kver, kclf_btf_source, kclf_mm_off,
           kclf_mmap_lock_off, kclf_regs_size, kclf_vma_direct ? "locked" : "proc_maps");
     return 0;
 }

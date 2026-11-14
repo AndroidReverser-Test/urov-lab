@@ -62,7 +62,8 @@ struct ke_object {
 
 /* All ranges refer to real PT_LOAD segments, not the envelope's holes. */
 int ke_contains(const struct ke_object *, u64 address, u64 size, unsigned flags);
-/* RELRO may include page-tail padding beyond p_memsz; ELF tables may not. */
+/* RELRO may include link-page padding beyond p_memsz, provided that it does
+ * not overlap any other LOAD's runtime pages; ELF tables may not. */
 int ke_relro_contains(const struct ke_object *, u64 address, u64 size, u64 page_size);
 int ke_headers(struct ke_io *, u64 header, struct ke_object *);
 int ke_file_layout(struct ke_io *, struct ke_object *, u64 file_size, u64 page_size);

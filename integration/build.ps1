@@ -32,6 +32,7 @@ Check 'DEX compilation'
 $unsigned = Join-Path $out 'unsigned.apk'
 & (Join-Path $bin 'aapt2.exe') link -I $android --manifest (Join-Path $PSScriptRoot 'AndroidManifest.xml') -o $unsigned
 Check 'APK manifest'
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [IO.Compression.ZipFile]::Open($unsigned, [IO.Compression.ZipArchiveMode]::Update)
 try {

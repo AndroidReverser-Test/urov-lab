@@ -19,7 +19,7 @@
 .\api\build.ps1 -Ndk D:\androidSDK\ndk\26.1.10909125
 ```
 
-输出 `out/api/liburov.a`、`liburov.so`、`urov-query`。共享库使用 16 KB ELF segment alignment；这只代表二进制布局支持，不代表模块在所有 16 KB 内核上通过运行验证。
+输出 `out/api/liburov.a`、`liburov.so`、`urov-query`。链接同时设置 `max-page-size=16384` 和 `common-page-size=16384`，覆盖 ELF LOAD 与 GNU_RELRO 页对齐；CMake 接入也会把这两个选项传给链接 `urov` 的目标。这只代表二进制布局支持，不代表模块在所有 16 KB 内核上通过运行验证；要求依据见 [Android 官方 16 KB 指南](https://developer.android.com/guide/practices/page-sizes)。
 
 应用 CMake 接入：
 

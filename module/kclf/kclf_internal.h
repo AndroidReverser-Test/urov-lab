@@ -286,6 +286,7 @@ extern int kclf_vma_direct;
 extern int kclf_wake_supported;
 extern u64 kclf_trace_mask, kclf_vector_mask;
 extern const char *kclf_wake_abi;
+extern const char *kclf_btf_source;
 unsigned long kclf_lookup(const char *name);
 int kclf_compat_init(void);
 void kclf_mmap_read_lock(struct mm_struct *mm);

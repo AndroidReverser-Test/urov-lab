@@ -42,17 +42,42 @@ int ke_relro_contains(const struct ke_object *o, u64 at, u64 n, u64 page)
         at < o->bias || n > max - at || o->phnum > KE_PHNUM) return 0;
     for (i = 0; i < o->phnum; ++i) {
         const struct ke_phdr *p = &o->ph[i];
-        u64 start, end, rounded;
+        u64 start, end, rounded, alignment = page, first, last;
+        unsigned j;
         if (p->type != 1 || !(p->flags & 2) || !p->memsz ||
             p->vaddr > max - o->bias) continue;
         start = o->bias + p->vaddr;
         if (p->memsz > max - start) continue;
         end = start + p->memsz;
-        if (end > max - (page - 1)) continue;
-        rounded = (end + page - 1) & ~(page - 1);
-        /* Start must belong to actual writable bytes; only the trailing
-         * page padding is relaxed. No holes or following pages are accepted. */
-        if (at >= start && at < end && n <= rounded - at) return 1;
+        /* A 16-KiB-compatible ELF also runs on a 4-KiB kernel. LLD pads
+         * GNU_RELRO to its link-time common page size, which can exceed the
+         * device page size and the containing LOAD's p_memsz. Accept that
+         * padding only within a supported, explicitly aligned LOAD boundary.
+         * ELF tables continue to use the stricter ke_contains(). */
+        if (p->align > page && p->align <= 65536 && !(p->align & (p->align - 1)) &&
+            !(o->bias & (p->align - 1))) alignment = p->align;
+        if (end > max - (alignment - 1)) continue;
+        rounded = (end + alignment - 1) & ~(alignment - 1);
+        if (at < start || at >= end || n > rounded - at) continue;
+        if (at + n > max - (page - 1)) continue;
+        first = at & ~(page - 1);
+        last = (at + n + page - 1) & ~(page - 1);
+        /* Padding must not make another LOAD's code or mutable data
+         * read-only. Compare the actual runtime protection pages, including
+         * their leading/trailing partial pages, not just byte intervals. */
+        for (j = 0; j < o->phnum; ++j) {
+            const struct ke_phdr *q = &o->ph[j];
+            u64 qstart, qend;
+            if (j == i || q->type != 1 || !q->memsz) continue;
+            if (q->vaddr > max - o->bias) return 0;
+            qstart = o->bias + q->vaddr;
+            if (q->memsz > max - qstart) return 0;
+            qend = qstart + q->memsz;
+            if (qend > max - (page - 1)) return 0;
+            if (first < ((qend + page - 1) & ~(page - 1)) &&
+                (qstart & ~(page - 1)) < last) break;
+        }
+        if (j == o->phnum) return 1;
     }
     return 0;
 }

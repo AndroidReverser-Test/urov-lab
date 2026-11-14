@@ -6,8 +6,8 @@
 #include "../module/compat.h"
 
 struct fixture {
-    uint32_t words[256];
-    char strings[256];
+    uint32_t words[512];
+    char strings[512];
     unsigned types, words_used, strings_used;
 };
 
@@ -131,21 +131,59 @@ static void test_gup_signatures(void)
     f.words[f.words_used++] = 64;
     unsigned m = add_type(&f, "mm_struct", 4, 0, 8);
     unsigned mp = add_type(&f, NULL, 2, 0, m);
+    unsigned t = add_type(&f, "task_struct", 4, 0, 8);
+    unsigned tp = add_type(&f, NULL, 2, 0, t);
     unsigned p = add_type(&f, NULL, 2, 0, 0);
+    add_func(&f, "pin8", l, 8, (unsigned[]){tp, mp, l, l, i, p, p, p});
     add_func(&f, "pin7", l, 7, (unsigned[]){mp, l, l, i, p, p, p});
     add_func(&f, "pin6", l, 6, (unsigned[]){mp, l, l, i, p, p});
     add_func(&f, "pin_bad", l, 6, (unsigned[]){mp, l, l, l, p, p});
+    add_func(&f, "pin8_bad_order", l, 8, (unsigned[]){mp, tp, l, l, i, p, p, p});
+    add_func(&f, "pin8_bad_width", l, 8, (unsigned[]){tp, mp, l, i, i, p, p, p});
     add_func(&f, "fast_public", i, 4, (unsigned[]){l, i, i, p});
     add_func(&f, "fast_internal", i, 4, (unsigned[]){l, l, i, p});
     struct kclf_btf btf = fixture_btf(&f);
+    assert(uz_remote_gup_argc(&btf, "pin8") == 8);
     assert(uz_remote_gup_argc(&btf, "pin7") == 7);
     assert(uz_remote_gup_argc(&btf, "pin6") == 6);
     assert(!uz_remote_gup_argc(&btf, "pin_bad"));
+    assert(!uz_remote_gup_argc(&btf, "pin8_bad_order"));
+    assert(!uz_remote_gup_argc(&btf, "pin8_bad_width"));
     assert(!uz_remote_gup_argc(&btf, "missing"));
     assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "fast_public"), "iliip"));
     assert(!uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "fast_public"), "illip"));
     assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "fast_internal"), "illip"));
-    puts("GUP ABI: remote 6/7 arguments, invalid/missing prototypes and fast count widths PASS");
+    puts("GUP ABI: 6/7/8 arguments, task/mm order, invalid/missing prototypes and count widths PASS");
+}
+
+static void test_folio_grab(void)
+{
+    for (unsigned variant = 0; variant < 9; ++variant) {
+        struct fixture f = {.strings_used = 1};
+        unsigned i = add_type(&f, "int", 1, 0, 4);
+        f.words[f.words_used++] = 32;
+        unsigned l = add_type(&f, "long", 1, 0, 8);
+        f.words[f.words_used++] = 64;
+        unsigned page = add_type(&f, "page", 4, 0, 64);
+        unsigned container = variant == 8 ? add_type(&f, NULL, 5, 1, 64) : 0;
+        unsigned folio = container ? 0 : add_type(&f, "folio", 4, 1, variant == 2 ? 32 : 72);
+        f.words[f.words_used++] = add_name(&f, "page");
+        f.words[f.words_used++] = variant == 7 ? i : page;
+        f.words[f.words_used++] = variant == 1 ? 64 : 0;
+        if (container) {
+            folio = add_type(&f, "folio", 4, 1, 72);
+            f.words[f.words_used++] = 0;
+            f.words[f.words_used++] = container;
+            f.words[f.words_used++] = 0;
+        }
+        unsigned fp = add_type(&f, NULL, 2, 0, variant == 3 ? page : folio);
+        if (variant != 5)
+            add_func(&f, "try_grab_folio", variant == 4 ? 0 : i, 3,
+                     (unsigned[]){fp, variant == 6 ? l : i, i});
+        struct kclf_btf btf = fixture_btf(&f);
+        assert(!!uz_folio_grab_abi(&btf) == (variant == 0 || variant == 8));
+    }
+    puts("Folio GUP: complete page at offset zero, pointer/result/count ABI and missing helper PASS");
 }
 
 static void test_build_id(void)
@@ -239,6 +277,8 @@ static void test_gki_btf(const char *path)
     assert(uz_access_vm_argc(&btf, "access_remote_vm", 0) == 5);
     assert(uz_foll_force(&btf, 0) == 8);
     assert(uz_remote_gup_argc(&btf, "pin_user_pages_remote") == 6);
+    assert(uz_remote_gup_argc(&btf, "__get_user_pages") == 6);
+    assert(uz_folio_grab_abi(&btf));
     assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "gup_fast_fallback"), "illip"));
     assert(uz_btf_enum_flag(&btf, "FOLL_PIN", 0) == 0x80000U);
     assert(uz_btf_enum_flag(&btf, "FOLL_FAST_ONLY", 0) == 0x100000U);
@@ -253,6 +293,7 @@ int main(int argc, char **argv)
 {
     test_signatures();
     test_gup_signatures();
+    test_folio_grab();
     test_gup_flags();
     test_build_id();
     test_geometry();

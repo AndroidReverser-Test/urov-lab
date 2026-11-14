@@ -23,6 +23,7 @@
 #include "window.h"
 #include "prewin.h"
 #include "insn_scan.h"
+#include "kclf/embedded.h"
 
 /* Compile out all hot-path diagnostic atomics in the normal build. Counters
  * are lifetime totals so a completed session can still be inspected. */
@@ -349,6 +350,7 @@ static volatile uint32_t g_failure_logged;
 static struct uz_keys g_keys;
 static unsigned g_write_gup_flags;
 static int g_use_rwsem;
+static int g_read_use_rwsem;
 
 static void *f_pin_remote;
 static int g_pin_hooked;
@@ -358,13 +360,18 @@ static int g_pin_ok;
  * array has been returned to the caller. */
 static void *f_gup_slow;
 static int g_gup_slow_hooked;
+static int g_gup_slow_argc;
 static unsigned g_foll_pin, g_foll_longterm;
 static unsigned g_foll_get, g_foll_fast_only;
 static _Bool (*f_grab_page_bool)(void *, unsigned);
 static int (*f_grab_page_int)(void *, unsigned);
+static int (*f_grab_folio)(void *, int, unsigned);
 static void (*f_unpin_page)(void *);
 static int g_pin_argc;
 static int g_pin_internal;
+/* Pre-FOLL_PIN process_vm_readv() uses ordinary GUP references. Its public
+ * get_user_pages_remote entry must never use pin/unpin accounting. */
+static int g_remote_get;
 #define UZ_READV_SLOTS 64U
 struct uz_readv_rec {
     void *task;
@@ -1834,13 +1841,15 @@ static int uz_branch_target(uint32_t insn, uint64_t at, uint64_t *target)
 
 static void uz_read_lock(void *mm)
 {
-    if (f_mmap_read_lock) f_mmap_read_lock(mm);
+    if (f_mmap_read_lock)
+        f_mmap_read_lock(g_read_use_rwsem ? (char *)mm + g_layout.mmap_lock : mm);
     else uz_mmap_write_lock(mm);
 }
 
 static void uz_read_unlock(void *mm)
 {
-    if (f_mmap_read_unlock) f_mmap_read_unlock(mm);
+    if (f_mmap_read_unlock)
+        f_mmap_read_unlock(g_read_use_rwsem ? (char *)mm + g_layout.mmap_lock : mm);
     else uz_mmap_write_unlock(mm);
 }
 
@@ -4883,15 +4892,16 @@ static void uz_vm_readv_before(hook_fargs6_t *args, void *udata)
     rec->allow = !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE);
 }
 
-/* Every replacement is a fresh order-0 page. Linux's grab/unpin helpers
- * preserve compound-page handling and pin accounting. The syscall reader
- * reference protects all source buffers until the native copy has finished. */
+/* Every replacement is a fresh order-0 page. PIN uses Linux's grab/unpin
+ * helpers; legacy GET transfers the allocator's single ordinary reference.
+ * The syscall reader protects source buffers until the native copy finishes. */
 static void uz_pin_after(hook_fargs8_t *args, void *udata)
 {
-    void *mm = (void *)args->arg0;
-    uint64_t start = args->arg1;
-    unsigned int flags = (unsigned int)args->arg3;
-    void **pages = (void **)args->arg4;
+    unsigned first = g_pin_argc == 8 ? 1U : 0U;
+    void *mm = (void *)args->args[first];
+    uint64_t start = args->args[first + 1U];
+    unsigned int flags = (unsigned int)args->args[first + 3U];
+    void **pages = (void **)args->args[first + 4U];
     long got = (long)args->ret;
     struct uz_readv_rec *rec;
     unsigned i;
@@ -4904,7 +4914,8 @@ static void uz_pin_after(hook_fargs8_t *args, void *udata)
     if (!mm) return;
     rec = uz_readv_rec_find(current, 0);
     if (!rec) return;    /* not inside a process_vm_readv() of this task */
-    if ((unsigned long)got > (unsigned long)args->arg2) got = (long)args->arg2;
+    if ((unsigned long)got > (unsigned long)args->args[first + 2U])
+        got = (long)args->args[first + 2U];
     for (i = 0; i < (unsigned)got; ++i) {
         uint64_t base = (start & ~((uint64_t)g_page_size - 1U)) +
                         (uint64_t)i * g_page_size;
@@ -4927,19 +4938,27 @@ static void uz_pin_after(hook_fargs8_t *args, void *udata)
         copy = f_alloc_pages(UZ_GFP_ATOMIC, 0, -1, 0);
         if (!copy) goto failed;
         f_copy_highpage(copy, src);
-        if ((f_grab_page_bool && !f_grab_page_bool(copy, g_foll_pin)) ||
-            (f_grab_page_int && f_grab_page_int(copy, g_foll_pin))) {
+        if (g_remote_get) {
+            f_put_page(pages[i]);
+        } else {
+            if ((f_grab_page_bool && !f_grab_page_bool(copy, g_foll_pin)) ||
+                (f_grab_page_int && f_grab_page_int(copy, g_foll_pin)) ||
+                (f_grab_folio && f_grab_folio(copy, 1, g_foll_pin))) {
+                f_put_page(copy);
+                goto failed;
+            }
             f_put_page(copy);
-            goto failed;
+            f_unpin_page(pages[i]);
         }
-        f_put_page(copy);
-        f_unpin_page(pages[i]);
         pages[i] = copy;
     }
     return;
 failed:
     for (i = 0; i < (unsigned)got; ++i) {
-        if (pages[i]) f_unpin_page(pages[i]);
+        if (pages[i]) {
+            if (g_remote_get) f_put_page(pages[i]);
+            else f_unpin_page(pages[i]);
+        }
         pages[i] = 0;
     }
     __atomic_fetch_add(&g_sess.failures, 1, __ATOMIC_RELAXED);
@@ -4959,9 +4978,10 @@ static void uz_vm_readv_after(hook_fargs6_t *args, void *udata)
  * itself is captured into ext_pre and merged on the next read. */
 static void uz_gup_slow_after(hook_fargs8_t *args, void *udata)
 {
-    void *mm = (void *)args->arg0;
-    uint64_t start = args->arg1;
-    unsigned int flags = (unsigned int)args->arg3;
+    unsigned first = g_gup_slow_argc == 8 ? 1U : 0U;
+    void *mm = (void *)args->args[first];
+    uint64_t start = args->args[first + 1U];
+    unsigned int flags = (unsigned int)args->args[first + 3U];
     long got = (long)args->ret;
     unsigned i;
     uint64_t ref;
@@ -4973,7 +4993,8 @@ static void uz_gup_slow_after(hook_fargs8_t *args, void *udata)
     if (!overlay_live() || __atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) return;
     if (!mm || mm != g_sess.mm) return;
     if (uz_internal_current()) return;
-    if ((unsigned long)got > (unsigned long)args->arg2) got = (long)args->arg2;
+    if ((unsigned long)got > (unsigned long)args->args[first + 2U])
+        got = (long)args->args[first + 2U];
     ref = session_get_mm(mm);
     if (!ref) return;
     for (i = 0; i < (unsigned)got; ++i) {
@@ -5819,6 +5840,7 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
     const char *fp_name = "fpsimd_save_and_flush_current_state";
     const char *pin_name = "pin_user_pages_remote";
     const char *gup_name = "get_user_pages_fast";
+    const char *alloc_name = "none";
     void *access;
     int access_argc;
     unsigned foll_force;
@@ -5865,13 +5887,28 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
         !uz_symbol_abi(btf, "mmap_read_unlock", "vm")) {
         f_mmap_read_lock = 0;
         f_mmap_read_unlock = 0;
+        /* mmap_read_* are inline on many 5.x/6.x builds. Do not serialize
+         * instruction scans with a write lock merely because their wrappers
+         * have no kallsyms entry. Both halves must use the same ABI. */
+        if (g_layout.mmap_lock >= 0 &&
+            uz_symbol_abi(btf, "down_read", "vp") &&
+            uz_symbol_abi(btf, "up_read", "vp")) {
+            f_mmap_read_lock = (mmap_write_fn)lookup("down_read");
+            f_mmap_read_unlock = (mmap_write_fn)lookup("up_read");
+            if (!f_mmap_read_lock || !f_mmap_read_unlock)
+                f_mmap_read_lock = f_mmap_read_unlock = 0;
+            else
+                g_read_use_rwsem = 1;
+        }
     }
     g_use_rwsem = !f_mmap_write_lock || !f_mmap_write_unlock ||
                   !uz_symbol_abi(btf, "mmap_write_lock", "vm") ||
                   !uz_symbol_abi(btf, "mmap_write_unlock", "vm");
     if (g_use_rwsem) {
-        f_mmap_write_lock = g_layout.mmap_lock < 0 ? 0 : (mmap_write_fn)lookup("down_write");
-        f_mmap_write_unlock = g_layout.mmap_lock < 0 ? 0 : (mmap_write_fn)lookup("up_write");
+        f_mmap_write_lock = g_layout.mmap_lock < 0 || !uz_symbol_abi(btf, "down_write", "vp") ?
+            0 : (mmap_write_fn)lookup("down_write");
+        f_mmap_write_unlock = g_layout.mmap_lock < 0 || !uz_symbol_abi(btf, "up_write", "vp") ?
+            0 : (mmap_write_fn)lookup("up_write");
     }
 
     if (uz_symbol_abi(btf, "force_sig_fault", "iiip"))
@@ -5945,14 +5982,24 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
         gup_name = "get_user_pages_fast";
         f_gup_fast = uz_symbol_abi(btf, gup_name, "iliip") ? lookup(gup_name) : 0;
     }
-    f_alloc_pages = (alloc_pages_t)lookup("__alloc_pages");
-    if (!f_alloc_pages && uz_symbol_abi(btf, "__alloc_pages_noprof", "piiip"))
-        f_alloc_pages = (alloc_pages_t)lookup("__alloc_pages_noprof");
+    {
+        /* Before __alloc_pages gained nodemask it was a three-argument
+         * inline wrapper around __alloc_pages_nodemask. Newer allocation
+         * profiling renames the four-argument entry again. Validate the
+         * selected name, not an unrelated wrapper's prototype. */
+        static const char *const names[] = {
+            "__alloc_pages_nodemask", "__alloc_pages_noprof", "__alloc_pages"
+        };
+        unsigned i;
+        for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+            if (!uz_symbol_abi(btf, names[i], "piiip")) continue;
+            f_alloc_pages = (alloc_pages_t)lookup(names[i]);
+            if (f_alloc_pages) { alloc_name = names[i]; break; }
+        }
+    }
     f_put_page = (put_page_t)lookup("put_page");
     f_copy_highpage = (copy_highpage_t)lookup("copy_highpage");
     f_vmalloc_to_page = (vmalloc_to_page_t)lookup("vmalloc_to_page");
-    if (f_alloc_pages && !uz_symbol_abi(btf, "__alloc_pages", "piiip"))
-        f_alloc_pages = 0;
     if (f_put_page && !uz_symbol_abi(btf, "put_page", "vp")) f_put_page = 0;
     if (f_copy_highpage && !uz_symbol_abi(btf, "copy_highpage", "vpp"))
         f_copy_highpage = 0;
@@ -5972,6 +6019,8 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
         f_grab_page_bool = (_Bool (*)(void *, unsigned))lookup("try_grab_page");
     if (uz_btf_signature(btf, kclf_btf_func_proto(btf, "try_grab_page"), "ipi"))
         f_grab_page_int = (int (*)(void *, unsigned))lookup("try_grab_page");
+    if (!f_grab_page_bool && !f_grab_page_int && uz_folio_grab_abi(btf))
+        f_grab_folio = (int (*)(void *, int, unsigned))lookup("try_grab_folio");
     /* Android LTO can inline the public pin wrapper into process_vm_readv.
      * Prefer its shared implementation when BTF proves the complete ABI.
      * That entry also serves FOLL_GET, so the hook must require FOLL_PIN. */
@@ -5986,9 +6035,22 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
         g_pin_argc = f_pin_remote ? uz_remote_gup_argc(btf, pin_name) : 0;
     }
     if (!g_pin_argc) f_pin_remote = 0;
+    /* Upstream 5.4 predates FOLL_PIN: process_vm_readv() acquires GET refs
+     * and releases them with put_page(). A missing/incompatible pin hook on
+     * a PIN-capable vendor kernel must not silently select this older ABI.
+     * Require both no pin/unpin symbol and no pin/unpin BTF evidence. */
+    if (!f_pin_remote && !lookup("pin_user_pages_remote") && !lookup("unpin_user_page") &&
+        !kclf_btf_func_proto(btf, "pin_user_pages_remote") &&
+        !kclf_btf_func_proto(btf, "unpin_user_page")) {
+        pin_name = "get_user_pages_remote";
+        g_pin_argc = uz_remote_gup_argc(btf, pin_name);
+        f_pin_remote = g_pin_argc ? lookup(pin_name) : 0;
+        g_remote_get = f_pin_remote != 0;
+        g_pin_internal = 0;
+    }
     f_gup_slow = lookup("__get_user_pages");
-    if (f_gup_slow && !uz_symbol_abi(btf, "__get_user_pages", "lmllippp"))
-        f_gup_slow = 0;
+    g_gup_slow_argc = f_gup_slow ? uz_remote_gup_argc(btf, "__get_user_pages") : 0;
+    if (!g_gup_slow_argc) f_gup_slow = 0;
 
     /* Deferred native replay: do_debug_exception consumes the software-step
      * exception and __switch_to re-arms MDSCR_EL1.SS after a migration.  Both
@@ -6041,10 +6103,15 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
                 f_find_task_by_vpid ? "task" : "none",
                 g_fp_ready ? fp_name : "none", foll_force, g_page_shift);
     if (g_verbose)
-        pr_info("urov-z: remote GUP entry=%s/%d internal=%d\n",
-                pin_name, g_pin_argc, g_pin_internal);
+        pr_info("urov-z: remote GUP entry=%s/%d internal=%d refs=%s\n",
+                pin_name, g_pin_argc, g_pin_internal, g_remote_get ? "GET" : "PIN");
     if (g_verbose)
         pr_info("urov-z: fast GUP entry=%s internal=%d\n", gup_name, g_gup_internal);
+    if (g_verbose)
+        pr_info("urov-z: alloc=%s slow_gup=%d grab=%s read_lock=%s\n",
+                alloc_name, g_gup_slow_argc,
+                f_grab_folio ? "folio" : (f_grab_page_bool || f_grab_page_int) ? "page" : "none",
+                f_mmap_read_lock ? (g_read_use_rwsem ? "rwsem" : "mmap") : "write-fallback");
     if (g_verbose)
         pr_info("urov-z: gup_fast=%d alloc_pages=%d put_page=%d copy_highpage=%d "
                 "vmalloc_to_page=%d pin_remote=%d gup_slow=%d page_ref=%d/%d\n",
@@ -6097,6 +6164,8 @@ static long resolve_kernel(const char *btf_path, int *mmf_argc)
                     g_layout.task_mm, g_layout.mm_pgd, g_layout.mm_users, g_layout.mmap_lock,
                     g_layout.vma_flags, g_layout.task_fpsimd);
         ret = resolve_symbols(&btf, mmf_argc);
+        if (!ret) ret = urov_kclf_set_btf(&btf);
+        if (!ret) ret = urov_kclf_preflight();
     }
     uz_free(storage);
     return ret;
@@ -6239,16 +6308,17 @@ long urov_z_backend_init(const char *args)
     if (f_pin_remote) {
         ret = hook_wrap(f_pin_remote, g_pin_argc, 0, uz_pin_after, 0);
         g_pin_hooked = ret ? 0 : 1;
-        if (ret && g_verbose) pr_info("urov-z: hook pin_user_pages_remote failed: %ld\n", ret);
+        if (ret && g_verbose) pr_info("urov-z: hook remote GUP failed: %ld\n", ret);
     }
     if (f_gup_slow) {
-        ret = hook_wrap(f_gup_slow, 7, 0, uz_gup_slow_after, 0);
+        ret = hook_wrap(f_gup_slow, g_gup_slow_argc, 0, uz_gup_slow_after, 0);
         g_gup_slow_hooked = ret ? 0 : 1;
         if (ret && g_verbose) pr_info("urov-z: hook __get_user_pages failed: %ld\n", ret);
     }
-    g_pin_ok = g_pin_hooked && g_foll_pin && f_unpin_page &&
-               (f_grab_page_bool || f_grab_page_int) &&
-               f_alloc_pages && f_put_page && f_copy_highpage && f_vmalloc_to_page;
+    g_pin_ok = g_pin_hooked && f_alloc_pages && f_put_page &&
+               f_copy_highpage && f_vmalloc_to_page &&
+               (g_remote_get || (g_foll_pin && f_unpin_page &&
+                (f_grab_page_bool || f_grab_page_int || f_grab_folio)));
     if (g_verbose && !g_pin_ok)
         pr_info("urov-z: process_vm_readv overlay unavailable "
                 "(pin=%d ref=%d v2p=%d)\n", g_pin_hooked, g_foll_pin != 0,

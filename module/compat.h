@@ -266,6 +266,7 @@ static int uz_btf_arg_is(const struct kclf_btf *btf, uint32_t id, char shape)
     case 'a': return kclf_btf_points_to(btf, type, "vm_area_struct");
     case 'r': return kclf_btf_points_to(btf, type, "pt_regs");
     case 'f': return kclf_btf_points_to(btf, type, "user_fpsimd_state");
+    case 'o': return kclf_btf_points_to(btf, type, "folio");
     default: return 0;
     }
 }
@@ -318,15 +319,57 @@ static int uz_access_vm_argc(const struct kclf_btf *btf, const char *name, int p
     return 0;
 }
 
-/* Remote GUP removed the vmas argument in newer kernels. Internal entries
- * require a complete prototype; never infer their ABI from the version. */
+/* Remote and slow GUP dropped the leading task argument during 5.x, then
+ * the vmas argument during 6.x. Internal entries require a complete
+ * prototype; never infer their ABI from the version or symbol name. */
 static int uz_remote_gup_argc(const struct kclf_btf *btf, const char *name)
 {
     const struct kclf_btf_type *proto = kclf_btf_func_proto(btf, name);
 
+    if (uz_btf_signature(btf, proto, "ltmllippp")) return 8;
     if (uz_btf_signature(btf, proto, "lmllippp")) return 7;
     if (uz_btf_signature(btf, proto, "lmllipp")) return 6;
     return 0;
+}
+
+/* Newer GUP uses try_grab_folio() instead of try_grab_page(). Only a newly
+ * allocated order-0 page is passed to this adapter, and BTF must prove that
+ * the folio begins with a complete struct page before it can be cast. */
+static int uz_embeds_page_zero(const struct kclf_btf *btf,
+                               const struct kclf_btf_type *container,
+                               const struct kclf_btf_type *page, unsigned depth)
+{
+    const struct kclf_btf_member *member;
+    unsigned i, kind;
+
+    if (!container || !depth || container->size < page->size) return 0;
+    kind = (container->info >> 24) & 31U;
+    if (kind != 4U && kind != 5U) return 0;
+    member = (const void *)(container + 1);
+    for (i = 0; i < (container->info & 0xffffU); ++i) {
+        const struct kclf_btf_type *sub;
+
+        /* Both offset and bitfield width must be zero. */
+        if (member[i].offset) continue;
+        sub = kclf_btf_resolve(btf, member[i].type);
+        if (!sub || sub->size > container->size) continue;
+        if (member[i].name) {
+            if (!strcmp(kclf_btf_name(btf, member[i].name), "page") && sub == page)
+                return 1;
+        } else if (uz_embeds_page_zero(btf, sub, page, depth - 1U)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int uz_folio_grab_abi(const struct kclf_btf *btf)
+{
+    const struct kclf_btf_type *page = kclf_btf_find(btf, "page", 0);
+
+    return page && page->size &&
+           uz_embeds_page_zero(btf, kclf_btf_find(btf, "folio", 0), page, 8) &&
+           uz_btf_signature(btf, kclf_btf_func_proto(btf, "try_grab_folio"), "ioii");
 }
 
 /* Root can supply detached BTF when CONFIG_DEBUG_INFO_BTF is disabled.
