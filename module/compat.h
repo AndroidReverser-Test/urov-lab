@@ -246,8 +246,23 @@ static int uz_layout_from_btf(struct uz_layout *layout, const struct kclf_btf *b
            layout->vma_flags < 0 || layout->vma_file < 0 ? -1 : 0;
 }
 
+/* Resolve every pointer level, including typedef/const wrappers. */
+static int uz_btf_pointer_to(const struct kclf_btf *btf, uint32_t id,
+                             const char *name, unsigned depth)
+{
+    const struct kclf_btf_type *type = kclf_btf_resolve(btf, id);
+
+    while (depth--) {
+        if (!type || ((type->info >> 24) & 31U) != 2U) return 0;
+        type = kclf_btf_resolve(btf, type->size);
+    }
+    return type && ((type->info >> 24) & 31U) == 4U &&
+           !strcmp(kclf_btf_name(btf, type->name), name);
+}
+
 /* Function shapes: v=void, i=32-bit integer/enum, l=64-bit integer,
  * s=either scalar width (ESR), p=pointer, m=mm, t=task, a=VMA, r=pt_regs.
+ * P=page*, D=page**, A=VMA**, I=int*, N=pglist_data*.
  * Check all argument slots before using an internal or backported entry. */
 static int uz_btf_arg_is(const struct kclf_btf *btf, uint32_t id, char shape)
 {
@@ -267,6 +282,14 @@ static int uz_btf_arg_is(const struct kclf_btf *btf, uint32_t id, char shape)
     case 'r': return kclf_btf_points_to(btf, type, "pt_regs");
     case 'f': return kclf_btf_points_to(btf, type, "user_fpsimd_state");
     case 'o': return kclf_btf_points_to(btf, type, "folio");
+    case 'P': return uz_btf_pointer_to(btf, id, "page", 1);
+    case 'D': return uz_btf_pointer_to(btf, id, "page", 2);
+    case 'A': return uz_btf_pointer_to(btf, id, "vm_area_struct", 2);
+    case 'N': return uz_btf_pointer_to(btf, id, "pglist_data", 1);
+    case 'I':
+        if (kind != 2U) return 0;
+        type = kclf_btf_resolve(btf, type->size);
+        return type && ((type->info >> 24) & 31U) == 1U && type->size == 4U;
     default: return 0;
     }
 }
@@ -326,10 +349,123 @@ static int uz_remote_gup_argc(const struct kclf_btf *btf, const char *name)
 {
     const struct kclf_btf_type *proto = kclf_btf_func_proto(btf, name);
 
-    if (uz_btf_signature(btf, proto, "ltmllippp")) return 8;
-    if (uz_btf_signature(btf, proto, "lmllippp")) return 7;
-    if (uz_btf_signature(btf, proto, "lmllipp")) return 6;
+    if (uz_btf_signature(btf, proto, "ltmlliDAI")) return 8;
+    if (uz_btf_signature(btf, proto, "lmlliDAI")) return 7;
+    if (uz_btf_signature(btf, proto, "lmlliDI")) return 6;
     return 0;
+}
+
+/* Prefer NUMA-policy alloc_pages[_current/_noprof](gfp, order). If these
+ * wrappers are inline, the low-level allocator requires a real online node,
+ * NOT NUMA_NO_NODE (-1). BTF proves the accessor and the node_id field. */
+static int uz_pgdat_node_offset(const struct kclf_btf *btf)
+{
+    const struct kclf_btf_type *pgdat = kclf_btf_find(btf, "pglist_data", 0);
+    const struct kclf_btf_type *type;
+    uint32_t id = 0;
+    int off = uz_btf_member(btf, pgdat, "node_id", &id);
+
+    if (off < 0 || (off & 3) || pgdat->size - (unsigned)off < 4U ||
+        !uz_btf_signature(btf, kclf_btf_func_proto(btf, "first_online_pgdat"), "N"))
+        return -1;
+    type = kclf_btf_resolve(btf, id);
+    return type && ((type->info >> 24) & 31U) == 1U && type->size == 4U ? off : -1;
+}
+
+/* AArch64 pte_t/pmd_t wrap one 64-bit descriptor. A by-value pte_t has the
+ * same register ABI as uz_pte_word, but must not be mistaken for a pointer. */
+static int uz_btf_pt_value(const struct kclf_btf *btf, uint32_t id, const char *field)
+{
+    const struct kclf_btf_type *type = kclf_btf_resolve(btf, id), *word;
+    uint32_t member = 0;
+    if (!type || ((type->info >> 24) & 31U) != 4U || type->size != 8U ||
+        (type->info & 0xffffU) != 1U || uz_btf_member(btf, type, field, &member) != 0)
+        return 0;
+    word = kclf_btf_resolve(btf, member);
+    return word && ((word->info >> 24) & 31U) == 1U && word->size == 8U;
+}
+
+static int uz_btf_pt_word(const struct kclf_btf *btf, uint32_t id, const char *field)
+{
+    const struct kclf_btf_type *type = kclf_btf_resolve(btf, id);
+    return type && ((type->info >> 24) & 31U) == 2U &&
+           uz_btf_pt_value(btf, type->size, field);
+}
+
+static int uz_contpte_abi(const struct kclf_btf *btf)
+{
+    const struct kclf_btf_type *proto = kclf_btf_func_proto(btf, "__contpte_try_unfold");
+    const uint32_t *params;
+    if (!proto || (proto->info & 0xffffU) != 4U || proto->size) return 0;
+    params = (const void *)(proto + 1);
+    return uz_btf_arg_is(btf, params[1], 'm') && uz_btf_arg_is(btf, params[3], 'l') &&
+           uz_btf_pt_word(btf, params[5], "pte") && uz_btf_pt_value(btf, params[7], "pte");
+}
+
+static int uz_btf_raw_lock_zero(const struct kclf_btf *btf,
+                               const struct kclf_btf_type *type,
+                               const struct kclf_btf_type *raw, unsigned depth)
+{
+    const struct kclf_btf_member *member;
+    unsigned i, kind;
+    if (!type || !depth || type->size < raw->size) return 0;
+    kind = (type->info >> 24) & 31U;
+    if (kind != 4U && kind != 5U) return 0;
+    member = (const void *)(type + 1);
+    for (i = 0; i < (type->info & 0xffffU); ++i) {
+        const struct kclf_btf_type *sub;
+        if (member[i].offset) continue;
+        sub = kclf_btf_resolve(btf, member[i].type);
+        if (!sub || sub->size > type->size) continue;
+        if (member[i].name) {
+            if (!strcmp(kclf_btf_name(btf, member[i].name), "rlock") && sub == raw) return 1;
+        } else if (uz_btf_raw_lock_zero(btf, sub, raw, depth - 1U)) return 1;
+    }
+    return 0;
+}
+
+/* apply_to_* takes a pte_fn_t callback. Validate the callback itself, not
+ * merely the five outer argument widths (older vendor APIs may add a token). */
+static int uz_apply_pt_abi(const struct kclf_btf *btf, const char *name)
+{
+    const struct kclf_btf_type *proto = kclf_btf_func_proto(btf, name), *cb;
+    const uint32_t *params;
+    if (!uz_btf_signature(btf, proto, "imllpp")) return 0;
+    params = (const void *)(proto + 1);
+    cb = kclf_btf_resolve(btf, params[7]);
+    if (!cb || ((cb->info >> 24) & 31U) != 2U) return 0;
+    cb = kclf_btf_resolve(btf, cb->size);
+    if (!cb || ((cb->info >> 24) & 31U) != 13U || !uz_btf_signature(btf, cb, "iplp")) return 0;
+    params = (const void *)(cb + 1);
+    return uz_btf_pt_word(btf, params[1], "pte");
+}
+
+/* Non-RT spinlock_t starts with raw_spinlock_t. The map-lock helper takes
+ * spinlock_t**, while spin_unlock lowers to _raw_spin_unlock(&lock->rlock).
+ * Never cast an RT mutex-backed spinlock to a raw lock. */
+static int uz_native_pt_abi(const struct kclf_btf *btf)
+{
+    const struct kclf_btf_type *spin = kclf_btf_find(btf, "spinlock", 0);
+    const struct kclf_btf_type *raw = kclf_btf_find(btf, "raw_spinlock", 0);
+    const struct kclf_btf_type *map = kclf_btf_func_proto(btf, "__pte_offset_map_lock");
+    const struct kclf_btf_type *unlock = kclf_btf_func_proto(btf, "_raw_spin_unlock");
+    const uint32_t *params, *unlock_params;
+    if (!uz_btf_signature(btf, map, "pmplp") || !uz_btf_signature(btf, unlock, "vp") ||
+        !spin || !raw || !raw->size || raw->size > spin->size) return 0;
+    params = (const void *)(map + 1);
+    unlock_params = (const void *)(unlock + 1);
+    return uz_btf_pt_word(btf, map->size, "pte") && uz_btf_pt_word(btf, params[3], "pmd") &&
+           uz_btf_pointer_to(btf, params[7], "spinlock", 2) &&
+           uz_btf_pointer_to(btf, unlock_params[1], "raw_spinlock", 1) &&
+           uz_btf_raw_lock_zero(btf, spin, raw, 8);
+}
+
+/* Earlier 5.x/6.x try_grab_folio takes page* and returns folio* (NULL on
+ * failure). Later kernels take folio* and return int (zero on success).
+ * Do not collapse these incompatible return conventions into one cast. */
+static int uz_folio_page_grab_abi(const struct kclf_btf *btf)
+{
+    return uz_btf_signature(btf, kclf_btf_func_proto(btf, "try_grab_folio"), "oPii");
 }
 
 /* Newer GUP uses try_grab_folio() instead of try_grab_page(). Only a newly

@@ -634,20 +634,6 @@ int uro_decode_store(uint32_t insn, const struct uro_regs *regs,
     } else if ((insn & 0xbf000000U) == 0x0c000000U) {
         if (store_multi(insn, regs, &store))
             return -1;
-    } else if ((insn & 0xffffffe0U) == 0xd50b7420U) {
-        /* DC ZVA, Xt: zero one 64-byte block. */
-        unsigned rt = insn & 31U;
-
-        if (rt == 31U)
-            return -1;
-        store.zva = 1;
-        store.size = 64;
-        store.count = 1;
-        store.rt[0] = rt;
-        store.address = regs->x[rt];
-        store.total = 64;
-        if (store.address & 63U)
-            return -1;
     } else {
         return -1;
     }
@@ -657,6 +643,31 @@ int uro_decode_store(uint32_t insn, const struct uro_regs *regs,
     if (!store.total || store.total > 64U ||
         store.total - 1U > URO_U64_MAX - store.address)
         return -1;
+    *out = store;
+    return 0;
+}
+
+/* DC ZVA is geometry-dependent and must not use the ordinary store decoder's
+ * fixed 64-byte buffer contract. BS is log2(words), not log2(bytes), and Xt
+ * may name any byte inside the naturally aligned block. The caller decides
+ * whether it can emulate the returned size before making any memory access. */
+int uro_decode_zva(uint32_t insn, const struct uro_regs *regs, uint64_t dczid,
+                    struct uro_store *out)
+{
+    struct uro_store store = {0};
+    unsigned rt = insn & 31U, bs = (unsigned)dczid & 15U;
+    uint64_t address;
+
+    if (!regs || !out || (insn & 0xffffffe0U) != 0xd50b7420U ||
+        (dczid & ~(uint64_t)15) || bs > 9U)
+        return -1;
+    address = rt == 31U ? 0 : regs->x[rt];
+    store.zva = 1;
+    store.size = 4U << bs;
+    store.count = 1;
+    store.rt[0] = rt;
+    store.total = store.size;
+    store.address = address & ~((uint64_t)store.size - 1U);
     *out = store;
     return 0;
 }

@@ -11,7 +11,7 @@
 - readv/proc 测试使用每线程独立、预分配并预触页的 64 KiB 缓冲，处理短读与 EINTR。
 - 新增 `perf` 诊断命令和页数、长 LL/SC、代码修改、子快照、LSE 回归；普通发布构建关闭诊断计数。
 
-实现分析与实测证据见 [优化报告](docs/performance-optimization-1.2.1.zh-CN.md)，构建和复测步骤见 [README](README.md) 与 [INTEGRATION.md](INTEGRATION.md)。
+实现分析与实测证据见 [优化报告](performance-optimization-1.2.1.zh-CN.md)，构建和复测步骤见 [README](../README.md) 与 [INTEGRATION.md](INTEGRATION.md)。
 
 ## 性能与验证
 

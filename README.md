@@ -2,11 +2,13 @@
 
 ## 中文
 
-Android ARM64 用户态代码页读取覆盖实验模块，基于 UROV-Y 2.28.0，固定使用 **PAGE_AP / all-callers**。取指执行物理代码页，数据读取由注册的影像替代；无需配置读取指令地址或调用者白名单。详细原理、ABI、兼容条件和限制见 [DESIGN.md](DESIGN.md)。
+Android ARM64 用户态代码页读取覆盖实验模块，基于 UROV-Y 2.28.0，固定使用 **PAGE_AP / all-callers**。取指执行物理代码页，支持的数据读取路径由注册的影像替代；无需配置读取指令地址或调用者白名单。当前完整原理、实现流程与限制见 [1.2.5 技术博客](docs/implementation-1.2.5.zh-CN.md)，全部资料见 [文档索引](docs/README.md)。
 
-当前工作版本为 **1.2.2：5.x/6.x 兼容性审计修订**，单 KPM 集成 KCLF 1.5.7 并补充内置适配。新增 GUP 6/7/8 参数和 GET/PIN/folio 适配、加载器共享验证后的 BTF、hook 前预检及 16 KB 工具链修复，详见 [本次实现审计与验证](docs/compatibility-audit-1.2.2.zh-CN.md)。原有取指块扫描和全字节验证缓存保持，历史性能口径见 [1.2.1 优化记录](docs/performance-optimization-1.2.1.zh-CN.md)。`module/kclf/` 是内置加载器，`integration/` 提供 Dobby 注入 SO、十页 CRC 测试 App 和应用内复测入口；`Dobby/` 保持原样。集成流程见 [INTEGRATION.md](INTEGRATION.md)，历史实测见 [集成验证记录](integration/RESULTS-2026-11-12.md)。1.2.2 为本地源码修订，以下 release 链接仍指向已发布的历史版本。
+当前版本为 **1.2.5：并发、内存与兼容诊断优化**。在 [1.2.4](docs/compatibility-audit-1.2.4.zh-CN.md) 的原生 PTL/GUP 适配上，增加每页影像锁、RX 三页缓冲、覆盖缓冲预算、可调 fork 预留、缺页映射身份复核，以及可选 KCLF。Pixel 6 / Android 16 / Linux 6.1.134 的实机验证与限制见 [1.2.5 审计](docs/compatibility-audit-1.2.5.zh-CN.md)。`Dobby/` 保持原样，集成流程见 [INTEGRATION.md](docs/INTEGRATION.md)。
 
-`app/` 保留原有 73 项回归，`api/` 保留独立用户态库；`tests/` 新增块扫描、长 LL/SC、代码修改和页数扩展测试。`out/` 中的 KPM、APK、签名材料与 BTF 不进入 Git。当前 APK、KPM 和校验文件见 [Release v1.2.1](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.1) 与 [版本说明](RELEASE-1.2.1.md)；历史版本见 [Release v1.2.0](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.0)。内核实现分析见 [1.1.0 源码分析](docs/implementation-1.1.0.zh-CN.md)，当前测试实现见 [INTEGRATION.md](INTEGRATION.md)。
+`app/` 保留原有 73 项回归，`api/` 保留独立用户态库；`tests/` 新增块扫描、长 LL/SC、代码修改和页数扩展测试。当前 KPM、两款测试 APK 与校验文件见 [Release v1.2.5](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.5) 和 [版本说明](docs/RELEASE-1.2.5.md)。编译产物存放在忽略目录 `out/`，通过 Releases 分发；签名私钥、设备凭据与设备专用 BTF 不发布。历史设计、审计、性能数据和发布说明集中在 [docs/](docs/README.md)，均按适用版本阅读。
+
+发布附件中，`urov-z.kpm` 为普通完整构建；`urov-z-diagnostics.kpm` 为启用性能诊断计数的完整构建，对应本次真机复测版本。两者的模块名均为 `urov-z`，按需要选择其中一个加载；两款测试 APK 的版本均为 1.2.5。具体验证范围以发布说明为准。
 
 用户态 C/C++ 接口见 [api/README.md](api/README.md)：查询、注册、更新、状态和注销均已封装；无需应用自己实现 syscall 参数和 MAC。构建静态库/动态库：`.\api\build.ps1 -Ndk <NDK目录>`。
 
@@ -32,6 +34,14 @@ Android ARM64 用户态代码页读取覆盖实验模块，基于 UROV-Y 2.28.0�
 
 `app/build.ps1` 还生成 `out/app/urovz-query` 和 `compat-check`。两种 APK 分别使用各自 `out/app/`、`out/integration/` 下的本地测试签名。
 
+### 资源配置与诊断（1.2.5）
+
+默认构建包含 KCLF；仅需读取覆盖时，加载参数可加 `loader=off`，或构建 `.\build.ps1 ... -OverlayOnly -OutDir out/overlay-only` 完全省去加载器实现。`-Diagnostics` 启用锁争用和持有时间等性能计数。
+
+`kpm ctl0 urov-z memory|health|compat|perf` 分别输出缓冲额度、运行事件、兼容证据来源和性能计数。`buffer_kb=N`、`fork_copies=N` 与 `writes=...` 可在全局 inactive 时通过 ctl0 修改，活动会话拒绝。默认 `max_kb` 页数准入公式保持不变；RX 每目标主缓冲从 7 页降为 3 页，experimental 为 7 页。
+
+通用静态检查：`compat-check --inspect kernel.btf --symbols symbols.txt --kernel 6.1.134`。它不套用特定手机偏移，区分 BTF、public fallback 与版本来源；输出始终注明运行时未验证。完整字段、预算范围和复现见 [1.2.5 审计](docs/compatibility-audit-1.2.5.zh-CN.md)。
+
 ### 加载集成模块
 
 设备须已安装可加载 KPM 的 KernelPatch。以下命令在电脑的 **PowerShell** 中、从本仓库根目录执行；假定 ADB 已选中一台设备，多设备时给命令增加 `-s <serial>`。`KP_KEY` 是设备的 kpatch superkey，用于模块管理和注入；测试 `MODULE_KEY` 固定为项目名 `urov-lab`（UTF-8、无换行）的 MD5：`59f5c4618474864a61d5469295548064`。模块密钥与设备 SuperKey 不同；设备 SuperKey 不写入源码或文件。
@@ -49,6 +59,16 @@ adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z kclf,probe
 ```
 
 统一控制格式是 `kpm ctl0 urov-z <控制字符串>`。`status` 查询全局读取覆盖状态；`kclf,status` 查询注入请求。所有加载器命令都在控制字符串中带 `kclf,` 前缀，例如 `kclf,inject,...`，不是向名为 `kclf` 的另一个 KPM 发命令。
+
+默认 `writes=rx`：受管页变为可写或经受监测的内核路径写入后退役，恢复原生读写，设置 `degraded=1`；后续 SET 返回 `ESTALE`，重新注册才能恢复覆盖。`status` 显示 `writes` 与实际 `ptl` 路径。只有全局 inactive 时可切换辅助写入实验（活动会话返回 `EBUSY`）：
+
+```powershell
+adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z writes=experimental
+# 运行旧写入/LSE 专项，注销会话后恢复默认
+adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z writes=rx
+```
+
+加载参数也支持 `writes=rx|experimental`。实验模式不保证任意外部写入和跨线程原子语义；普通 App、CRC 注入和新生命周期回归使用 RX 模式。
 
 KPM 管理层也可使用以下查询，与后文的模块内部控制命令区分：
 
@@ -190,7 +210,7 @@ adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z kclf,quiesce
 
 ### 复测流程（无需 PowerShell 脚本）
 
-1. 从 [Releases](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.1) 下载 `urov-z.kpm`、`urov-injection-test.apk` 和 `urov-z-test.apk`。在下载目录执行：
+1. 从 [Release v1.2.5](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.5) 下载 `urov-z.kpm`、`urov-injection-test.apk` 和 `urov-z-test.apk`。在下载目录执行：
 
    ~~~text
    adb push urov-z.kpm /data/local/tmp/urov-z.kpm
@@ -208,7 +228,7 @@ adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z kclf,quiesce
 adb logcat -v brief -s UROVZ-CRC:I UROVZ:I *:S
 ~~~
 
-只有首次运行前 KPM 数量为零时才采集“模块未加载”耗时；已有模块时明确跳过该项，比较同一进程中的“已 hook 未覆盖 / 十页覆盖”。更新 KPM 使用受控重启，不热卸载。实现与计时口径见 [INTEGRATION.md](INTEGRATION.md)。
+只有首次运行前 KPM 数量为零时才采集“模块未加载”耗时；已有模块时明确跳过该项，比较同一进程中的“已 hook 未覆盖 / 十页覆盖”。更新 KPM 使用受控重启，不热卸载。实现与计时口径见 [INTEGRATION.md](docs/INTEGRATION.md)。
 
 ### 清理与更换模块
 
@@ -233,10 +253,10 @@ adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z status
 
 ### 兼容性与参数
 
-- 本地 1.2.2 在当前 Pixel 6 / Linux 6.1.134 / 4 KB 上完成最终 detached-BTF 构建的 73 项回归、manual/linker 各三轮及读取专项；5.15/6.12/6.18/16K 为离线 BTF 检查，详见 [当前审计](docs/compatibility-audit-1.2.2.zh-CN.md)。
+- 1.2.5 实机为 Pixel 6 / Android 16 / Linux 6.1.134 / 4 KB，App 73/73、生命周期 606 项、资源限额与模式切换、manual/linker 各三轮通过。其他 5.15/6.12/6.18/16K 本轮为 BTF 和模型检查。详见 [当前审计](docs/compatibility-audit-1.2.5.zh-CN.md)，不外推为所有 5.x/6.x 实机通过。
 - 1.1.0 集成版在 Pixel 6 / Android 16 / Linux 6.1.134 / 4 KB 上通过 manual/linker 各 3 轮及原有 73 项回归。历史 1.0.0 在小米 13 / Linux 5.15.74 和 Pixel 6 有 live / detached BTF 证据；不能将这些历史结果视为集成版的跨设备验证。6.12 / 6.18 / 16 KB 仍无集成运行验证。
 - 兼容目标为 Linux **5.4–6.x**、AArch64、4 KB / 16 KB 普通页。必须具备可识别的符号和准确 BTF；不支持的布局/页表会拒绝加载。5.0–5.3、32 位 App、64 KB、LPA2 未支持。
-- 可选加载参数：`verbose`、`max_pages=N`（1–4096）、`max_kb=N`（64–65536，默认 8192，仅主影像池）、`btf=/absolute/path/kernel.uzbtf`。没有其他模式或 caller 参数。
+- 可选加载参数：`verbose`、`max_pages=N`（1–4096）、`max_kb=N`（64–65536，默认 8192，旧主缓冲页数准入额度）、`buffer_kb=N`（64–262144，默认 65536，覆盖缓冲预算）、`fork_copies=0..4`（默认 4）、`loader=on|off`、`writes=rx|experimental`、`btf=/absolute/path/kernel.uzbtf`。读取策略保持 all-callers。
 - 目标必须是可读可执行、当前不可写的文件映射；普通私有 `.text` 最适合测试。使用未带标签的用户地址。App 明确禁用 native heap pointer tagging。
 - 这是测试框架；并发改映射、写入/原子指令、原生单步重放、页表锁与观察范围存在限制，详见设计文档。运行成功不代表对任意程序透明。
 
@@ -250,9 +270,11 @@ adb push out/kernel.uzbtf /data/local/tmp/kernel.uzbtf
 
 ## English
 
-UROV-Z is an Android ARM64 code-page read-overlay experiment derived from UROV-Y 2.28.0. It uses **PAGE_AP / all-callers only**: original instructions execute while supported data reads receive a registered image. No reader-site addresses or caller allowlist are required. [DESIGN.md](DESIGN.md) describes the implementation, ABI, compatibility conditions and limitations.
+UROV-Z is an Android ARM64 code-page read-overlay experiment derived from UROV-Y 2.28.0. It uses **PAGE_AP / all-callers only**: original instructions execute while supported data reads receive a registered image. No reader-site addresses or caller allowlist are required. The [1.2.5 implementation guide](docs/implementation-1.2.5.zh-CN.md) covers the current implementation, ABI, compatibility conditions and limitations; the [documentation index](docs/README.md) separates current guidance from historical records.
 
-The current local version is **1.2.2**, with compatibility revisions to the embedded KCLF 1.5.7 loader. It adds validated GUP 6/7/8-argument and GET/PIN/folio adaptation, shared verified BTF, loader preflight before hooks, and 16 KiB build fixes. See the [implementation audit and validation](docs/compatibility-audit-1.2.2.zh-CN.md); earlier performance measurements remain in the [1.2.1 report](docs/performance-optimization-1.2.1.zh-CN.md). `Dobby/` is unchanged; the independent API and original 73-check App are retained. The existing [Release 1.2.1](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.1) contains the previous published binaries, not this local revision. Generated artifacts remain under ignored `out/`.
+The current version is **1.2.5**. It adds per-page image locks, three-buffer RX descriptors, an overlay buffer budget, configurable fork reservations, fault mapping revalidation, compatibility/health diagnostics and optional KCLF. Pixel 6 / Android 16 / Linux 6.1.134 runtime results and remaining limits are in the [current audit](docs/compatibility-audit-1.2.5.zh-CN.md). Public ABI v1, KCLF 1.5.7 and the original 73-check App remain. `Dobby/` is unchanged. Download the KPM, both test APKs and checksums from [Release v1.2.5](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.5); see its [release notes](docs/RELEASE-1.2.5.md) for validation scope.
+
+`urov-z.kpm` is the normal full build; `urov-z-diagnostics.kpm` enables performance counters and is the full build used for this device retest. Both register the module name `urov-z`, so load one variant. Both test APKs are version 1.2.5.
 
 ### Build
 
@@ -314,16 +336,16 @@ Quiesce has no resume command. The `resume` notification option does not re-enab
 
 Overlay REGISTER/SET/STATUS/DEACTIVATE are owner-process [API calls](api/README.md), not ctl0 commands. Injection does not automatically install a Dobby hook or register an overlay. Follow the [Dobby constraints](api/README.md#与-dobby-hook-联合使用的限制): save the original page before hook installation, register only after patching, and deactivate before removing hooks or releasing the payload.
 
-Integration tests now run in a fresh private Android service process for every button press. Ten 16-KiB-aligned Dobby targets are checked for distinct runtime pages. Each cycle validates per-page and whole-code CRCs through three read paths, performs 96 concurrent CRC scans and 20,480 function calls using four threads, reinjects a probe while the overlay is active, then deactivates and removes every hook. The UI shows baseline and actual CRCs with stage verdicts, plus ten fresh function return values sampled every second (deferred during mutations, injection and timed reads). Timing uses two warmups and nine samples per channel, with a single concise before/after median line per comparison. A truly module-absent baseline is collected only before the first load; subsequent runs explicitly skip it and compare inactive/active overlays in the same process. Build scripts remain, but the PowerShell retest scripts and file-based result exchange have been removed. See [INTEGRATION.md](INTEGRATION.md).
+Integration tests now run in a fresh private Android service process for every button press. Ten 16-KiB-aligned Dobby targets are checked for distinct runtime pages. Each cycle validates per-page and whole-code CRCs through three read paths, performs 96 concurrent CRC scans and 20,480 function calls using four threads, reinjects a probe while the overlay is active, then deactivates and removes every hook. The UI shows baseline and actual CRCs with stage verdicts, plus ten fresh function return values sampled every second (deferred during mutations, injection and timed reads). Timing uses two warmups and nine samples per channel, with a single concise before/after median line per comparison. A truly module-absent baseline is collected only before the first load; subsequent runs explicitly skip it and compare inactive/active overlays in the same process. Build scripts remain, but the PowerShell retest scripts and file-based result exchange have been removed. See [INTEGRATION.md](docs/INTEGRATION.md).
 
 ### Compatibility
 
-Local 1.2.2 passed the final detached-BTF build's 73 App checks, three cycles each of manual/linker integration and read-path regressions on the connected Pixel 6 / Linux 6.1.134 / 4 KB. Other saved BTF configurations have structural validation only; see the [current audit](docs/compatibility-audit-1.2.2.zh-CN.md).
+The 1.2.5 runtime platform is Pixel 6 / Android 16 / Linux 6.1.134 / 4 KB: 73 App checks, 606 lifecycle assertions, resource-policy tests, experimental writes and three cycles of each KCLF backend passed. Other kernel configurations have BTF/model coverage in this revision. The [audit](docs/compatibility-audit-1.2.5.zh-CN.md) identifies the exact diagnostic binary tested on device and the untested boundaries.
 
 The 1.1.0 integration passed both injection backends (three cycles each), 73 App checks and 4152 core checks on Pixel 6 / Android 16 / Linux 6.1.134 / 4 KB. Earlier Xiaomi and detached-BTF results apply to the previous standalone version. Linux 6.12, 6.18 and 16 KB configurations have no integrated runtime validation.
 
 The target range is **Linux 5.4–6.x**, AArch64 and ordinary 4 KB / 16 KB pages, subject to validated symbols, BTF and translation geometry. Linux 5.0–5.3, AArch32, 64 KB and LPA2 are unsupported. Registration accepts readable executable, currently non-writable file mappings. Use untagged user addresses; this App disables native heap pointer tagging.
 
-Optional load arguments are `verbose`, `max_pages=N` (1–4096), `max_kb=N` (64–65536; default 8192, main image pool only), and `btf=/absolute/path/kernel.uzbtf`. There is no mode or caller selector. For a kernel without built-in BTF, package its exact-build `vmlinux` with the command above; a mismatched GNU Build ID is rejected.
+Optional load arguments include `verbose`, `max_pages=N` (1–4096), `max_kb=N` (64–65536; legacy main-buffer page quota), `buffer_kb=N` (64–262144; default 65536 KiB), `fork_copies=0..4` (default 4), `loader=on|off`, `writes=rx|experimental`, and `btf=/absolute/path/kernel.uzbtf`. A zero fork reservation rejects independent forks only while the owner session is active; shared-mm threads remain supported. The buffer budget excludes KCLF, host allocations, allocator overhead and transferred GUP pages. For detached BTF, a mismatched GNU Build ID is rejected.
 
 This is a test framework. Concurrent mapping changes, writes/atomics, native single-step replay, page-table locking and coverage have explicit limits in the design document. A passing run does not establish transparency for arbitrary programs.

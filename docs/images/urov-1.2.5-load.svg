@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1000" viewBox="0 0 1280 1000" role="img" aria-label="03  一次受管 load 的处理顺序">
+<title>03  一次受管 load 的处理顺序</title>
+<rect x="0" y="0" width="1280" height="1000" rx="0" fill="#f4f7fb" stroke="#f4f7fb" stroke-width="2"/>
+<text x="48" y="64" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="32" font-weight="700" fill="#102740">03  一次受管 load 的处理顺序</text>
+<text x="48" y="101" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#516477">先证明异常归属，读取完整字节，再提交架构状态。</text>
+<rect x="48" y="140" width="811" height="108" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="48" y="140" width="7" height="108" rx="3" fill="#1e7e9c" stroke="#1e7e9c" stroke-width="2"/>
+<text x="71" y="181" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#1e7e9c">1  识别异常</text>
+<text x="71" y="217" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">EL0 AArch64、有效 FAR、level-3 data permission fault</text>
+<polyline points="452,248 452,276" fill="none" stroke="#71889e" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="452,276 445.5,264.7416697508023 458.5,264.7416697508023" fill="#71889e"/>
+<rect x="48" y="276" width="811" height="108" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="48" y="276" width="7" height="108" rx="3" fill="#1e7e9c" stroke="#1e7e9c" stroke-width="2"/>
+<text x="71" y="317" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#1e7e9c">2  证明映射身份</text>
+<text x="71" y="353" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">mm / 页槽 / VMA 权限 / 文件对象与固定文件页偏移</text>
+<polyline points="452,384 452,412" fill="none" stroke="#71889e" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="452,412 445.5,400.7416697508023 458.5,400.7416697508023" fill="#71889e"/>
+<rect x="48" y="412" width="811" height="108" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="48" y="412" width="7" height="108" rx="3" fill="#1e7e9c" stroke="#1e7e9c" stroke-width="2"/>
+<text x="71" y="453" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#1e7e9c">3  读取真实指令并解码</text>
+<text x="71" y="489" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">地址、宽度、寄存器、写回、向量与 exclusive 信息</text>
+<polyline points="452,520 452,548" fill="none" stroke="#71889e" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="452,548 445.5,536.7416697508023 458.5,536.7416697508023" fill="#71889e"/>
+<rect x="48" y="548" width="811" height="108" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="48" y="548" width="7" height="108" rx="3" fill="#1e7e9c" stroke="#1e7e9c" stroke-width="2"/>
+<text x="71" y="589" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#1e7e9c">4  取齐完整数据</text>
+<text x="71" y="625" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">单页快路径；跨页分段；页锁保护 image 复制</text>
+<polyline points="452,656 452,684" fill="none" stroke="#71889e" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="452,684 445.5,672.7416697508023 458.5,672.7416697508023" fill="#71889e"/>
+<rect x="48" y="684" width="811" height="108" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="48" y="684" width="7" height="108" rx="3" fill="#1e7e9c" stroke="#1e7e9c" stroke-width="2"/>
+<text x="71" y="725" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#1e7e9c">5  提交结果</text>
+<text x="71" y="761" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">GPR 或 FPSIMD、基址写回、PC + 4；必要时处理 LL/SC</text>
+<rect x="916" y="140" width="316" height="150" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="916" y="140" width="7" height="150" rx="3" fill="#64748b" stroke="#64748b" stroke-width="2"/>
+<text x="939" y="181" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#64748b">不属于模块</text>
+<text x="939" y="217" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">交回 Linux</text>
+<text x="939" y="250" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">保持原生 fault 语义</text>
+<polyline points="859,194 916,194" fill="none" stroke="#71889e" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="916,194 904.7416697508023,200.5 904.7416697508023,187.5" fill="#71889e"/>
+<rect x="916" y="340" width="316" height="150" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="916" y="340" width="7" height="150" rx="3" fill="#b26a1f" stroke="#b26a1f" stroke-width="2"/>
+<text x="939" y="381" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#b26a1f">mmap trylock 忙</text>
+<text x="939" y="417" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">保持 PC / 寄存器</text>
+<text x="939" y="450" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">重试并记录 health</text>
+<polyline points="859,330 887,330 887,415 916,415" fill="none" stroke="#b26a1f" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="916,415 904.7416697508023,421.5 904.7416697508023,408.5" fill="#b26a1f"/>
+<rect x="916" y="558" width="316" height="186" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="916" y="558" width="7" height="186" rx="3" fill="#a54343" stroke="#a54343" stroke-width="2"/>
+<text x="939" y="599" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#a54343">受管但无法模拟</text>
+<text x="939" y="635" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">未知 load / 范围失败等</text>
+<text x="939" y="668" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">记录 failures</text>
+<text x="939" y="701" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">按错误路径发 SIGSEGV</text>
+<polyline points="859,466 888,466 888,640 916,640" fill="none" stroke="#a54343" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="916,640 904.7416697508023,646.5 904.7416697508023,633.5" fill="#a54343"/>
+<rect x="48" y="850" width="1184" height="83" rx="14" fill="#e5f0fa" stroke="#bed3e7" stroke-width="2"/>
+<text x="74" y="893" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">要点：跨页任一段失败时，不先提交一半寄存器；多次 load 仍可能跨越不同 generation。</text>
+</svg>

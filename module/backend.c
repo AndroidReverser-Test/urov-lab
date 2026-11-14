@@ -19,18 +19,25 @@
 #include "abi.h"
 #include "backend.h"
 #include "compat.h"
+#include "runtime_compat.h"
 #include "readers.h"
+#include "page_index.h"
+#include "short_lock.h"
+#include "buffer_budget.h"
 #include "window.h"
 #include "prewin.h"
 #include "insn_scan.h"
 #include "kclf/embedded.h"
 
-/* Compile out all hot-path diagnostic atomics in the normal build. Counters
- * are lifetime totals so a completed session can still be inspected. */
+/* Per-load performance counters compile out in the normal build. Health
+ * events remain available. Both are lifetime totals, including past sessions. */
 #ifndef UROV_Z_DIAGNOSTICS
 #define UROV_Z_DIAGNOSTICS 0
 #endif
 static struct uz_perf g_perf;
+static struct uz_health g_health;
+static struct uz_compat_info g_compat;
+#define UZ_HEALTH_ADD(field) __atomic_fetch_add(&g_health.field, 1, __ATOMIC_RELAXED)
 #if UROV_Z_DIAGNOSTICS
 #define UZ_PERF_ADD(field, n) __atomic_fetch_add(&g_perf.field, (uint64_t)(n), __ATOMIC_RELAXED)
 #else
@@ -98,7 +105,6 @@ static inline void uz_flush_icache_all(void)
 #define UZ_FOLL_WRITE 0x01U
 /* enum in mm.h: LONGTERM and PIN are the two callers that require the exact
  * pinned user page, so the GUP overlay leaves them alone. */
-#define UZ_GFP_ATOMIC 0U /* nonblocking, no reclaim; stable zero mask across kernels */
 
 /* Linux user protection bits (uapi/asm-generic/mman-common.h). Execute-only
  * mappings are kernel/CPU dependent; never infer VM_READ from VM_EXEC. */
@@ -167,7 +173,7 @@ _Static_assert(sizeof(struct uz_fpstate) == UZ_FPSIMD_BYTES, "FPSIMD image size"
  * declines if the work bound is reached without finding one.  The bound is a
  * kernel-work guard, not a proof of the whole function; the cross-function
  * indirect entry that remains outside any linear walk is documented in
- * DESIGN.md. */
+ * docs/DESIGN.md. */
 #define UZ_LLSC_ENTRY_SCAN UZ_LLSC_PRE_SCAN
 #define UZ_LLSC_MEM_MAX 4U       /* gap stores recorded and replayed at commit */
 #define UZ_LLSC_BYTES_MAX 64U    /* widest single access the decoder produces */
@@ -250,12 +256,11 @@ typedef void (*put_page_t)(void *page);
 typedef void (*copy_highpage_t)(void *to, void *from);
 typedef void *(*vmalloc_to_page_t)(const void *addr);
 
-extern uint64_t *pgtable_entry(uint64_t pgd, uint64_t va);
-
 /* Readers access only the immutable snapshot or the published image. SET
  * builds into spare, then waits for readers of the previous image before
  * making that image the new spare. */
 struct uz_page {
+    struct uz_short_lock image_lock;
     uint64_t base;
     uint8_t *image;
     uint8_t *snapshot;
@@ -274,7 +279,6 @@ struct uz_page {
     uint32_t want;       /* the current VMA allows EL0 reads: trap desired */
     uint32_t dead;       /* a real store reached the page: overlay is stale */
     uint32_t gone;       /* the registered mapping was unmapped/replaced */
-    uint32_t seq;        /* image publication sequence for in-place stores */
     uint32_t replay;     /* a native replay owns pre/post for this page */
     /* A writer outside this module obtained write access through the kernel
      * (uaccess fault, fast/slow GUP, process_vm_writev).  The live bytes are
@@ -294,6 +298,7 @@ struct uz_page {
     uint64_t vma_pgoff;
     uint64_t vma_start;
     uint64_t vma_end;
+    uint64_t file_page; /* immutable registration-time file page offset */
 };
 
 struct uz_session {
@@ -304,7 +309,9 @@ struct uz_session {
     uint64_t replays;
     uint64_t failures;
     uint64_t llsc;      /* LL/SC stores completed by the AP bridge */
-    struct uz_page *pages;     /* page_count entries, sorted by base */
+    struct uz_page *pages;     /* stable slots: never move a live descriptor */
+    struct uz_page_index *index;
+    struct uz_page_index *index_spare;
     uint8_t *arena;            /* image, spare and snapshot for each page */
     uint32_t page_count;
 };
@@ -322,11 +329,8 @@ struct uz_session {
 struct uz_shadow {
     void *mm;
     void *mm_ref;       /* one get_task_mm reference per child, first slot only */
-    uint8_t *image;
-    uint8_t *snapshot;   /* the child's native view (outside the fake window) */
-    uint32_t index;      /* owner page descriptor index */
+    struct uz_page page; /* independent identity, arming and write state */
     uint32_t used;
-    uint32_t seq;
 };
 
 #define UZ_SHADOW_CAP 4096U
@@ -345,6 +349,12 @@ static void *g_owner;
 static int g_ctrl_busy;
 static int g_ready;
 static int g_verbose;
+static int g_experimental_writes;
+static int g_loader_enabled = UROV_Z_WITH_KCLF;
+static uint32_t g_fork_copies = 4U;
+static unsigned g_page_buffers = 3U;
+static struct uz_buffer_budget g_buffers = {.limit = UINT64_C(64) << 20};
+static struct uz_short_lock g_buffer_lock;
 static int g_suspend;
 static volatile uint32_t g_failure_logged;
 static struct uz_keys g_keys;
@@ -366,6 +376,7 @@ static unsigned g_foll_get, g_foll_fast_only;
 static _Bool (*f_grab_page_bool)(void *, unsigned);
 static int (*f_grab_page_int)(void *, unsigned);
 static int (*f_grab_folio)(void *, int, unsigned);
+static void *(*f_grab_folio_page)(void *, int, unsigned);
 static void (*f_unpin_page)(void *);
 static int g_pin_argc;
 static int g_pin_internal;
@@ -433,7 +444,7 @@ static int g_abort_has_iss2;
  * reader).  The after hook substitutes a private page holding the image. */
 static void *f_gup_fast;
 static int g_gup_internal;
-static alloc_pages_t f_alloc_pages;
+static struct uz_page_allocator g_page_allocator;
 static put_page_t f_put_page;
 static copy_highpage_t f_copy_highpage;
 static vmalloc_to_page_t f_vmalloc_to_page;
@@ -507,6 +518,8 @@ static uint64_t mm_pgd(void *mm)
     return __atomic_load_n((uint64_t *)((char *)mm + g_layout.mm_pgd), __ATOMIC_RELAXED);
 }
 
+#include "pt_access.h"
+
 static int mm_has_live_user(void *mm)
 {
     int users;
@@ -573,18 +586,15 @@ static long uz_copy_control_reply(void *dst, const void *src, unsigned long len)
 static void uz_mmap_write_lock(void *mm)
 {
     f_mmap_write_lock(g_use_rwsem ? (char *)mm + g_layout.mmap_lock : mm);
+    /* All module write-lock callers are serialized by g_ctrl_busy. */
+    g_mmap_writer_mm = mm;
+    __atomic_store_n(&g_mmap_writer, current, __ATOMIC_RELEASE);
 }
 
 static void uz_mmap_write_unlock(void *mm)
 {
+    __atomic_store_n(&g_mmap_writer, 0, __ATOMIC_RELEASE);
     f_mmap_write_unlock(g_use_rwsem ? (char *)mm + g_layout.mmap_lock : mm);
-}
-
-static uint64_t *pte_of(void *mm, uint64_t address)
-{
-    uint64_t pgd = mm_pgd(mm);
-    if (!pgd) return 0;
-    return pgtable_entry(pgd, address);
 }
 
 static uint64_t page_base(uint64_t address)
@@ -595,24 +605,66 @@ static uint64_t page_base(uint64_t address)
 /* Sleepable contexts only (registration, SET, unload).  kvmalloc() keeps
  * small quotas out of the vmalloc address space; vmalloc() is the fallback
  * when the running kernel does not expose kvmalloc_node/kvfree. */
+static uint64_t uz_irq_save(void)
+{
+    uint64_t flags;
+    __asm__ volatile("mrs %0, daif; msr daifset, #2" : "=r"(flags) :: "memory");
+    return flags;
+}
+
+static void uz_irq_restore(uint64_t flags)
+{
+    __asm__ volatile("msr daif, %0" :: "r"(flags) : "memory");
+}
+
+static void *uz_alloc_buffer(unsigned long bytes, int vm_only)
+{
+    void *p = 0;
+    int slot;
+    uint64_t irq = uz_irq_save();
+    (void)uz_short_lock_take(&g_buffer_lock);
+    slot = uz_buffer_reserve(&g_buffers, bytes, g_page_size ? g_page_size : 4096U);
+    uz_short_lock_drop(&g_buffer_lock);
+    uz_irq_restore(irq);
+    if (slot < 0) return 0;
+
+    if (!vm_only && f_kvmalloc_node)
+        p = f_kvmalloc_node((uint64_t)bytes, 0xcc0U /* GFP_KERNEL */, -1);
+    if (!p && f_vmalloc) p = f_vmalloc(bytes);
+    irq = uz_irq_save();
+    (void)uz_short_lock_take(&g_buffer_lock);
+    if (p) g_buffers.records[slot].ptr = p;
+    else uz_buffer_cancel(&g_buffers, (unsigned)slot);
+    uz_short_lock_drop(&g_buffer_lock);
+    uz_irq_restore(irq);
+    return p;
+}
+
 static void *uz_alloc(unsigned long bytes)
 {
-    void *p;
-
-    if (!bytes) return 0;
-    if (f_kvmalloc_node) {
-        p = f_kvmalloc_node((uint64_t)bytes, 0xcc0U /* GFP_KERNEL */, -1);
-        if (p) return p;
-    }
-    if (f_vmalloc) return f_vmalloc(bytes);
-    return 0;
+    return uz_alloc_buffer(bytes, 0);
 }
 
 static void uz_free(void *p)
 {
+    int slot;
+    uint64_t irq;
     if (!p) return;
+    irq = uz_irq_save();
+    (void)uz_short_lock_take(&g_buffer_lock);
+    slot = uz_buffer_find(&g_buffers, p);
+    if (slot >= 0) g_buffers.records[slot].ptr = 0; /* claim this free */
+    uz_short_lock_drop(&g_buffer_lock);
+    uz_irq_restore(irq);
+    if (slot < 0) return; /* never free an unowned pointer */
     if (f_kvfree) f_kvfree(p);
     else if (f_vfree) f_vfree(p);
+    /* Keep the reservation until the native free has completed. */
+    irq = uz_irq_save();
+    (void)uz_short_lock_take(&g_buffer_lock);
+    uz_buffer_cancel(&g_buffers, (unsigned)slot);
+    uz_short_lock_drop(&g_buffer_lock);
+    uz_irq_restore(irq);
 }
 
 static int overlay_live(void);
@@ -620,6 +672,8 @@ static void uz_rearm_written(void *mm, uint64_t address, unsigned len);
 static void uz_write_enter(void);
 static void uz_write_leave(void);
 static int uz_write_live(void *mm, uint64_t address, const uint8_t *data, unsigned len);
+static void uz_retire_written_page(void *mm, struct uz_page *p, uint64_t address);
+static void uz_code_invalidate(void);
 
 static uint64_t session_get_mm(void *mm)
 {
@@ -663,23 +717,18 @@ static void drain_readers(uint64_t mask)
         f_msleep(1);
 }
 
-/* The page table walker returns the leaf that covers this aligned page.  The
- * array is sorted by base, so a miss is a genuine "not part of the session". */
+/* The reader reference pins this immutable index across lookup. A mremap may
+ * publish a new address ordering, but cannot move the returned descriptor or
+ * change which image/snapshot buffers belong to that slot. */
 static struct uz_page *page_find(uint64_t page)
 {
-    uint32_t lo = 0, hi = g_sess.page_count;
+    const struct uz_page_index *index = __atomic_load_n(&g_sess.index, __ATOMIC_ACQUIRE);
+    uint32_t slot = uz_index_find(index, page);
 
-    if (!g_sess.pages || !g_sess.page_count) return 0;
-    while (lo < hi) {
-        uint32_t mid = lo + (hi - lo) / 2;
-        uint64_t base = g_sess.pages[mid].base;
-
-        if (page < base) hi = mid;
-        else if (page > base) lo = mid + 1;
-        else return __atomic_load_n(&g_sess.pages[mid].gone, __ATOMIC_ACQUIRE) ?
-                     NULL : &g_sess.pages[mid];
-    }
-    return 0;
+    return slot < g_sess.page_count &&
+           __atomic_load_n(&g_sess.pages[slot].base, __ATOMIC_ACQUIRE) == page &&
+           !__atomic_load_n(&g_sess.pages[slot].gone, __ATOMIC_ACQUIRE) ?
+           &g_sess.pages[slot] : 0;
 }
 
 static struct uz_page *page_by_index(uint32_t index)
@@ -704,43 +753,35 @@ static struct uz_page *page_by_index(uint32_t index)
 static int uz_leaf_signature(uint64_t pte)
 {
     if ((pte & (PTE_VALID | PTE_TYPE_MASK)) != (PTE_VALID | PTE_TYPE_PAGE)) return 0;
-    if (pte & (PTE_CONT | PTE_SPECIAL | PTE_DEVMAP | PTE_PROT_NONE)) return 0;
+    if (pte & (PTE_SPECIAL | PTE_DEVMAP | PTE_PROT_NONE)) return 0;
     return !(pte & PTE_USER);
 }
 
 static int uz_trap_leaf(void *mm, uint64_t far)
 {
-    uint64_t *ptep;
     uint64_t pte;
 
-    if (!mm) return 0;
-    ptep = pte_of(mm, page_base(far));
-    if (!ptep) return 0;
-    pte = __atomic_load_n(ptep, __ATOMIC_ACQUIRE);
-    return uz_leaf_signature(pte);
+    return !uz_pte_read(mm, page_base(far), &pte) && uz_leaf_signature(pte);
 }
 
 /* Restore AP[1] on a trap whose session is gone and let the faulting
  * instruction retry, so an orphaned trap can never become a signal. */
 static int uz_repair_trap(void *mm, uint64_t far)
 {
-    uint64_t *ptep;
-    uint64_t old;
+    struct uz_pte_op op = {.write = 1, .set = PTE_USER, .forbidden = PTE_USER};
     void *vma;
+    int held, rc = 0;
 
     if (!mm) return 0;
+    held = uz_mm_guard(mm);
+    if (held < 0) return 0;
     vma = f_find_vma(mm, far);
     if (!vma || far < *(uint64_t *)((char *)vma + g_layout.vma_start) ||
-        !(*(unsigned long *)((char *)vma + g_layout.vma_flags) & UZ_VM_READ)) return 0;
-    ptep = pte_of(mm, page_base(far));
-    if (!ptep) return 0;
-    old = __atomic_load_n(ptep, __ATOMIC_ACQUIRE);
-    if (!uz_leaf_signature(old)) return 0;
-    if (!__atomic_compare_exchange_n(ptep, &old, old | PTE_USER, 0,
-                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-        return 0;
-    flush_tlb_all();
-    return 1;
+        !(*(unsigned long *)((char *)vma + g_layout.vma_flags) & UZ_VM_READ)) goto out;
+    rc = uz_pte_access_locked(mm, page_base(far), &op) > 0;
+out:
+    uz_mm_unguard(mm, held);
+    return rc;
 }
 
 static int uz_retired_has(uint64_t page)
@@ -752,52 +793,72 @@ static int uz_retired_has(uint64_t page)
     return 0;
 }
 
-/* The caller holds a session reader reference. Each page image stays intact
- * for that reference, even if SET publishes a replacement concurrently.
- *
- * A successful store updates image and snapshot in place (the live page and
- * the native view both change).  The sequence counter keeps a concurrent
- * reader from mixing the halves of one instruction: the writer publishes odd,
- * copies, then publishes the next even value.  A writer preempted for longer
- * than the retry budget falls back to snapshot bytes. Concurrent native
- * writes can still tear that fallback; see the write limitations in DESIGN.md. */
+/* Only kernel-buffer copies/publication run under this lock. No allocator,
+ * uaccess, mmap lock or sleeping helper is allowed inside the critical
+ * section. IRQ exclusion prevents a preempted holder from blocking readers. */
+struct uz_image_guard { uint64_t irq, acquired; };
+
+#if UROV_Z_DIAGNOSTICS
+static uint64_t uz_clock_ticks(void)
+{
+    uint64_t ticks;
+    __asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(ticks) :: "memory");
+    return ticks;
+}
+
+static void uz_perf_max(uint64_t *field, uint64_t value)
+{
+    uint64_t old = __atomic_load_n(field, __ATOMIC_RELAXED);
+    while (old < value && !__atomic_compare_exchange_n(field, &old, value, 1,
+                                                       __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
+}
+#endif
+
+static struct uz_image_guard uz_image_lock(struct uz_page *p)
+{
+    struct uz_image_guard guard = {.irq = uz_irq_save(), .acquired = 0};
+    uint64_t waits;
+#if UROV_Z_DIAGNOSTICS
+    uint64_t start = uz_clock_ticks();
+#endif
+    waits = uz_short_lock_take(&p->image_lock);
+    UZ_PERF_ADD(image_locks, 1);
+    UZ_PERF_ADD(image_contended, waits != 0);
+    UZ_PERF_ADD(image_spins, waits);
+#if UROV_Z_DIAGNOSTICS
+    guard.acquired = uz_clock_ticks();
+    uz_perf_max(&g_perf.image_wait_max, guard.acquired - start);
+#endif
+    return guard;
+}
+
+static void uz_image_unlock(struct uz_page *p, struct uz_image_guard guard)
+{
+#if UROV_Z_DIAGNOSTICS
+    uz_perf_max(&g_perf.image_hold_max, uz_clock_ticks() - guard.acquired);
+#endif
+    uz_short_lock_drop(&p->image_lock);
+    uz_irq_restore(guard.irq);
+}
+
 static void page_view(struct uz_page *p, uint64_t off, unsigned total,
                       uint8_t *out, int replay)
 {
-    const uint8_t *src = replay ? p->snapshot : __atomic_load_n(&p->image, __ATOMIC_ACQUIRE);
-    unsigned attempt;
-
-    if (replay) {
-        memcpy(out, src + off, total);
-        return;
-    }
-    for (attempt = 0; attempt < 64U; ++attempt) {
-        uint32_t seq1 = __atomic_load_n(&p->seq, __ATOMIC_ACQUIRE);
-        uint32_t seq2;
-
-        if (seq1 & 1U) {
-            __asm__ volatile("yield" : : : "memory");
-            continue;
-        }
-        memcpy(out, src + off, total);
-        seq2 = __atomic_load_n(&p->seq, __ATOMIC_ACQUIRE);
-        if (seq1 == seq2 && !(seq2 & 1U)) return;
-    }
-    memcpy(out, p->snapshot + off, total);
+    struct uz_image_guard guard = uz_image_lock(p);
+    memcpy(out, (replay ? p->snapshot : p->image) + off, total);
+    uz_image_unlock(p, guard);
 }
 
-/* Publish a store into the immutable image and the native-view snapshot. */
+/* SET, native snapshots and store publication share a single copy boundary.
+ * Readers no longer fall back to a concurrently changing snapshot after a
+ * bounded seqlock retry, and SET cannot lose a write outside its new window. */
 static void page_store_bytes(struct uz_page *p, uint64_t off,
                              const uint8_t *bytes, unsigned len)
 {
-    uint32_t seq = __atomic_load_n(&p->seq, __ATOMIC_RELAXED);
-
-    __atomic_store_n(&p->seq, seq + 1U, __ATOMIC_RELEASE);
-    __asm__ volatile("dmb ishst" : : : "memory");
+    struct uz_image_guard guard = uz_image_lock(p);
     memcpy(p->image + off, bytes, len);
     memcpy(p->snapshot + off, bytes, len);
-    __asm__ volatile("dmb ishst" : : : "memory");
-    __atomic_store_n(&p->seq, seq + 2U, __ATOMIC_RELEASE);
+    uz_image_unlock(p, guard);
 }
 
 /* ------------------------------------------- foreign-writer absorption */
@@ -813,6 +874,8 @@ static void page_store_bytes(struct uz_page *p, uint64_t off,
 static int uz_ext_capture(void *mm, struct uz_page *p, uint64_t va)
 {
     if (!mm || !p || !g_page_size) return 0;
+    if (!g_experimental_writes) { uz_retire_written_page(mm, p, va); return 0; }
+    if (!p->ext_pre || !p->ext_buf) return 0;
     if (__atomic_load_n(&p->ext, __ATOMIC_ACQUIRE)) return 1;
     if (f_copy_in(p->ext_pre, (const void *)(uintptr_t)va, g_page_size))
         return 0;
@@ -891,6 +954,7 @@ static struct uz_readv_rec *uz_readv_rec_find(void *task, int create)
             return r;
         }
     }
+    UZ_HEALTH_ADD(readv_slots_full);
     return 0;
 }
 
@@ -913,7 +977,7 @@ static struct uz_shadow *uz_shadow_find(void *mm, uint32_t index)
 
     for (i = 0; i < g_shadow_max; ++i)
         if (__atomic_load_n(&g_shadow[i].used, __ATOMIC_ACQUIRE) == 1 &&
-            g_shadow[i].mm == mm && g_shadow[i].index == index)
+            g_shadow[i].mm == mm && g_shadow[i].page.index == index)
             return &g_shadow[i];
     return 0;
 }
@@ -935,13 +999,28 @@ static struct uz_shadow *uz_shadow_get(void *mm, uint32_t index)
     }
     if (i == g_shadow_max) return 0;
     sh = &g_shadow[i];
-    sh->image = g_shadow_arena + 2ULL * (uint64_t)i * g_page_size;
-    sh->snapshot = sh->image + g_page_size;
-    page_view(p, 0, g_page_size, sh->image, 0);
-    page_view(p, 0, g_page_size, sh->snapshot, 1);
+    sh->page.image = g_shadow_arena + 2ULL * (uint64_t)i * g_page_size;
+    sh->page.snapshot = sh->page.image + g_page_size;
+    {
+        struct uz_image_guard guard = uz_image_lock(p);
+        memcpy(sh->page.image, p->image, g_page_size);
+        memcpy(sh->page.snapshot, p->snapshot, g_page_size);
+        uz_image_unlock(p, guard);
+    }
+    sh->page.base = __atomic_load_n(&p->base, __ATOMIC_ACQUIRE);
+    sh->page.index = index;
+    sh->page.flags = p->flags;
+    sh->page.fake_off = p->fake_off;
+    sh->page.fake_len = p->fake_len;
+    sh->page.armed = __atomic_load_n(&p->armed, __ATOMIC_ACQUIRE);
+    sh->page.want = __atomic_load_n(&p->want, __ATOMIC_ACQUIRE);
+    sh->page.dead = __atomic_load_n(&p->dead, __ATOMIC_ACQUIRE);
+    sh->page.vma_file = p->vma_file;
+    sh->page.vma_pgoff = p->vma_pgoff;
+    sh->page.vma_start = p->vma_start;
+    sh->page.vma_end = p->vma_end;
+    sh->page.file_page = p->file_page;
     sh->mm = mm;
-    sh->index = index;
-    sh->seq = 0;
     __atomic_store_n(&sh->used, 1, __ATOMIC_RELEASE);
     __atomic_add_fetch(&g_shadow_used, 1, __ATOMIC_RELAXED);
     return sh;
@@ -950,35 +1029,13 @@ static struct uz_shadow *uz_shadow_get(void *mm, uint32_t index)
 static void uz_shadow_store(struct uz_shadow *sh, unsigned off,
                             const uint8_t *bytes, unsigned len)
 {
-    uint32_t seq = __atomic_load_n(&sh->seq, __ATOMIC_RELAXED);
-
-    __atomic_store_n(&sh->seq, seq + 1U, __ATOMIC_RELEASE);
-    __asm__ volatile("dmb ishst" : : : "memory");
-    memcpy(sh->image + off, bytes, len);
-    memcpy(sh->snapshot + off, bytes, len);
-    __asm__ volatile("dmb ishst" : : : "memory");
-    __atomic_store_n(&sh->seq, seq + 2U, __ATOMIC_RELEASE);
+    page_store_bytes(&sh->page, off, bytes, len);
 }
 
 static void uz_shadow_view(struct uz_shadow *sh, unsigned off, unsigned total,
                            uint8_t *out, int replay)
 {
-    const uint8_t *src = replay ? sh->snapshot : sh->image;
-    unsigned attempt;
-
-    for (attempt = 0; attempt < 64U; ++attempt) {
-        uint32_t seq1 = __atomic_load_n(&sh->seq, __ATOMIC_ACQUIRE);
-        uint32_t seq2;
-
-        if (seq1 & 1U) {
-            __asm__ volatile("yield" : : : "memory");
-            continue;
-        }
-        memcpy(out, src + off, total);
-        seq2 = __atomic_load_n(&sh->seq, __ATOMIC_ACQUIRE);
-        if (seq1 == seq2 && !(seq2 & 1U)) return;
-    }
-    memcpy(out, src + off, total);
+    page_view(&sh->page, off, total, out, replay);
 }
 
 static void uz_shadow_free_all(void)
@@ -1018,59 +1075,22 @@ static void page_view_mm(void *mm, struct uz_page *p, uint64_t off, unsigned tot
     else page_view(p, off, total, out, replay);
 }
 
-/* File identity of a registered page: the (struct file, file offset) pair its
- * mapping carried when it was registered.  A forked child keeps both through
- * its own mprotect/mremap/munmap, so a trap leaf that no longer sits at
- * p->base can still be resolved to the owner page. */
-static int uz_page_file_offset(const struct uz_page *p, uint64_t *file, uint64_t *offset)
-{
-    if (!p->vma_file || !g_layout.vma_pgoff_ok) return -1;
-    *file = (uint64_t)(uintptr_t)p->vma_file;
-    *offset = p->vma_pgoff + ((p->base - p->vma_start) >> g_page_shift);
-    return 0;
-}
-
-/* A forked child may move or split its copy of the registered mapping.  Match
- * the faulting address back to the owner page through the file identity the
- * VMA still carries instead of the owner's virtual address. */
-static struct uz_page *uz_page_by_identity(void *mm, uint64_t addr)
-{
-    void *vma;
-    uint64_t start, end, file, pgoff, page;
-    uint32_t i;
-
-    if (!mm || !f_find_vma || !g_layout.vma_pgoff_ok) return 0;
-    UZ_PERF_ADD(identity_lookups, 1);
-    vma = f_find_vma(mm, addr);
-    if (!vma) return 0;
-    start = *(uint64_t *)((char *)vma + g_layout.vma_start);
-    end = *(uint64_t *)((char *)vma + g_layout.vma_end);
-    file = (uint64_t)(uintptr_t)*(void **)((char *)vma + g_layout.vma_file);
-    if (!file || addr < start || addr >= end) return 0;
-    pgoff = (uint64_t)*(unsigned long *)((char *)vma + g_layout.vma_pgoff);
-    page = page_base(addr);
-    if (page < start) return 0;
-    pgoff += (page - start) >> g_page_shift;
-    for (i = 0; i < g_sess.page_count; ++i) {
-        struct uz_page *p = &g_sess.pages[i];
-        uint64_t want_file, want_off;
-
-        UZ_PERF_ADD(identity_compares, 1);
-        if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
-        if (uz_page_file_offset(p, &want_file, &want_off)) continue;
-        if (want_file == file && want_off == pgoff) return p;
-    }
-    return 0;
-}
-
-/* Resolve the registered page behind an access at `addr` in `mm`.  The owner's
- * own addresses hit the sorted array directly; a forked child's moved copy is
- * matched by file identity. */
+/* Parent and child have independent stable mapping slots. Syscall gates
+ * move/retire child slots, so fault resolution never walks a parent's VMA or
+ * reads a VMA pointer after handle_mm_fault may have dropped its lock. */
 static struct uz_page *uz_page_for_fault(void *mm, uint64_t addr)
 {
+    uint32_t i;
     if (mm == g_sess.mm) return page_find(page_base(addr));
-    if (!mm || !uz_child_known(mm)) return 0;
-    return uz_page_by_identity(mm, addr);
+    if (!mm) return 0;
+    for (i = 0; i < g_shadow_max; ++i) {
+        struct uz_shadow *sh = &g_shadow[i];
+        struct uz_page *p = &sh->page;
+        if (__atomic_load_n(&sh->used, __ATOMIC_ACQUIRE) == 1 && sh->mm == mm &&
+            !__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE) &&
+            __atomic_load_n(&p->base, __ATOMIC_ACQUIRE) == page_base(addr)) return p;
+    }
+    return 0;
 }
 
 /* Mirror a successful write of [address, address+len) into every registered
@@ -1135,7 +1155,18 @@ static int read_range(void *mm, uint64_t address, unsigned total, int allow_fake
 
         if (seg > total - done) seg = (unsigned)(total - done);
         p = uz_page_for_fault(mm, cur);
-        if (p) {
+        if (p && !__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) {
+            struct uz_vma_view vma;
+            int rc = uz_vma_read(mm, cur, &vma);
+            if (rc == -EAGAIN) return -EAGAIN;
+            if (rc || !(vma.flags & UZ_VM_READ) ||
+                !__atomic_load_n(&p->want, __ATOMIC_ACQUIRE) ||
+                vma.file != (uint64_t)(uintptr_t)p->vma_file ||
+                (g_layout.vma_pgoff_ok && vma.pgoff +
+                 ((page_base(cur) - vma.start) >> g_page_shift) != p->file_page)) {
+                *bad = cur;
+                return -5;
+            }
             covered = 1;
             uz_ext_drain(mm, p);
             page_view_mm(mm, p, off, seg, out + done, !allow_fake);
@@ -1197,12 +1228,19 @@ static long copy_request_image(const struct urov_z_request *q, void *mm, uint8_t
 
 static void page_swap_image(struct uz_page *p, uint32_t off, uint32_t len)
 {
-    uint8_t *old = __atomic_exchange_n(&p->image, p->spare, __ATOMIC_ACQ_REL);
-
-    drain_readers(uz_readers_flip(&g_readers));
-    p->spare = old;
+    struct uz_image_guard guard = uz_image_lock(p);
+    uint8_t *old;
+    /* User input is already in spare's new window. Merge the latest native
+     * snapshot around it at the same serialization point as publication. */
+    memcpy(p->spare, p->snapshot, off);
+    memcpy(p->spare + off + len, p->snapshot + off + len, g_page_size - off - len);
+    old = __atomic_exchange_n(&p->image, p->spare, __ATOMIC_ACQ_REL);
     p->fake_off = off;
     p->fake_len = len;
+    uz_image_unlock(p, guard);
+    /* Never hold the image lock while waiting on readers. */
+    drain_readers(uz_readers_flip(&g_readers));
+    p->spare = old;
 }
 
 static uint64_t load_le64(const uint8_t *p)
@@ -1223,7 +1261,7 @@ static void page_status_words(struct urov_z_request *q, struct uz_page *p)
 
     memset(bytes, 0, sizeof(bytes));
     n = p->fake_len < sizeof(bytes) ? p->fake_len : (unsigned)sizeof(bytes);
-    if (p->image && n) memcpy(bytes, p->image + p->fake_off, n);
+    if (p->image && n) page_view(p, p->fake_off, n, bytes, 0);
     q->value = load_le64(bytes);
     q->value_hi[0] = load_le64(bytes + 8);
     q->value_hi[1] = load_le64(bytes + 16);
@@ -1277,67 +1315,17 @@ static void uz_capture_vma(struct uz_page *p, void *vma)
         *(unsigned long *)((char *)vma + g_layout.vma_pgoff) : 0;
     p->vma_start = vma ? *(unsigned long *)((char *)vma + g_layout.vma_start) : 0;
     p->vma_end = vma ? *(unsigned long *)((char *)vma + g_layout.vma_end) : 0;
+    p->file_page = p->vma_pgoff + ((p->base - p->vma_start) >> g_page_shift);
 }
 
-/* A present, non-contiguous leaf PTE. A contiguous run shares one
- * permission check, so changing a single entry would be wrong; such pages are
- * rejected instead of silently breaking the neighbouring entries. */
-static int page_pte_leaf(void *mm, uint64_t page, uint64_t **slot, uint64_t *out)
-{
-    uint64_t *ptep = pte_of(mm, page);
-    uint64_t pte;
-
-    if (!ptep) return -ENOENT;
-    pte = __atomic_load_n(ptep, __ATOMIC_ACQUIRE);
-    if (!(pte & PTE_VALID)) return -ENOENT;
-    if ((pte & (PTE_VALID | PTE_TYPE_MASK)) != (PTE_VALID | PTE_TYPE_PAGE))
-        return -EOPNOTSUPP;
-    if (pte & (PTE_CONT | PTE_SPECIAL | PTE_DEVMAP | PTE_PROT_NONE))
-        return -EOPNOTSUPP;
-    *slot = ptep;
-    *out = pte;
-    return 0;
-}
-
-static int page_update_bits_locked(void *mm, uint64_t page, uint64_t set, uint64_t clear,
-                                   uint64_t required, uint64_t forbidden, uint32_t *arm)
-{
-    unsigned attempt;
-
-    for (attempt = 0; attempt < 4; ++attempt) {
-        uint64_t *ptep, old, next;
-        int ret = page_pte_leaf(mm, page, &ptep, &old);
-
-        if (ret) return ret;
-        if ((old & required) != required || (old & forbidden)) return -EOPNOTSUPP;
-        next = (old | set) & ~clear;
-        if (old == next) return 0;
-        /* Make replay available before another CPU can see the new PTE. */
-        if (arm) __atomic_store_n(arm, 1, __ATOMIC_RELEASE);
-        /* Reclaim, hardware AF and per-VMA fault paths can update a leaf
-         * independently of the mmap lock. Don't overwrite a newer PTE. */
-        if (__atomic_compare_exchange_n(ptep, &old, next, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-            return 1;
-        if (arm) __atomic_store_n(arm, 0, __ATOMIC_RELEASE);
-    }
-    return -EAGAIN;
-}
-
-/* A newer kernel may detach an empty PTE table even while the fault caller
- * holds a read lock. RCU keeps that table's memory valid during the walk
- * and CAS. On non-preemptible RCU kernels this IRQ-off region is sufficient. */
+/* All PTE updates run under the native PTL; CAS additionally preserves
+ * hardware AF/DBM updates. No unlocked leaf pointer survives this call. */
 static int page_update_bits(void *mm, uint64_t page, uint64_t set, uint64_t clear,
                             uint64_t required, uint64_t forbidden, uint32_t *arm)
 {
-    uint64_t daif = 0;
-    int ret;
-
-    if (f_rcu_lock) f_rcu_lock();
-    else __asm__ volatile("mrs %0, daif; msr daifset, #2" : "=r"(daif) :: "memory");
-    ret = page_update_bits_locked(mm, page, set, clear, required, forbidden, arm);
-    if (f_rcu_unlock) f_rcu_unlock();
-    else __asm__ volatile("msr daif, %0" :: "r"(daif) : "memory");
-    return ret;
+    struct uz_pte_op op = {.set = set, .clear = clear, .required = required,
+        .forbidden = forbidden, .arm = arm, .write = 1};
+    return uz_pte_access(mm, page, &op);
 }
 
 /* The same AP[1] transition on a leaf whose write/COW state may already have
@@ -1349,6 +1337,19 @@ static int page_set_ap_any(void *mm, uint64_t page, int set)
 {
     return page_update_bits(mm, page, set ? PTE_USER : 0, set ? 0 : PTE_USER,
                             0, 0, 0);
+}
+
+/* The default RX contract ends for a page once a real writer reaches it.
+ * Keep a tombstone until session teardown, including if the lock is busy:
+ * a later abort retries restoration instead of consuming stale image data. */
+static void uz_retire_written_page(void *mm, struct uz_page *p, uint64_t address)
+{
+    if (mm == g_sess.mm) uz_code_invalidate();
+    if (!__atomic_exchange_n(&p->dead, 1, __ATOMIC_ACQ_REL)) UZ_HEALTH_ADD(retired_writes);
+    __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
+    if (page_set_ap_any(mm, page_base(address), 1) >= 0)
+        __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_degraded, 1, __ATOMIC_RELEASE);
 }
 
 /* Registration already copied every target page. If reclaim drops a PTE
@@ -1439,6 +1440,10 @@ static void ap_protection_update(void *mm, uint64_t start, uint64_t len, uint64_
         /* A successful mprotect rounds its length up to a whole page. */
         if (p->base < start || p->base >= end) continue;
         if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
+        if (!g_experimental_writes && (prot & UZ_PROT_WRITE)) {
+            uz_retire_written_page(mm, p, p->base);
+            continue;
+        }
         if (!readable) {
             __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
             __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
@@ -1470,32 +1475,62 @@ static void ap_protection_update(void *mm, uint64_t start, uint64_t len, uint64_
  * bound to the session mm, so handle_mm_fault cannot use session_get_mm();
  * the VMA identity captured before the fault proves this mm carries a copy of
  * the registered mapping. */
+static int uz_rearm_checked(void *mm, struct uz_page *p, uint64_t page,
+                            const struct uz_vma_view *captured)
+{
+    struct uz_vma_view now;
+    struct uz_pte_op op = {.clear = PTE_USER, .write = 1};
+    int held, ret;
+
+    if (!p || !mm) return 0;
+    if (__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&p->gone, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&p->replay, __ATOMIC_ACQUIRE) ||
+        !__atomic_load_n(&p->want, __ATOMIC_ACQUIRE)) return 0;
+    UZ_HEALTH_ADD(rearm_attempts);
+    ret = -ESTALE;
+    if (__atomic_load_n(&p->base, __ATOMIC_ACQUIRE) != page ||
+        !uz_mapping_matches(captured, page, g_page_shift, (uintptr_t)p->vma_file,
+                            p->file_page, p->vma_start, p->vma_end, g_layout.vma_pgoff_ok))
+        goto record;
+    held = uz_mm_guard(mm);
+    if (held < 0) { ret = held; goto record; }
+    ret = uz_vma_read_locked(mm, page, &now);
+    if (!ret && !uz_mapping_matches(&now, page, g_page_shift, (uintptr_t)p->vma_file,
+                                    p->file_page, p->vma_start, p->vma_end, g_layout.vma_pgoff_ok))
+        ret = -ESTALE;
+    if (!ret && !(now.flags & UZ_VM_READ)) ret = -EACCES;
+    if (!ret && !g_experimental_writes && (now.flags & UZ_VM_WRITE)) {
+        if (!__atomic_exchange_n(&p->dead, 1, __ATOMIC_ACQ_REL)) UZ_HEALTH_ADD(retired_writes);
+        __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
+        __atomic_store_n(&g_degraded, 1, __ATOMIC_RELEASE);
+        op.set = PTE_USER;
+        op.clear = 0;
+    } else {
+        op.arm = &p->armed;
+    }
+    if (!ret) {
+        ret = uz_pte_access_locked(mm, page, &op);
+        if (ret >= 0 && !op.arm) __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
+    }
+    uz_mm_unguard(mm, held);
+record:
+    if (ret >= 0) UZ_HEALTH_ADD(rearm_ok);
+    else {
+        __atomic_store_n(&g_health.last_rearm_error, ret, __ATOMIC_RELAXED);
+        if (ret == -EAGAIN) UZ_HEALTH_ADD(rearm_busy);
+        else if (ret == -ENOENT) UZ_HEALTH_ADD(rearm_missing);
+        else if (ret == -ESTALE) UZ_HEALTH_ADD(rearm_identity);
+        else UZ_HEALTH_ADD(rearm_rejected);
+    }
+    return ret;
+}
+
 static int ap_shadow_rearm(void *mm, uint64_t page, uint64_t file, uint64_t pgoff,
                            uint64_t start, uint64_t end)
 {
-    struct uz_page *p = uz_page_for_fault(mm, page);
-    int ret;
-
-    if (!p || !mm || mm == g_sess.mm) return 0;
-    if (__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE) ||
-        __atomic_load_n(&p->replay, __ATOMIC_ACQUIRE) ||
-        !__atomic_load_n(&p->want, __ATOMIC_ACQUIRE)) return 0;
-    if (page < start || page + g_page_size > end ||
-        file != (uint64_t)(uintptr_t)p->vma_file)
-        return 0;
-    /* A child mprotect/mremap can split or move the VMA, so compare the
-     * page's file offset rather than the whole VMA range when BTF provides
-     * vm_pgoff.  Fall back to the exact range on older layouts. */
-    if (g_layout.vma_pgoff_ok) {
-        uint64_t want = p->vma_pgoff + ((p->base - p->vma_start) >> g_page_shift);
-        uint64_t have = pgoff + ((page - start) >> g_page_shift);
-
-        if (want != have) return 0;
-    } else if (start != p->vma_start || end != p->vma_end) {
-        return 0;
-    }
-    ret = page_set_ap_any(mm, page, 0);
-    return ret >= 0 ? 1 : 0;
+    const struct uz_vma_view captured = {.start = start, .end = end, .file = file, .pgoff = pgoff};
+    return uz_rearm_checked(mm, uz_page_for_fault(mm, page), page, &captured);
 }
 
 /* Fault the page in if needed, then install the trap bit. No byte of the code
@@ -1949,9 +1984,8 @@ static int uz_code_hit(uint64_t addr)
  * resident page the module cannot read (execute-only). */
 static int uz_page_present(void *mm, uint64_t addr)
 {
-    uint64_t *ptep = pte_of(mm, page_base(addr));
-
-    return ptep && (__atomic_load_n(ptep, __ATOMIC_ACQUIRE) & PTE_VALID) != 0;
+    uint64_t pte;
+    return !uz_pte_read(mm, page_base(addr), &pte);
 }
 
 /* Scan one resident page.  0 = read, 1 = not present (deferred to the fault
@@ -1974,7 +2008,7 @@ static int uz_code_scan_page_buf(void *mm, uint64_t page, const struct uz_code_r
          * therefore faults on the module's own AP[1]=0 leaf.  The immutable
          * snapshot is the same code and is readable from the kernel. */
         if (tp) {
-            memcpy(buf, tp->snapshot + (at - page), n * 4U);
+            page_view(tp, at - page, n * 4U, (uint8_t *)buf, 1);
         } else if (f_copy_in(buf, (const void *)(uintptr_t)at, n * 4U)) {
             if (uz_page_present(mm, at)) return -1;
             if (!result) result = 1;
@@ -2153,45 +2187,19 @@ out:
     uz_scan_unlock();
 }
 
-/* mremap() can move a whole VMA without changing its contents.  The branch
- * bitmap is indexed relative to each region start, so shifting every region
- * that lies entirely inside the moved range keeps the bitmap valid without
- * freeing memory that a concurrent fault path may still be reading.  Any
- * partial move makes the map incomplete and the bridge declines. */
+/* Existing bitmaps are immutable to readers. Relocation invalidates their
+ * address interpretation; do not shift region metadata underneath a proof. */
 static void uz_code_mremap(uint64_t old, uint64_t old_len, uint64_t new,
                            uint64_t new_len)
 {
-    uint64_t old_end = old + old_len, new_end = new + new_len;
-    uint64_t delta = new - old;
-    uint32_t i;
+    (void)old_len;
+    (void)new_len;
+    if (old != new) __atomic_store_n(&g_code.complete, 0, __ATOMIC_RELEASE);
+}
 
-    if (!delta || old_end < old || new_end < new) return;
-    for (i = 0; i < g_code.count; ++i) {
-        struct uz_code_region *r = &g_code.region[i];
-
-        if (r->end > old && r->start < old_end) {
-            if (r->start < old || r->end > old_end || r->start - old >= new_len ||
-                r->end - old > new_len) {
-                __atomic_store_n(&g_code.complete, 0, __ATOMIC_RELEASE);
-                return;
-            }
-            continue;
-        }
-        /* A code region already at the destination would be replaced by the
-         * move; its old bitmap indices are no longer valid. */
-        if (r->end > new && r->start < new_end) {
-            __atomic_store_n(&g_code.complete, 0, __ATOMIC_RELEASE);
-            return;
-        }
-    }
-    for (i = 0; i < g_code.count; ++i) {
-        struct uz_code_region *r = &g_code.region[i];
-
-        if (r->end > old && r->start < old_end) {
-            r->start += delta;
-            r->end += delta;
-        }
-    }
+static void uz_code_invalidate(void)
+{
+    __atomic_store_n(&g_code.complete, 0, __ATOMIC_RELEASE);
 }
 
 /* A file-backed code page that REGISTER saw non-resident became present.  The
@@ -2199,16 +2207,15 @@ static void uz_code_mremap(uint64_t old, uint64_t old_len, uint64_t new,
  * are stable and the scan finishes before the task returns to EL0. */
 static void uz_code_scan_fault_page(void *mm, uint64_t page)
 {
-    void *vma;
-    uint64_t vs, ve, flags, file;
+    struct uz_vma_view vma;
     struct uz_code_region *src;
     uint32_t buf[128]; /* 512 bytes: fault context, may run on several CPUs */
 
-    vma = f_find_vma(mm, (unsigned long)page);
-    if (!vma || uz_code_region_read(vma, &vs, &ve, &flags)) return;
-    file = *(uint64_t *)((char *)vma + g_layout.vma_file);
-    if (!(flags & UZ_VM_EXEC) || !file || page < vs || page + g_page_size > ve)
+    if (uz_vma_read(mm, page, &vma) || !(vma.flags & UZ_VM_EXEC) ||
+        !vma.file || page + g_page_size > vma.end) {
+        __atomic_store_n(&g_code.complete, 0, __ATOMIC_RELEASE);
         return;
+    }
     src = uz_code_region_find(page);
     if (!src) {
         __atomic_store_n(&g_code.complete, 0, __ATOMIC_RELEASE);
@@ -2353,12 +2360,8 @@ static int uz_win_store(struct uro_regs *model, uint32_t insn, struct uz_llsc *p
     /* An illegal store must keep its native SIGSEGV instead of being absorbed. */
     while (done < st.total) {
         uint64_t at = st.address + done;
-        void *vma = f_find_vma(mm, at);
-        unsigned long flags;
-
-        if (!vma) return 0;
-        flags = *(unsigned long *)((char *)vma + g_layout.vma_flags);
-        if (!(flags & UZ_VM_WRITE)) return 0;
+        struct uz_vma_view vma;
+        if (uz_vma_read(mm, at, &vma) || !(vma.flags & UZ_VM_WRITE)) return 0;
         done = ((at | (g_page_size - 1U)) + 1U) - st.address;
         if (done > st.total) done = st.total;
     }
@@ -2748,10 +2751,9 @@ scan_done:
      * loader enters the mapping there); crossing it would let the walk read an
      * unrelated mapping or walk off the user address space. */
     {
-        void *vma = (mm && f_find_vma) ? f_find_vma(mm, (unsigned long)ldxr_pc) : 0;
-
-        if (vma) floor = *(uint64_t *)((char *)vma + g_layout.vma_start);
-        if (floor > ldxr_pc) floor = 0;
+        struct uz_vma_view vma;
+        if (uz_vma_read(mm, ldxr_pc, &vma) || !(vma.flags & UZ_VM_EXEC)) return;
+        floor = vma.start;
     }
 
     /* Second pass: rewind with the alignment invariant.  A mask write that can
@@ -3039,12 +3041,8 @@ static int uz_atomic_emulate(struct pt_regs *regs, uint64_t far, void *mm,
     if (!uz_user_range(a.address, a.total)) return -1;
     for (i = 0; i < (a.count == 2U ? 2U : 1U); ++i) {
         uint64_t at = a.address + (uint64_t)i * a.size;
-        void *vma = f_find_vma(mm, at);
-        unsigned long flags;
-
-        if (!vma) return -1;
-        flags = *(unsigned long *)((char *)vma + g_layout.vma_flags);
-        if (!(flags & UZ_VM_WRITE)) return -1;
+        struct uz_vma_view vma;
+        if (uz_vma_read(mm, at, &vma) || !(vma.flags & UZ_VM_WRITE)) return -1;
     }
     mask = uz_atomic_mask(a.size);
     /* One trapped store at a time: the read below and the write at the end must
@@ -3157,26 +3155,28 @@ static int uz_store_emulate(struct pt_regs *regs, uint64_t far, struct uz_page *
             return -1;
         }
     }
-    if (uro_decode_store(opcode, &model, &st)) {
+    if ((opcode & 0xffffffe0U) == 0xd50b7420U) {
+        uint64_t dczid, sctlr;
+
+        __asm__ volatile("mrs %0, dczid_el0" : "=r"(dczid));
+        __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
+        if (!(sctlr & (UINT64_C(1) << 14)) ||
+            uro_decode_zva(opcode, &model, dczid, &st)) return -1;
+    } else if (uro_decode_store(opcode, &model, &st)) {
         if (!uz_exclusive_store_emulate(regs, far))
             return 0;
         return -1;
     }
-    if (st.address != far || !st.total || st.total > sizeof(data))
+    if (!st.total || st.total > sizeof(data) || far < st.address ||
+        far - st.address >= (st.zva ? st.total : 1U))
         return -1;
     if (!uz_user_range(st.address, st.total))
         return -1;
     /* Validate every page the access touches before changing any byte. */
     for (done = 0; done < st.total; ) {
         uint64_t at = st.address + done;
-        void *vma = f_find_vma(mm, at);
-        unsigned long flags;
-
-        if (!vma)
-            return -1;
-        flags = *(unsigned long *)((char *)vma + g_layout.vma_flags);
-        if (!(flags & UZ_VM_WRITE))
-            return -1;
+        struct uz_vma_view vma;
+        if (uz_vma_read(mm, at, &vma) || !(vma.flags & UZ_VM_WRITE)) return -1;
         done = ((at | (g_page_size - 1U)) + 1U) - st.address;
         if (done > st.total) done = st.total;
     }
@@ -3322,7 +3322,8 @@ static void uz_replay_publish(struct uz_replay *r, uint32_t n)
     struct uz_page *p = page_by_index(r->index[n]);
     unsigned off = 0, len = (unsigned)g_page_size;
 
-    if (!p || f_copy_in(p->post, (const void *)(uintptr_t)r->page[n], len)) return;
+    if (!p || !p->pre || !p->post ||
+        f_copy_in(p->post, (const void *)(uintptr_t)r->page[n], len)) return;
     while (off < len) {
         unsigned start;
 
@@ -3387,7 +3388,7 @@ static int uz_replay_begin(struct pt_regs *regs, void *mm, struct uz_page *p, ui
     uint32_t i;
     int fresh = 0;
 
-    if (!g_ss_ok || !mm || !p || (regs->pstate & UZ_PSR_SS) ||
+    if (!g_ss_ok || !mm || !p || !p->pre || !p->post || (regs->pstate & UZ_PSR_SS) ||
         __atomic_load_n(&g_replay_block, __ATOMIC_ACQUIRE) ||
         (uz_mdscr_read() & UZ_MDSCR_SS))
         return -1;
@@ -3893,9 +3894,10 @@ static void uz_copy_mm_after(hook_fargs2_t *args, void *udata)
             sh = uz_shadow_get(child, p->index);
             if (!sh) break;
             if (held) { sh->mm_ref = held; held = 0; }
+            if (!sh->page.want || sh->page.dead) continue;
             /* File-backed RX VMAs need not copy their PTEs at fork. Populate
              * then arm the child's leaf before the task can run. */
-            if (uz_access_vm(child, p->base, sh->snapshot, (int)g_page_size, 0) !=
+            if (uz_access_vm(child, p->base, sh->page.snapshot, (int)g_page_size, 0) !=
                 (int)g_page_size) {
                 __atomic_store_n(&g_degraded, 1, __ATOMIC_RELEASE);
                 continue;
@@ -3997,9 +3999,11 @@ static int uz_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
 
     use_fake = !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE);
     if (total <= g_page_size - (load.address & (g_page_size - 1U)) &&
-        (read_page = uz_page_for_fault(mm, load.address)) != NULL) {
-        /* Resolve once after the proof, then copy. Do not retain the earlier
-         * FAR descriptor across a long scan: mremap can sort the page array. */
+        (read_page = uz_page_for_fault(mm, load.address)) != NULL &&
+        !__atomic_load_n(&read_page->dead, __ATOMIC_ACQUIRE) &&
+        __atomic_load_n(&read_page->want, __ATOMIC_ACQUIRE)) {
+        /* Resolve again after the proof; mremap may have published a new
+         * index. Descriptor slots and their buffers remain stable. */
         uz_ext_drain(mm, read_page);
         page_view_mm(mm, read_page, load.address & (g_page_size - 1U),
                      (unsigned)total, bytes, !use_fake);
@@ -4047,6 +4051,10 @@ static int emulate_or_signal(struct pt_regs *regs, uint32_t opcode, uint64_t far
     uint64_t bad = 0, pc = regs->pc;
     int result = uz_emulate_load(regs, pc, opcode, far, check_far, &bad, llsc);
 
+    if (result == -EAGAIN) {
+        UZ_HEALTH_ADD(fault_retries);
+        return 1; /* mmap writer: retry with unchanged regs */
+    }
     if (result >= 0) return result;
     session_count_failure(pc, result);
     force_segv(result == -5 ? bad : far);
@@ -4062,6 +4070,7 @@ static void uz_abort_before(hook_fargs4_t *args, void *udata)
     int ap_read;
     uint32_t opcode;
     uint64_t ref;
+    uint64_t access_flags = 0;
 
     (void)udata;
     if (!regs || !user_mode(regs) || compat_user_mode(regs) ||
@@ -4097,8 +4106,7 @@ static void uz_abort_before(hook_fargs4_t *args, void *udata)
          * gone the orphaned trap is turned back into an ordinary readable
          * PTE and the instruction retries, so no reader can take a signal
          * because of a trap left behind. */
-        if ((!ap_read && !(ec == UZ_EC_DABT_LOW && (esr & UZ_ESR_WNR))) ||
-            !uz_trap_leaf(reader, far))
+        if (!ap_read && !(ec == UZ_EC_DABT_LOW && (esr & UZ_ESR_WNR)))
             return;
         /* Take the reader reference before touching the page array: release
          * frees it only after both reader epochs are drained. */
@@ -4111,7 +4119,7 @@ static void uz_abort_before(hook_fargs4_t *args, void *udata)
              * forked child still holds the inherited trap leaf.  Restore the
              * child's PTE and retry natively instead of turning it into a
              * SIGSEGV. */
-            if (                uz_repair_trap(reader, far)) {
+            if (uz_repair_trap(reader, far)) {
                 args->ret = 0;
                 args->skip_origin = 1;
                 return;
@@ -4126,6 +4134,45 @@ static void uz_abort_before(hook_fargs4_t *args, void *udata)
     }
 
 serve:
+    {
+        void *mm = mm_of_task(current);
+        struct uz_page *page = uz_page_for_fault(mm, far);
+        struct uz_vma_view vma;
+        int rc;
+        if (!page) goto out;
+        rc = uz_vma_read(mm, far, &vma);
+        if (rc == -EAGAIN) {
+            UZ_HEALTH_ADD(fault_retries);
+            /* Retry the faulting instruction after the queued mmap writer
+             * has progressed. Neither PC nor destination registers change. */
+            args->ret = 0;
+            args->skip_origin = 1;
+            goto out;
+        }
+        if (rc || !uz_mapping_matches(&vma, page_base(far), g_page_shift,
+                (uintptr_t)page->vma_file, page->file_page, page->vma_start,
+                page->vma_end, g_layout.vma_pgoff_ok)) goto out;
+        access_flags = vma.flags;
+        if (ap_read && !(access_flags & UZ_VM_READ)) goto out;
+        if ((!g_experimental_writes && (access_flags & UZ_VM_WRITE)) ||
+            __atomic_load_n(&page->dead, __ATOMIC_ACQUIRE)) {
+            int restored;
+            if (!__atomic_exchange_n(&page->dead, 1, __ATOMIC_ACQ_REL))
+                UZ_HEALTH_ADD(retired_writes);
+            restored = page_set_ap_any(mm, page_base(far), 1);
+            __atomic_store_n(&page->want, 0, __ATOMIC_RELEASE);
+            if (restored >= 0) __atomic_store_n(&page->armed, 0, __ATOMIC_RELEASE);
+            /* Once AP[1] is already native, a store may still need Linux's
+             * normal COW/permission handling. Consuming an unchanged PTE
+             * would retry the same AP[2] fault forever. */
+            if (restored > 0 || restored == -EAGAIN) {
+                if (restored == -EAGAIN) UZ_HEALTH_ADD(fault_retries);
+                args->ret = 0;
+                args->skip_origin = 1;
+            }
+            goto out;
+        }
+    }
     /* A store that the VMA would accept natively is absorbed: its bytes are
      * applied to the live page through the kernel's COW path and published
      * into the image, while the AP[1] trap stays installed.  A store the
@@ -4144,9 +4191,7 @@ serve:
 
         if (wp && mm && __atomic_load_n(&wp->armed, __ATOMIC_ACQUIRE) &&
             !__atomic_load_n(&wp->dead, __ATOMIC_ACQUIRE)) {
-            void *vma = f_find_vma(mm, far);
-            unsigned long flags = vma ?
-                *(unsigned long *)((char *)vma + g_layout.vma_flags) : 0;
+            unsigned long flags = (unsigned long)access_flags;
 
             if (flags & UZ_VM_WRITE) {
                 int rp;
@@ -4167,10 +4212,8 @@ serve:
                 /* Keep the child's copy writable-native rather than touching
                  * the owner's session state. */
                 if (page_set_ap_any(mm, page_base(far), 1) >= 0) {
-                    if (mm == g_sess.mm) {
-                        __atomic_store_n(&wp->dead, 1, __ATOMIC_RELEASE);
-                        __atomic_store_n(&wp->armed, 0, __ATOMIC_RELEASE);
-                    }
+                    __atomic_store_n(&wp->dead, 1, __ATOMIC_RELEASE);
+                    __atomic_store_n(&wp->armed, 0, __ATOMIC_RELEASE);
                     flush_tlb_all();
                 }
             }
@@ -4248,7 +4291,7 @@ static void uz_mm_fault_before(hook_fargs4_t *args, void *udata)
     {
         int argc = (int)(uintptr_t)udata;
 
-        if (argc >= 5)
+        if (argc == 5)
             args->local.data7 = (uintptr_t)((hook_fargs8_t *)args)->arg4;
         else if (argc == 4)
             args->local.data7 = (uintptr_t)args->arg3;
@@ -4283,9 +4326,16 @@ static void uz_mm_fault_after(hook_fargs4_t *args, void *udata)
     if (!ref) {
         ref = session_get_any();
         if (!ref) return;
-        if (!__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) && overlay_live())
-            ret = ap_shadow_rearm(mm, page, args->local.data3, args->local.data4,
-                                  args->local.data5, args->local.data6);
+        if (!__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) && overlay_live()) {
+            struct uz_page *p = uz_page_for_fault(mm, page);
+            /* Child foreign writes have no external-writer capture buffers.
+             * Preserve native semantics instead of rearming a stale image. */
+            if (p && (args->local.data2 & UZ_FAULT_WRITE) && !uz_internal_current())
+                uz_retire_written_page(mm, p, page);
+            else
+                ret = ap_shadow_rearm(mm, page, args->local.data3, args->local.data4,
+                                      args->local.data5, args->local.data6);
+        }
         if (ret > 0)
             flush_tlb_all();
         else if (ret < 0 && ret != -ENOENT)
@@ -4316,14 +4366,12 @@ static void uz_mm_fault_after(hook_fargs4_t *args, void *udata)
                             (unsigned long long)page, args->local.data7 ? 1 : 0);
                 if (mm == g_sess.mm) {
                     (void)uz_ext_capture(mm, p, page);
-                    if (args->local.data7) {
-                        uint64_t *ptep = pte_of(mm, page);
+                    if (args->local.data7 && !__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) {
+                        uint64_t pte;
 
-                        if (ptep &&
-                            !(__atomic_load_n(ptep, __ATOMIC_ACQUIRE) & PTE_RDONLY)) {
-                            ret = page_set_ap_any(mm, page, 0);
-                            if (ret >= 0)
-                                __atomic_store_n(&p->armed, 1, __ATOMIC_RELEASE);
+                        if (!uz_pte_read(mm, page, &pte) && !(pte & PTE_RDONLY)) {
+                            ret = ap_shadow_rearm(mm, page, args->local.data3,
+                                args->local.data4, args->local.data5, args->local.data6);
                         }
                     }
                 } else if (page_set_ap_any(mm, page, 1) > 0) {
@@ -4331,8 +4379,8 @@ static void uz_mm_fault_after(hook_fargs4_t *args, void *udata)
                 }
             } else if (p && __atomic_load_n(&p->want, __ATOMIC_ACQUIRE) &&
                 !__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) {
-                ret = page_set_ap_any(mm, page, 0);
-                if (ret >= 0) __atomic_store_n(&p->armed, 1, __ATOMIC_RELEASE);
+                ret = ap_shadow_rearm(mm, page, args->local.data3,
+                    args->local.data4, args->local.data5, args->local.data6);
             }
             else if (!p && !(args->local.data2 & UZ_FAULT_WRITE) &&
                      __atomic_load_n(&g_code.valid, __ATOMIC_ACQUIRE))
@@ -4368,6 +4416,8 @@ static void session_free_storage(void)
     g_shadow = 0;
     g_shadow_max = 0;
     uz_free(g_sess.pages);
+    uz_free(g_sess.index);
+    uz_free(g_sess.index_spare);
     uz_free(g_sess.arena);
     memset(&g_sess, 0, sizeof(g_sess));
     __atomic_store_n(&g_owner, 0, __ATOMIC_RELEASE);
@@ -4526,17 +4576,18 @@ static long do_register(struct urov_z_request *q)
     }
 
     g_sess.pages = uz_alloc(n * sizeof(*g_sess.pages));
-    /* Page-aligned vmalloc storage keeps every image page convertible to a
-     * struct page for the GUP overlay (kvmalloc may return kmalloc memory).
-     * Seven pages per descriptor: image, spare, snapshot, replay pre/post and
-     * the foreign-writer pre/drain pair. */
-    g_sess.arena = f_vmalloc ? f_vmalloc(7UL * n * g_page_size) :
-                               uz_alloc(7UL * n * g_page_size);
-    /* One private image per page per forked child, snapshotted at fork.  Four
-     * generations by default, bounded by the byte cap; a session with more
-     * pages still gets enough slots for a single child. */
+    g_sess.index = uz_alloc(sizeof(*g_sess.index) + n * sizeof(struct uz_page_key));
+    g_sess.index_spare = uz_alloc(sizeof(*g_sess.index) + n * sizeof(struct uz_page_key));
+    /* RX needs image/spare/snapshot only. The four write/replay buffers are
+     * allocated solely for experimental sessions. vmalloc preserves page
+     * alignment and vmalloc_to_page compatibility for GUP copies. */
+    g_sess.arena = uz_alloc_buffer((unsigned long)g_page_buffers * n * g_page_size,
+                                   f_vmalloc != 0);
+    /* Each child page has an image and snapshot. Reserve the configured
+     * number of descriptor sets, subject to both caps. A capped pool may
+     * hold fewer complete children; clone admission checks the actual size. */
     {
-        uint64_t slots = (uint64_t)n * 4U;
+        uint64_t slots = (uint64_t)n * g_fork_copies;
 
         if (slots > UZ_SHADOW_BYTES_MAX / (2U * g_page_size)) {
             slots = UZ_SHADOW_BYTES_MAX / (2U * g_page_size);
@@ -4545,32 +4596,39 @@ static long do_register(struct urov_z_request *q)
         if (slots > UZ_SHADOW_CAP) slots = UZ_SHADOW_CAP;
         g_shadow_max = (uint32_t)slots;
     }
-    g_shadow = uz_alloc((unsigned long)g_shadow_max * sizeof(*g_shadow));
-    g_shadow_arena = f_vmalloc ?
-        f_vmalloc(2ULL * (uint64_t)g_shadow_max * g_page_size) :
-        uz_alloc((unsigned long)(2ULL * (uint64_t)g_shadow_max * g_page_size));
+    if (g_shadow_max) {
+        g_shadow = uz_alloc((unsigned long)g_shadow_max * sizeof(*g_shadow));
+        g_shadow_arena = uz_alloc_buffer((unsigned long)(2ULL * g_shadow_max * g_page_size),
+                                         f_vmalloc != 0);
+    }
     if (g_shadow) memset(g_shadow, 0, (size_t)g_shadow_max * sizeof(*g_shadow));
     g_shadow_used = 0;
-    if (!g_sess.pages || !g_sess.arena || !g_shadow || !g_shadow_arena) {
+    if (!g_sess.pages || !g_sess.arena || (g_shadow_max && (!g_shadow || !g_shadow_arena)) ||
+        !g_sess.index || !g_sess.index_spare) {
         ret = -ENOMEM;
         goto fail;
     }
     memset(g_sess.pages, 0, n * sizeof(*g_sess.pages));
     g_sess.page_count = n;
+    g_sess.index->count = n;
     for (i = 0; i < n; ++i) {
         struct uz_page *p = &g_sess.pages[i];
         const struct uz_page_desc *d = &descs[i];
 
         p->base = d->base;
+        g_sess.index->keys[i].base = d->base;
+        g_sess.index->keys[i].slot = i;
         p->index = d->reserved;
         p->flags = d->flags;
-        p->image = g_sess.arena + 7UL * i * g_page_size;
+        p->image = g_sess.arena + (unsigned long)g_page_buffers * i * g_page_size;
         p->spare = p->image + g_page_size;
         p->snapshot = p->spare + g_page_size;
-        p->pre = p->snapshot + g_page_size;
-        p->post = p->pre + g_page_size;
-        p->ext_pre = p->post + g_page_size;
-        p->ext_buf = p->ext_pre + g_page_size;
+        if (g_experimental_writes) {
+            p->pre = p->snapshot + g_page_size;
+            p->post = p->pre + g_page_size;
+            p->ext_pre = p->post + g_page_size;
+            p->ext_buf = p->ext_pre + g_page_size;
+        }
         uz_mmap_write_lock(mm);
         {
             void *vma = f_find_vma(mm, p->base);
@@ -4652,9 +4710,10 @@ static long do_set(struct urov_z_request *q)
     if (q->reserved || q->reserved2 || q->flags || g_sess.page_count != 1) return -EINVAL;
     if (q->expected_generation != g_sess.generation) return -EAGAIN;
     p = &g_sess.pages[0];
+    if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) return -ESTALE;
     if (len != p->fake_len || p->flags != UROV_Z_PAGE_SRC_USER) return -EINVAL;
     uz_ext_drain(g_sess.mm, p);
-    memcpy(p->spare, p->snapshot, g_page_size);
     ret = copy_request_image(q, g_sess.mm, p->spare + p->fake_off, len);
     if (ret) return ret;
     page_swap_image(p, p->fake_off, len);
@@ -4674,12 +4733,12 @@ static long do_set_page(struct urov_z_request *q)
     if (q->flags || q->reserved2 || q->reserved >> 32) return -EINVAL;
     p = page_by_index((uint32_t)q->reserved);
     if (!p) return -EINVAL;
+    if (__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) return -ESTALE;
     if (p->flags != UROV_Z_PAGE_SRC_USER) return -EOPNOTSUPP;
     if (q->expected_generation != g_sess.generation) return -EAGAIN;
 
     if (!valid_window(off, len)) return -EINVAL;
     uz_ext_drain(g_sess.mm, p);
-    memcpy(p->spare, p->snapshot, g_page_size);
     ret = copy_user_image(g_sess.mm, q->fake_addr, p->spare + off, len);
     if (ret) return ret;
     page_swap_image(p, off, len);
@@ -4909,7 +4968,7 @@ static void uz_pin_after(hook_fargs8_t *args, void *udata)
     (void)udata;
     if (got <= 0 || !pages || !g_pin_ok) return;
     if (flags & (UZ_FOLL_WRITE | g_foll_longterm)) return;
-    if (g_pin_internal && !(flags & g_foll_pin)) return;
+    if (g_pin_internal && !g_remote_get && !(flags & g_foll_pin)) return;
     if (!overlay_live() || __atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE)) return;
     if (!mm) return;
     rec = uz_readv_rec_find(current, 0);
@@ -4925,25 +4984,31 @@ static void uz_pin_after(hook_fargs8_t *args, void *udata)
         void *src, *copy;
 
         p = (mm == g_sess.mm) ? page_find(base) : uz_page_for_fault(mm, base);
-        if (!p) continue;
+        if (!p || __atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) continue;
         /* A forked child only has the overlay while its inherited leaf still
          * carries the trap; otherwise the native page is the honest answer. */
         if (mm != g_sess.mm && !uz_trap_leaf(mm, base)) continue;
         uz_ext_drain(mm, p);
         if (mm != g_sess.mm) sh = uz_shadow_find(mm, p->index);
-        view = rec->allow ? (sh ? sh->image : p->image)
-                          : (sh ? sh->snapshot : p->snapshot);
-        src = f_vmalloc_to_page ? f_vmalloc_to_page(view) : 0;
-        if (!src) goto failed;
-        copy = f_alloc_pages(UZ_GFP_ATOMIC, 0, -1, 0);
-        if (!copy) goto failed;
-        f_copy_highpage(copy, src);
+        copy = uz_alloc_order0(&g_page_allocator);
+        if (!copy) { UZ_HEALTH_ADD(gup_alloc_failures); goto failed; }
+        {
+            struct uz_page *source = sh ? &sh->page : p;
+            struct uz_image_guard guard = uz_image_lock(source);
+            view = rec->allow ? (sh ? sh->page.image : p->image)
+                              : (sh ? sh->page.snapshot : p->snapshot);
+            src = f_vmalloc_to_page ? f_vmalloc_to_page(view) : 0;
+            if (src) f_copy_highpage(copy, src);
+            uz_image_unlock(source, guard);
+        }
+        if (!src) { f_put_page(copy); goto failed; }
         if (g_remote_get) {
             f_put_page(pages[i]);
         } else {
             if ((f_grab_page_bool && !f_grab_page_bool(copy, g_foll_pin)) ||
                 (f_grab_page_int && f_grab_page_int(copy, g_foll_pin)) ||
-                (f_grab_folio && f_grab_folio(copy, 1, g_foll_pin))) {
+                (f_grab_folio && f_grab_folio(copy, 1, g_foll_pin)) ||
+                (f_grab_folio_page && !f_grab_folio_page(copy, 1, g_foll_pin))) {
                 f_put_page(copy);
                 goto failed;
             }
@@ -5006,6 +5071,7 @@ static void uz_gup_slow_after(hook_fargs8_t *args, void *udata)
         if (!p || __atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
         if (!__atomic_load_n(&p->armed, __ATOMIC_ACQUIRE)) continue;
         (void)uz_ext_capture(mm, p, base);
+        if (__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) continue;
         ret = page_set_ap_any(mm, base, 0);
         if (ret > 0) changed = 1;
     }
@@ -5034,7 +5100,8 @@ static void uz_kread_overlay(uint64_t remote, void *buf, uint64_t len, int allow
 
         if ((uint64_t)seg > len) seg = (unsigned)len;
         p = uz_page_for_fault(mm, remote);
-        if (p && (owner || uz_trap_leaf(mm, page))) {
+        if (p && !__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE) &&
+            (owner || uz_trap_leaf(mm, page))) {
             uz_ext_drain(mm, p);
             page_view_mm(mm, p, off, seg, out, !allow_fake);
         }
@@ -5058,7 +5125,9 @@ static void uz_kwrite_overlay(uint64_t remote, const void *buf, uint64_t len,
         if ((uint64_t)seg > len) seg = (unsigned)len;
         p = uz_page_for_fault(mm, remote);
         if (p && (owner || uz_trap_leaf(mm, page))) {
-            if (mm == g_sess.mm) {
+            if (!g_experimental_writes) {
+                uz_retire_written_page(mm, p, remote);
+            } else if (mm == g_sess.mm) {
                 page_store_bytes(p, off, src, seg);
             } else {
                 struct uz_shadow *sh = uz_shadow_get(mm, p->index);
@@ -5081,7 +5150,8 @@ static void uz_kread_after(hook_fargs6_t *args, void *udata)
     int allow, owner;
 
     (void)udata;
-    if ((long)args->ret <= 0) return;
+    len = uz_access_vm_result(args->ret, g_kread_argc == 6 ? args->arg4 : args->arg3);
+    if (!len) return;
     /* The module's own snapshots and control replies must never be
      * rewritten by this hook. */
     if (uz_internal_current()) return;
@@ -5097,7 +5167,6 @@ static void uz_kread_after(hook_fargs6_t *args, void *udata)
         flags = (unsigned long)args->arg4;
     }
     if (!mm || !buf) return;
-    len = (uint64_t)(long)args->ret;
     if (!len || !uz_user_range(remote, len)) return;
     owner = mm == __atomic_load_n(&g_owner, __ATOMIC_ACQUIRE);
     if (!owner && (!overlay_live())) return;
@@ -5147,7 +5216,7 @@ static void uz_gup_after(hook_fargs4_t *args, void *udata)
     unsigned i;
 
     (void)udata;
-    if (got <= 0 || !pages || !f_alloc_pages || !f_put_page ||
+    if (got <= 0 || !pages || !uz_page_allocator_ready(&g_page_allocator) || !f_put_page ||
         !f_copy_highpage || !f_vmalloc_to_page)
         return;
     /* PIN/LONGTERM require the exact user page.  PIN/LONGTERM are also used by
@@ -5180,7 +5249,12 @@ static void uz_gup_after(hook_fargs4_t *args, void *udata)
 
         if (!p) continue;
         if (!owner && !uz_trap_leaf(mm, page)) continue;
+        if (!writer && __atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) continue;
         if (writer) {
+            if (!g_experimental_writes) {
+                uz_retire_written_page(mm, p, page);
+                continue;
+            }
             /* This page is a real write destination.  Keep the AP[1] trap and
              * let the writer reach the live page through the kernel mapping;
              * the next reader merges the written bytes into the image instead
@@ -5196,12 +5270,17 @@ static void uz_gup_after(hook_fargs4_t *args, void *udata)
         }
         uz_ext_drain(mm, p);
         if (!owner) sh = uz_shadow_find(mm, p->index);
-        src = f_vmalloc_to_page(sh ? sh->image :
-                                (allow_fake ? p->image : p->snapshot));
-        if (!src) goto failed;
-        fake = f_alloc_pages(UZ_GFP_ATOMIC, 0, -1, 0);
-        if (!fake) goto failed;
-        f_copy_highpage(fake, src);
+        fake = uz_alloc_order0(&g_page_allocator);
+        if (!fake) { UZ_HEALTH_ADD(gup_alloc_failures); goto failed; }
+        {
+            struct uz_page *source = sh ? &sh->page : p;
+            struct uz_image_guard guard = uz_image_lock(source);
+            src = f_vmalloc_to_page(sh ? sh->page.image :
+                                    (allow_fake ? p->image : p->snapshot));
+            if (src) f_copy_highpage(fake, src);
+            uz_image_unlock(source, guard);
+        }
+        if (!src) { f_put_page(fake); goto failed; }
         if (pages[i]) f_put_page(pages[i]);
         pages[i] = fake;
         /* A source-side GUP does not write, but keep the trap authoritative:
@@ -5256,7 +5335,7 @@ static void uz_clone_before(hook_fargs6_t *args, void *udata)
     else if (!ctrl_try_lock()) err = -EBUSY;
     else {
         args->local.data7 = 1;
-        if (!g_copymm_hooked) err = -EOPNOTSUPP;
+        if (!g_copymm_hooked || !g_fork_copies) err = -EOPNOTSUPP;
         else if ((uint64_t)g_shadow_used + g_sess.page_count > g_shadow_max) err = -ENOSPC;
     }
     if (err) { args->ret = (uint64_t)err; args->skip_origin = 1; }
@@ -5310,20 +5389,48 @@ static void gate_error(hook_fargs6_t *args, long ret)
 static int gate_range_overlaps(uint64_t start, uint64_t len)
 {
     uint64_t end;
-    uint32_t lo = 0, hi = g_sess.page_count;
+    uint32_t i;
 
     if (!len) return 0;
     start &= (UINT64_C(1) << 56) - 1;
     end = start + len;
     if (end < start) end = ~UINT64_C(0);
-    while (lo < hi) {
-        uint32_t mid = lo + (hi - lo) / 2;
-        if (g_sess.pages[mid].base < start) lo = mid + 1;
-        else hi = mid;
+    for (i = 0; i < g_sess.page_count; ++i) {
+        struct uz_page *p = &g_sess.pages[i];
+        uint64_t base = __atomic_load_n(&p->base, __ATOMIC_ACQUIRE);
+        if (!__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE) &&
+            base < end && start < base + g_page_size) return 1;
     }
-    if (lo < g_sess.page_count && end > g_sess.pages[lo].base) return 1;
-    if (lo > 0 && start < g_sess.pages[lo - 1].base + g_page_size) return 1;
     return 0;
+}
+
+static int child_range_overlaps(void *mm, uint64_t start, uint64_t len)
+{
+    uint32_t i;
+    uint64_t end;
+    if (!len) return 0;
+    start &= (UINT64_C(1) << 56) - 1;
+    end = start + len;
+    if (end < start) end = ~UINT64_C(0);
+    for (i = 0; i < g_shadow_max; ++i) {
+        struct uz_shadow *sh = &g_shadow[i];
+        uint64_t base = __atomic_load_n(&sh->page.base, __ATOMIC_ACQUIRE);
+        if (__atomic_load_n(&sh->used, __ATOMIC_ACQUIRE) == 1 && sh->mm == mm &&
+            !__atomic_load_n(&sh->page.gone, __ATOMIC_ACQUIRE) &&
+            base < end && start < base + g_page_size) return 1;
+    }
+    return 0;
+}
+
+static int caller_is_managed(void)
+{
+    uint64_t ref = session_get_any();
+    void *mm = mm_of_task(current);
+    int managed;
+    if (!ref) return 0;
+    managed = mm == g_sess.mm || uz_child_known(mm);
+    uz_reader_exit(&g_readers, ref);
+    return managed;
 }
 
 /* Linux's madvise() accepts a bounded set of advice values and rejects the
@@ -5417,56 +5524,24 @@ static void uz_range_gone(void *mm, uint64_t start, uint64_t len)
     uz_reader_exit(&g_readers, ref);
 }
 
-/* Field-wise move: a whole-structure assignment of struct uz_page is lowered
- * to a memcpy libcall on this target, and the KPM loader cannot resolve the
- * plain libc symbol.  Every member is a scalar, so this stays inline. */
-static void uz_page_mov(struct uz_page *dst, const struct uz_page *src)
+/* Caller owns the control lock and holds no reader reference while draining. */
+static void uz_publish_page_index(void)
 {
-    dst->base = src->base;
-    dst->image = src->image;
-    dst->snapshot = src->snapshot;
-    dst->spare = src->spare;
-    dst->pre = src->pre;
-    dst->post = src->post;
-    dst->ext_pre = src->ext_pre;
-    dst->ext_buf = src->ext_buf;
-    dst->ext_addr = src->ext_addr;
-    dst->ext = src->ext;
-    dst->ext_busy = src->ext_busy;
-    dst->index = src->index;
-    dst->flags = src->flags;
-    dst->fake_off = src->fake_off;
-    dst->fake_len = src->fake_len;
-    dst->armed = src->armed;
-    dst->want = src->want;
-    dst->dead = src->dead;
-    dst->gone = src->gone;
-    dst->seq = src->seq;
-    dst->replay = src->replay;
-    dst->vma_file = src->vma_file;
-    dst->vma_pgoff = src->vma_pgoff;
-    dst->vma_start = src->vma_start;
-    dst->vma_end = src->vma_end;
-}
-
-static void uz_page_sort(void)
-{
+    struct uz_page_index *next = g_sess.index_spare;
+    struct uz_page_index *old;
     uint32_t i;
 
-    for (i = 1; i < g_sess.page_count; ++i) {
-        struct uz_page tmp;
-
-        uz_page_mov(&tmp, &g_sess.pages[i]);
-        {
-            uint32_t j = i;
-
-            while (j > 0 && g_sess.pages[j - 1].base > tmp.base) {
-                uz_page_mov(&g_sess.pages[j], &g_sess.pages[j - 1]);
-                --j;
-            }
-            uz_page_mov(&g_sess.pages[j], &tmp);
-        }
+    next->count = 0;
+    for (i = 0; i < g_sess.page_count; ++i) {
+        struct uz_page *p = &g_sess.pages[i];
+        if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
+        next->keys[next->count].base = __atomic_load_n(&p->base, __ATOMIC_ACQUIRE);
+        next->keys[next->count++].slot = i;
     }
+    uz_index_sort(next);
+    old = uz_index_publish(&g_sess.index, next);
+    drain_readers(uz_readers_flip(&g_readers));
+    g_sess.index_spare = old;
 }
 
 /* mremap() can keep, move or resize the registered pages without changing
@@ -5485,7 +5560,7 @@ static void uz_mremap_update(void *mm, uint64_t old, uint64_t old_len,
     int moved = 0;
 
     if (!mm || !old_len || !new_len || old_end < old || new_end < moved_to) return;
-    if (flags & UZ_MREMAP_DONTUNMAP) return; /* the old VMA also stays mapped */
+    if (flags & UZ_MREMAP_DONTUNMAP) return; /* refused by the before gate */
     ref = session_get_mm(mm);
     if (!ref) return;
     /* The destination of MREMAP_FIXED replaced any mapping that was not part
@@ -5519,21 +5594,19 @@ static void uz_mremap_update(void *mm, uint64_t old, uint64_t old_len,
                 continue;
             }
             if (moved_to != old) {
-                p->base = moved_to + off;
+                __atomic_store_n(&p->base, moved_to + off, __ATOMIC_RELEASE);
                 moved = 1;
             }
-            p->vma_start = moved_to;
-            p->vma_end = new_end;
         }
     }
+    uz_reader_exit(&g_readers, ref);
+    uz_publish_page_index();
     if (moved) {
-        uz_page_sort();
-        /* Shift the branch-map base addresses in place.  Rebuilding would
-         * free the arena while another CPU may still be testing its bits. */
+        /* Moving code invalidates the global LL/SC entry proof. Keep the
+         * old arena alive for in-flight readers and disable that proof. */
         if (__atomic_load_n(&g_code.valid, __ATOMIC_ACQUIRE))
             uz_code_mremap(old, old_len, moved_to, new_len);
     }
-    uz_reader_exit(&g_readers, ref);
 }
 
 /* A protected mapping is restored before the native syscall runs. If a
@@ -5574,13 +5647,9 @@ static void uz_gate_before_impl(hook_fargs6_t *args, void *udata)
          * A successful shared remap changes which file offsets the range maps,
          * so the pages it covers are retired after the syscall instead of
          * releasing the whole session. */
-        void *vma;
-
-        if (!overlay_live())
-            return;
-        vma = f_find_vma(g_sess.mm, sys_arg(args, 0));
-        if (!vma || !(*(unsigned long *)((char *)vma + g_layout.vma_flags) & UZ_VM_SHARED))
-            return;
+        struct uz_vma_view vma;
+        if (!overlay_live() || uz_vma_read(g_sess.mm, sys_arg(args, 0), &vma) ||
+            !(vma.flags & UZ_VM_SHARED)) return;
         args->local.data0 = sys_arg(args, 0);
         args->local.data1 = sys_arg(args, 1);
         args->local.data5 = 1;
@@ -5631,7 +5700,6 @@ static void uz_child_protection_update(void *mm, uint64_t start, uint64_t len,
     int changed = 0;
 
     if (!mm || mm == g_sess.mm || !len || end < start) return;
-    if (!(prot & (UZ_PROT_READ | UZ_PROT_WRITE))) return;
     ref = session_get_any();
     if (!ref) return;
     /* The child may have moved or split its copy of the mapping, so walk the
@@ -5642,10 +5710,64 @@ static void uz_child_protection_update(void *mm, uint64_t start, uint64_t len,
         if (!p || __atomic_load_n(&p->gone, __ATOMIC_ACQUIRE) ||
             __atomic_load_n(&p->replay, __ATOMIC_ACQUIRE))
             continue;
-        if (!uz_trap_leaf(mm, cur) && page_set_ap_any(mm, cur, 0) > 0)
-            changed = 1;
+        if (!g_experimental_writes && (prot & UZ_PROT_WRITE)) {
+            uz_retire_written_page(mm, p, cur);
+            continue;
+        }
+        if (!(prot & (UZ_PROT_READ | UZ_PROT_WRITE))) {
+            __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
+            __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
+        } else {
+            int ret;
+            __atomic_store_n(&p->want, 1, __ATOMIC_RELEASE);
+            if (__atomic_load_n(&p->dead, __ATOMIC_ACQUIRE)) continue;
+            ret = page_set_ap_any(mm, cur, 0);
+            if (ret >= 0) __atomic_store_n(&p->armed, 1, __ATOMIC_RELEASE);
+            if (ret > 0) changed = 1;
+        }
     }
     if (changed) flush_tlb_all();
+    uz_reader_exit(&g_readers, ref);
+}
+
+/* Successful child mapping changes only retire/move that child's slots.
+ * File identity is immutable; a parent move/unmap never changes it. */
+static void uz_child_mapping_update(void *mm, int kind, hook_fargs6_t *args)
+{
+    uint64_t start = sys_arg(args, 0), len = sys_arg(args, 1), end = start + len;
+    uint64_t dst = args->ret, new_len = sys_arg(args, 2), ref;
+    uint32_t i;
+
+    if (kind != UZ_GATE_MUNMAP && kind != UZ_GATE_MREMAP && kind != UZ_GATE_MMAP &&
+        kind != UZ_GATE_REMAP_FILE_PAGES)
+        return;
+    if (kind == UZ_GATE_MMAP && !(sys_arg(args, 3) & UZ_MAP_FIXED)) return;
+    if (!len || end < start) return;
+    ref = session_get_any();
+    if (!ref) return;
+    for (i = 0; i < g_shadow_max; ++i) {
+        struct uz_shadow *sh = &g_shadow[i];
+        struct uz_page *p = &sh->page;
+        uint64_t base;
+        int retire;
+
+        if (__atomic_load_n(&sh->used, __ATOMIC_ACQUIRE) != 1 || sh->mm != mm ||
+            __atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
+        base = __atomic_load_n(&p->base, __ATOMIC_ACQUIRE);
+        retire = base >= start && base < end;
+        if (kind == UZ_GATE_MREMAP) {
+            if (retire && base - start < new_len) {
+                __atomic_store_n(&p->base, dst + (base - start), __ATOMIC_RELEASE);
+                continue;
+            }
+            if (dst != start && base >= dst && base - dst < new_len) retire = 1;
+        }
+        if (retire) {
+            __atomic_store_n(&p->want, 0, __ATOMIC_RELEASE);
+            __atomic_store_n(&p->armed, 0, __ATOMIC_RELEASE);
+            __atomic_store_n(&p->gone, 1, __ATOMIC_RELEASE);
+        }
+    }
     uz_reader_exit(&g_readers, ref);
 }
 
@@ -5665,6 +5787,7 @@ static void uz_gate_after_impl(hook_fargs6_t *args, void *udata)
 
     if (ret < 0) return;
     if (!session_owned()) {
+        uz_child_mapping_update(mm_of_task(current), kind, args);
         if (overlay_live() &&             !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) &&
             (kind == UZ_GATE_MPROTECT || kind == UZ_GATE_PKEY_MPROTECT)) {
             void *mm = mm_of_task(current);
@@ -5725,9 +5848,27 @@ static void uz_gate_before(hook_fargs6_t *args, void *udata)
     int kind = (int)(uintptr_t)udata;
     args->local.data5 = 0;
     args->local.data6 = 0;
-    if (caller_is_owner() && kind != UZ_GATE_EXECVE && kind != UZ_GATE_EXECVEAT) {
+    if ((caller_is_owner() || caller_is_managed()) &&
+        kind != UZ_GATE_EXECVE && kind != UZ_GATE_EXECVEAT) {
         while (!ctrl_try_lock()) f_msleep(1);
         args->local.data6 = 1;
+        if (kind == UZ_GATE_MREMAP && overlay_live() &&
+            ((sys_arg(args, 3) & UZ_MREMAP_DONTUNMAP) || !sys_arg(args, 1))) {
+            void *mm = mm_of_task(current);
+            uint64_t start = sys_arg(args, 0), len = sys_arg(args, 1);
+            uint64_t dest = sys_arg(args, 4), size = sys_arg(args, 2);
+            int overlaps = mm == g_sess.mm ? gate_range_overlaps(start, len ? len : g_page_size) :
+                child_range_overlaps(mm, start, len ? len : g_page_size);
+            if (sys_arg(args, 3) & UZ_MREMAP_FIXED)
+                overlaps |= mm == g_sess.mm ? gate_range_overlaps(dest, size) :
+                    child_range_overlaps(mm, dest, size);
+            if (overlaps) {
+                /* Duplicating a managed mapping needs a new independently
+                 * owned slot. Do not let an inherited trap escape tracking. */
+                gate_error(args, -EOPNOTSUPP);
+                return;
+            }
+        }
     }
     uz_gate_before_impl(args, udata);
 }
@@ -5735,7 +5876,7 @@ static void uz_gate_before(hook_fargs6_t *args, void *udata)
 static void uz_gate_after(hook_fargs6_t *args, void *udata)
 {
     int locked = args->local.data6 != 0;
-    if (!locked && caller_is_owner() && (long)args->ret >= 0) {
+    if (!locked && caller_is_managed() && (long)args->ret >= 0) {
         while (!ctrl_try_lock()) f_msleep(1);
         locked = 1;
     }
@@ -5768,6 +5909,7 @@ static int resolve_geometry(void)
     }
     g_page_shift = geom.page_shift;
     g_page_size = 1U << g_page_shift;
+    g_pt_levels = (geom.user_va_bits - 4U) / (g_page_shift - 3U);
     g_user_limit = UINT64_C(1) << geom.user_va_bits;
     return 0;
 }
@@ -5832,6 +5974,32 @@ out:
     return ret;
 }
 
+/* Diagnostic counts describe checked public interfaces, including optional
+ * candidates. They are not a count of installed hooks. Private entries still
+ * require their full BTF signature and never use this fallback. */
+static int uz_public_abi(const struct kclf_btf *btf, const char *name, const char *shape)
+{
+    int ok = uz_symbol_abi(btf, name, shape);
+    if (lookup(name)) {
+        if (!ok) ++g_compat.public_abi_rejected;
+        else if (kclf_btf_func_proto(btf, name)) ++g_compat.public_abi_strict;
+        else {
+            ++g_compat.public_abi_fallback;
+            if (g_verbose) pr_info("urov-z: public ABI fallback %s\n", name);
+        }
+    }
+    return ok;
+}
+
+static void uz_record_flag(const struct kclf_btf *btf, const char *name,
+                            unsigned value, unsigned bit)
+{
+    unsigned evidence = uz_btf_enum_flag(btf, name, ~0U);
+    if (!value) g_compat.foll_unavailable |= bit;
+    else if (evidence == ~0U) g_compat.foll_version |= bit;
+    else g_compat.foll_btf |= bit;
+}
+
 static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
 {
     const char *vma_name = "find_vma";
@@ -5847,7 +6015,7 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
 
     foll_force = uz_foll_force(btf, kver >= VERSION(6, 3, 0) ? 0x08U : 0x10U);
     g_write_gup_flags = foll_force ? UZ_FOLL_WRITE | foll_force : 0;
-    if (uz_symbol_abi(btf, "do_mem_abort", "vlsr"))
+    if (uz_public_abi(btf, "do_mem_abort", "vlsr"))
         f_do_mem_abort = lookup("do_mem_abort");
     /* Only inspect extended syndrome bits if the entry takes a full ESR. */
     g_abort_has_iss2 = uz_btf_signature(btf, kclf_btf_func_proto(btf, "do_mem_abort"), "vllr");
@@ -5867,32 +6035,32 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
      * A missing symbol keeps the old pid/tgid-only gate. */
     f_find_task_by_vpid = (find_task_by_vpid_t)lookup("find_task_by_vpid");
     f_find_vma = (find_vma_t)lookup(vma_name);
-    if (!f_find_vma || !uz_symbol_abi(btf, vma_name, "aml")) {
+    if (!f_find_vma || !uz_public_abi(btf, vma_name, "aml")) {
         vma_name = "__find_vma";
         f_find_vma = uz_btf_signature(btf, kclf_btf_func_proto(btf, vma_name), "aml") ?
                      (find_vma_t)lookup(vma_name) : 0;
     }
-    if (!f_find_vma || !uz_symbol_abi(btf, vma_name, "aml")) {
+    if (!f_find_vma || !uz_public_abi(btf, vma_name, "aml")) {
         vma_name = "vma_lookup";
         f_find_vma = (find_vma_t)lookup(vma_name);
     }
-    if (f_find_vma && !uz_symbol_abi(btf, vma_name, "aml")) f_find_vma = 0;
+    if (f_find_vma && !uz_public_abi(btf, vma_name, "aml")) f_find_vma = 0;
 
     f_mmap_write_lock = (mmap_write_fn)lookup("mmap_write_lock");
     f_mmap_write_unlock = (mmap_write_fn)lookup("mmap_write_unlock");
     f_mmap_read_lock = (mmap_write_fn)lookup("mmap_read_lock");
     f_mmap_read_unlock = (mmap_write_fn)lookup("mmap_read_unlock");
     if (!f_mmap_read_lock || !f_mmap_read_unlock ||
-        !uz_symbol_abi(btf, "mmap_read_lock", "vm") ||
-        !uz_symbol_abi(btf, "mmap_read_unlock", "vm")) {
+        !uz_public_abi(btf, "mmap_read_lock", "vm") ||
+        !uz_public_abi(btf, "mmap_read_unlock", "vm")) {
         f_mmap_read_lock = 0;
         f_mmap_read_unlock = 0;
         /* mmap_read_* are inline on many 5.x/6.x builds. Do not serialize
          * instruction scans with a write lock merely because their wrappers
          * have no kallsyms entry. Both halves must use the same ABI. */
         if (g_layout.mmap_lock >= 0 &&
-            uz_symbol_abi(btf, "down_read", "vp") &&
-            uz_symbol_abi(btf, "up_read", "vp")) {
+            uz_public_abi(btf, "down_read", "vp") &&
+            uz_public_abi(btf, "up_read", "vp")) {
             f_mmap_read_lock = (mmap_write_fn)lookup("down_read");
             f_mmap_read_unlock = (mmap_write_fn)lookup("up_read");
             if (!f_mmap_read_lock || !f_mmap_read_unlock)
@@ -5902,30 +6070,85 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
         }
     }
     g_use_rwsem = !f_mmap_write_lock || !f_mmap_write_unlock ||
-                  !uz_symbol_abi(btf, "mmap_write_lock", "vm") ||
-                  !uz_symbol_abi(btf, "mmap_write_unlock", "vm");
+                  !uz_public_abi(btf, "mmap_write_lock", "vm") ||
+                  !uz_public_abi(btf, "mmap_write_unlock", "vm");
     if (g_use_rwsem) {
-        f_mmap_write_lock = g_layout.mmap_lock < 0 || !uz_symbol_abi(btf, "down_write", "vp") ?
+        f_mmap_write_lock = g_layout.mmap_lock < 0 || !uz_public_abi(btf, "down_write", "vp") ?
             0 : (mmap_write_fn)lookup("down_write");
-        f_mmap_write_unlock = g_layout.mmap_lock < 0 || !uz_symbol_abi(btf, "up_write", "vp") ?
+        f_mmap_write_unlock = g_layout.mmap_lock < 0 || !uz_public_abi(btf, "up_write", "vp") ?
             0 : (mmap_write_fn)lookup("up_write");
     }
 
-    if (uz_symbol_abi(btf, "force_sig_fault", "iiip"))
+    /* Never recursively block on mmap_lock from fault/GUP callbacks. A try
+     * lock can fail while a native caller already owns a read lock and a
+     * writer is queued; report/retry that condition instead of deadlocking. */
+    if (uz_public_abi(btf, "mmap_read_trylock", "bm"))
+        f_mmap_tryread_bool = (_Bool (*)(void *))lookup("mmap_read_trylock");
+    if (!f_mmap_tryread_bool && g_layout.mmap_lock >= 0 &&
+        uz_public_abi(btf, "down_read_trylock", "ip")) {
+        f_mmap_tryread = (int (*)(void *))lookup("down_read_trylock");
+    }
+    /* Resolve before selecting the map-lock path: this helper opens its own
+     * RCU section, which must have a matching native unlock. */
+    if (uz_public_abi(btf, "__rcu_read_lock", "v") &&
+        uz_public_abi(btf, "__rcu_read_unlock", "v")) {
+        f_rcu_lock = (void_fn)lookup("__rcu_read_lock");
+        f_rcu_unlock = (void_fn)lookup("__rcu_read_unlock");
+    }
+    if (!f_rcu_lock || !f_rcu_unlock) f_rcu_lock = f_rcu_unlock = 0;
+    /* The complete native callback owns both sides of PTL/RCU/lockdep,
+     * including the 6.5+ PMD attachment recheck. Its stable ABI works with
+     * split locks, RT spinlocks and vendor RCU backports without rebuilding
+     * a kernel-config-specific unlock sequence in the module. */
+    if (uz_apply_pt_abi(btf, "apply_to_existing_page_range"))
+        f_apply_pt = (int (*)(void *, unsigned long, unsigned long, uz_pte_fn, void *))
+            lookup("apply_to_existing_page_range");
+    /* A raw __rcu_read_unlock cannot balance DEBUG_LOCK_ALLOC. This fallback
+     * is only usable with a validated non-RT raw unlock and PREEMPT_RCU. */
+    if (!f_apply_pt && uz_native_pt_abi(btf) && f_rcu_lock && f_rcu_unlock &&
+        !lookup("rcu_lock_map")) {
+        f_map_pt_lock = (uint64_t *(*)(void *, uint64_t *, unsigned long, void **))
+            lookup("__pte_offset_map_lock");
+        f_pt_unlock = (void (*)(void *))lookup("_raw_spin_unlock");
+        if (!f_pt_unlock) f_map_pt_lock = 0;
+    }
+    if (!f_apply_pt && !f_map_pt_lock && kver < VERSION(5, 8, 0) &&
+        !lookup("__pte_offset_map_lock") && !lookup("pte_free_defer")) {
+        if (uz_apply_pt_abi(btf, "apply_to_page_range")) {
+            f_apply_pt = (int (*)(void *, unsigned long, unsigned long, uz_pte_fn, void *))
+                lookup("apply_to_page_range");
+            g_apply_pt_create = f_apply_pt != 0;
+        }
+    }
+    if ((!f_mmap_tryread && !f_mmap_tryread_bool) || !f_mmap_read_lock || !f_mmap_read_unlock ||
+        (!f_map_pt_lock && !f_apply_pt)) {
+        pr_info("urov-z: native PTL/mmap guard ABI unavailable; refusing unlocked PTE access\n");
+        return -EOPNOTSUPP;
+    }
+    if (g_verbose)
+        pr_info("urov-z: ptl=%s mmap_guard=tryread levels=%u\n",
+            f_map_pt_lock ? "map-lock-rcu" : g_apply_pt_create ? "apply-checked" : "apply-existing",
+            g_pt_levels);
+    if (uz_contpte_abi(btf))
+        f_contpte_unfold = (uz_contpte_unfold_fn)lookup("__contpte_try_unfold");
+    if (g_verbose)
+        pr_info("urov-z: contiguous PTE write=%s\n", f_contpte_unfold ? "native-unfold" : "unsupported");
+
+    if (uz_public_abi(btf, "force_sig_fault", "iiip"))
         f_force_sig_fault = (force_sig_fault_t)lookup("force_sig_fault");
 
     f_copy_in = (copy_nofault_t)lookup(read_name);
-    if (!f_copy_in || !uz_symbol_abi(btf, read_name, "lppl")) {
+    if (!f_copy_in || !uz_public_abi(btf, read_name, "lppl")) {
         read_name = "probe_user_read";
         f_copy_in = (copy_nofault_t)lookup(read_name);
     }
-    if (f_copy_in && !uz_symbol_abi(btf, read_name, "lppl")) f_copy_in = 0;
+    if (f_copy_in && !uz_public_abi(btf, read_name, "lppl")) f_copy_in = 0;
     f_copy_out = (copy_nofault_t)lookup(write_name);
-    if (!f_copy_out || !uz_symbol_abi(btf, write_name, "lppl")) {
+    if (!f_copy_out || !uz_public_abi(btf, write_name, "lppl")) {
         write_name = "probe_user_write";
         f_copy_out = (copy_nofault_t)lookup(write_name);
     }
-    if (f_copy_out && !uz_symbol_abi(btf, write_name, "lppl")) f_copy_out = 0;
+    if (f_copy_out && !uz_public_abi(btf, write_name, "lppl")) f_copy_out = 0;
 
     access = lookup(access_name);
     access_argc = access ? uz_access_vm_argc(btf, access_name, 1) : 0;
@@ -5970,42 +6193,54 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
     g_gup_internal = 0;
     if (g_foll_get && g_foll_fast_only) {
         gup_name = "internal_get_user_pages_fast";
-        if (!uz_btf_signature(btf, kclf_btf_func_proto(btf, gup_name), "illip") ||
+        if (!uz_btf_signature(btf, kclf_btf_func_proto(btf, gup_name), "illiD") ||
             !(f_gup_fast = lookup(gup_name))) {
             gup_name = "gup_fast_fallback";
-            f_gup_fast = uz_btf_signature(btf, kclf_btf_func_proto(btf, gup_name), "illip") ?
+            f_gup_fast = uz_btf_signature(btf, kclf_btf_func_proto(btf, gup_name), "illiD") ?
                          lookup(gup_name) : 0;
         }
         g_gup_internal = f_gup_fast != 0;
     }
     if (!f_gup_fast) {
         gup_name = "get_user_pages_fast";
-        f_gup_fast = uz_symbol_abi(btf, gup_name, "iliip") ? lookup(gup_name) : 0;
+        f_gup_fast = uz_public_abi(btf, gup_name, "iliiD") ? lookup(gup_name) : 0;
     }
     {
-        /* Before __alloc_pages gained nodemask it was a three-argument
-         * inline wrapper around __alloc_pages_nodemask. Newer allocation
-         * profiling renames the four-argument entry again. Validate the
-         * selected name, not an unrelated wrapper's prototype. */
+        static const char *const policy_names[] = {
+            "alloc_pages_noprof", "alloc_pages", "alloc_pages_current"
+        };
         static const char *const names[] = {
             "__alloc_pages_nodemask", "__alloc_pages_noprof", "__alloc_pages"
         };
         unsigned i;
+        for (i = 0; i < sizeof(policy_names) / sizeof(policy_names[0]); ++i) {
+            if (!uz_btf_signature(btf, kclf_btf_func_proto(btf, policy_names[i]), "Pii"))
+                continue;
+            g_page_allocator.policy = (void *(*)(unsigned, unsigned))lookup(policy_names[i]);
+            if (g_page_allocator.policy) { alloc_name = policy_names[i]; break; }
+        }
+        g_page_allocator.node_id_offset = uz_pgdat_node_offset(btf);
+        if (g_page_allocator.node_id_offset >= 0)
+            g_page_allocator.first_online = (void *(*)(void))lookup("first_online_pgdat");
+        /* The four-argument entry's preferred_nid must name a real node.
+         * Resolve it for each allocation; do not cache a CPU/node from init. */
         for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
-            if (!uz_symbol_abi(btf, names[i], "piiip")) continue;
-            f_alloc_pages = (alloc_pages_t)lookup(names[i]);
-            if (f_alloc_pages) { alloc_name = names[i]; break; }
+            if (g_page_allocator.policy || !g_page_allocator.first_online) break;
+            if (!uz_btf_signature(btf, kclf_btf_func_proto(btf, names[i]), "Piiip")) continue;
+            g_page_allocator.node = (alloc_pages_t)lookup(names[i]);
+            if (g_page_allocator.node) { alloc_name = names[i]; break; }
         }
     }
     f_put_page = (put_page_t)lookup("put_page");
     f_copy_highpage = (copy_highpage_t)lookup("copy_highpage");
     f_vmalloc_to_page = (vmalloc_to_page_t)lookup("vmalloc_to_page");
-    if (f_put_page && !uz_symbol_abi(btf, "put_page", "vp")) f_put_page = 0;
-    if (f_copy_highpage && !uz_symbol_abi(btf, "copy_highpage", "vpp"))
+    if (f_put_page && !uz_public_abi(btf, "put_page", "vp")) f_put_page = 0;
+    if (f_copy_highpage && !uz_public_abi(btf, "copy_highpage", "vpp"))
         f_copy_highpage = 0;
-    if (f_vmalloc_to_page && !uz_symbol_abi(btf, "vmalloc_to_page", "pp"))
+    if (f_vmalloc_to_page && !uz_public_abi(btf, "vmalloc_to_page", "pp"))
         f_vmalloc_to_page = 0;
-    if (!f_alloc_pages || !f_put_page || !f_copy_highpage || !f_vmalloc_to_page)
+    if (!uz_page_allocator_ready(&g_page_allocator) || !f_put_page ||
+        !f_copy_highpage || !f_vmalloc_to_page || !f_vmalloc)
         f_gup_fast = 0;
 
     g_foll_pin = uz_btf_enum_flag(btf, "FOLL_PIN",
@@ -6014,39 +6249,45 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
         kver < VERSION(6, 3, 0) ? 0x10000U : 0x100U);
     if (g_gup_internal && !g_foll_pin) f_gup_fast = 0;
     f_unpin_page = (void (*)(void *))lookup("unpin_user_page");
-    if (!uz_symbol_abi(btf, "unpin_user_page", "vp")) f_unpin_page = 0;
-    if (uz_btf_signature(btf, kclf_btf_func_proto(btf, "try_grab_page"), "bpi"))
+    if (!uz_public_abi(btf, "unpin_user_page", "vp")) f_unpin_page = 0;
+    if (uz_btf_signature(btf, kclf_btf_func_proto(btf, "try_grab_page"), "bPi"))
         f_grab_page_bool = (_Bool (*)(void *, unsigned))lookup("try_grab_page");
-    if (uz_btf_signature(btf, kclf_btf_func_proto(btf, "try_grab_page"), "ipi"))
+    if (uz_btf_signature(btf, kclf_btf_func_proto(btf, "try_grab_page"), "iPi"))
         f_grab_page_int = (int (*)(void *, unsigned))lookup("try_grab_page");
     if (!f_grab_page_bool && !f_grab_page_int && uz_folio_grab_abi(btf))
         f_grab_folio = (int (*)(void *, int, unsigned))lookup("try_grab_folio");
-    /* Android LTO can inline the public pin wrapper into process_vm_readv.
-     * Prefer its shared implementation when BTF proves the complete ABI.
-     * That entry also serves FOLL_GET, so the hook must require FOLL_PIN. */
-    g_pin_internal = 0;
-    f_pin_remote = lookup("__get_user_pages_remote");
-    g_pin_argc = f_pin_remote ? uz_remote_gup_argc(btf, "__get_user_pages_remote") : 0;
-    if (g_pin_argc) {
-        pin_name = "__get_user_pages_remote";
-        g_pin_internal = 1;
-    } else {
-        f_pin_remote = lookup(pin_name);
-        g_pin_argc = f_pin_remote ? uz_remote_gup_argc(btf, pin_name) : 0;
-    }
-    if (!g_pin_argc) f_pin_remote = 0;
-    /* Upstream 5.4 predates FOLL_PIN: process_vm_readv() acquires GET refs
-     * and releases them with put_page(). A missing/incompatible pin hook on
-     * a PIN-capable vendor kernel must not silently select this older ABI.
-     * Require both no pin/unpin symbol and no pin/unpin BTF evidence. */
-    if (!f_pin_remote && !lookup("pin_user_pages_remote") && !lookup("unpin_user_page") &&
-        !kclf_btf_func_proto(btf, "pin_user_pages_remote") &&
-        !kclf_btf_func_proto(btf, "unpin_user_page")) {
-        pin_name = "get_user_pages_remote";
-        g_pin_argc = uz_remote_gup_argc(btf, pin_name);
-        f_pin_remote = g_pin_argc ? lookup(pin_name) : 0;
-        g_remote_get = f_pin_remote != 0;
-        g_pin_internal = 0;
+    if (!f_grab_page_bool && !f_grab_page_int && uz_folio_page_grab_abi(btf))
+        f_grab_folio_page = (void *(*)(void *, int, unsigned))lookup("try_grab_folio");
+    /* 5.x may inline try_grab_page but retain its compound helper. For our
+     * fresh order-0 page it has the same NULL/success convention. */
+    if (!f_grab_page_bool && !f_grab_page_int && !f_grab_folio && !f_grab_folio_page &&
+        uz_btf_signature(btf, kclf_btf_func_proto(btf, "try_grab_compound_head"), "PPii"))
+        f_grab_folio_page = (void *(*)(void *, int, unsigned))lookup("try_grab_compound_head");
+    /* Android LTO can inline the public wrapper into process_vm_readv.
+     * Resolve the reference family separately from the shared/public entry.
+     * PIN-capable shared entries also serve GET, so filter those callers. */
+    {
+        void *shared = lookup("__get_user_pages_remote");
+        void *pin = lookup("pin_user_pages_remote");
+        void *get = lookup("get_user_pages_remote");
+        int evidence = pin || lookup("unpin_user_page") ||
+            kclf_btf_func_proto(btf, "pin_user_pages_remote") ||
+            kclf_btf_func_proto(btf, "unpin_user_page") ||
+            /* All-ones means absent; invalid/conflicting enum evidence
+             * must also prevent a legacy GET fallback. */
+            uz_btf_enum_flag(btf, "FOLL_PIN", ~0U) != ~0U;
+        struct uz_remote_gup_choice choice = uz_remote_gup_select(
+            shared ? uz_remote_gup_argc(btf, "__get_user_pages_remote") : 0,
+            pin ? uz_remote_gup_argc(btf, "pin_user_pages_remote") : 0,
+            get ? uz_remote_gup_argc(btf, "get_user_pages_remote") : 0, evidence);
+        g_pin_argc = choice.argc;
+        g_pin_internal = choice.entry == UZ_REMOTE_SHARED;
+        g_remote_get = choice.get_refs;
+        pin_name = g_pin_internal ? "__get_user_pages_remote" :
+                   choice.entry == UZ_REMOTE_PIN ? "pin_user_pages_remote" :
+                   choice.entry == UZ_REMOTE_GET ? "get_user_pages_remote" : "none";
+        f_pin_remote = g_pin_internal ? shared : choice.entry == UZ_REMOTE_PIN ? pin :
+                       choice.entry == UZ_REMOTE_GET ? get : 0;
     }
     f_gup_slow = lookup("__get_user_pages");
     g_gup_slow_argc = f_gup_slow ? uz_remote_gup_argc(btf, "__get_user_pages") : 0;
@@ -6057,28 +6298,45 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
      * are required; without them an undecodable store keeps the pre-2.17
      * per-page handoff instead of a replay that could lose its step. */
     f_debug_exception = lookup("do_debug_exception");
-    if (f_debug_exception && !uz_symbol_abi(btf, "do_debug_exception", "vllr"))
+    if (f_debug_exception && !uz_public_abi(btf, "do_debug_exception", "vllr"))
         f_debug_exception = 0;
     f_switch_to = lookup("__switch_to");
-    if (f_switch_to && !uz_symbol_abi(btf, "__switch_to", "ptt"))
+    if (f_switch_to && !uz_public_abi(btf, "__switch_to", "ptt"))
         f_switch_to = 0;
     /* Snapshot the image at fork time.  copy_mm() is the arm64 fork helper
      * (dup_mm is inlined into it on this kernel). */
     f_copy_mm = lookup("copy_mm");
-    if (f_copy_mm && !uz_symbol_abi(btf, "copy_mm", "ilt"))
+    if (f_copy_mm && !uz_public_abi(btf, "copy_mm", "ilt"))
         f_copy_mm = 0;
 
     /* Newer update_current_state() only updates the saved state. Use the
      * save-and-flush helper when present so the EL0 return reloads it. */
     f_fp_preserve = (fpsimd_preserve_t)lookup(fp_name);
-    if (!f_fp_preserve || !uz_symbol_abi(btf, fp_name, "v")) {
+    if (!f_fp_preserve || !uz_public_abi(btf, fp_name, "v")) {
         fp_name = "fpsimd_signal_preserve_current_state";
         f_fp_preserve = (fpsimd_preserve_t)lookup(fp_name);
     }
     f_fp_update = (fpsimd_update_t)lookup("fpsimd_update_current_state");
     g_fp_ready = f_fp_preserve && f_fp_update && g_layout.task_fpsimd >= 0 &&
-                 uz_symbol_abi(btf, fp_name, "v") &&
-                 uz_symbol_abi(btf, "fpsimd_update_current_state", "vf");
+                 uz_public_abi(btf, fp_name, "v") &&
+                 uz_public_abi(btf, "fpsimd_update_current_state", "vf");
+    g_compat.fault_entry = *mmf_argc ? fault_name : "none";
+    g_compat.remote_entry = f_pin_remote ? pin_name : "none";
+    g_compat.fast_entry = f_gup_fast ? gup_name : "none";
+    g_compat.fp_entry = g_fp_ready ? fp_name : "none";
+    g_compat.fault_args = (uint32_t)*mmf_argc;
+    g_compat.remote_args = (uint32_t)g_pin_argc;
+    g_compat.loader_enabled = (uint32_t)g_loader_enabled;
+    g_compat.foll_get = g_foll_get;
+    g_compat.foll_pin = g_foll_pin;
+    g_compat.foll_longterm = g_foll_longterm;
+    g_compat.foll_fast_only = g_foll_fast_only;
+    g_compat.foll_force = foll_force;
+    uz_record_flag(btf, "FOLL_GET", g_foll_get, 1U);
+    uz_record_flag(btf, "FOLL_PIN", g_foll_pin, 2U);
+    uz_record_flag(btf, "FOLL_LONGTERM", g_foll_longterm, 4U);
+    uz_record_flag(btf, "FOLL_FAST_ONLY", g_foll_fast_only, 8U);
+    uz_record_flag(btf, "FOLL_FORCE", foll_force, 16U);
     {
         uint64_t pfr = 0;
 
@@ -6110,12 +6368,13 @@ static long resolve_symbols(const struct kclf_btf *btf, int *mmf_argc)
     if (g_verbose)
         pr_info("urov-z: alloc=%s slow_gup=%d grab=%s read_lock=%s\n",
                 alloc_name, g_gup_slow_argc,
-                f_grab_folio ? "folio" : (f_grab_page_bool || f_grab_page_int) ? "page" : "none",
+                f_grab_folio ? "folio-int" : f_grab_folio_page ? "page/folio-ptr" :
+                (f_grab_page_bool || f_grab_page_int) ? "page" : "none",
                 f_mmap_read_lock ? (g_read_use_rwsem ? "rwsem" : "mmap") : "write-fallback");
     if (g_verbose)
         pr_info("urov-z: gup_fast=%d alloc_pages=%d put_page=%d copy_highpage=%d "
                 "vmalloc_to_page=%d pin_remote=%d gup_slow=%d page_ref=%d/%d\n",
-                f_gup_fast ? 1 : 0, f_alloc_pages ? 1 : 0,
+                f_gup_fast ? 1 : 0, uz_page_allocator_ready(&g_page_allocator),
                 f_put_page ? 1 : 0, f_copy_highpage ? 1 : 0,
                 f_vmalloc_to_page ? 1 : 0, f_pin_remote ? 1 : 0,
                 f_gup_slow ? 1 : 0, g_layout.page_ref_ok, g_layout.page_ref);
@@ -6136,9 +6395,6 @@ static long resolve_kernel(const char *btf_path, int *mmf_argc)
     if (!f_kvmalloc_node && !f_vmalloc) return -EOPNOTSUPP;
     f_msleep = (msleep_t)lookup("msleep");
     if (!f_msleep) return -EOPNOTSUPP;
-    f_rcu_lock = (void_fn)lookup("__rcu_read_lock");
-    f_rcu_unlock = (void_fn)lookup("__rcu_read_unlock");
-    if (!f_rcu_lock || !f_rcu_unlock) f_rcu_lock = f_rcu_unlock = 0;
     f_kernel_read = (kernel_read_t)lookup("kernel_read");
     if (btf_path[0]) {
         ret = open_detached_btf(&btf, btf_path, &storage);
@@ -6158,14 +6414,17 @@ static long resolve_kernel(const char *btf_path, int *mmf_argc)
                 btf_path[0] ? "detached" : "live");
         ret = -EOPNOTSUPP;
     } else {
+        g_compat.btf_source = btf_path[0] ? "detached-build-id" : "live";
         if (g_verbose)
             pr_info("urov-z: btf=%s task.mm=%d mm.pgd=%d mm.users=%d mmap_lock=%d "
                     "vma.flags=%d task.fpsimd=%d\n", btf_path[0] ? "detached" : "live",
                     g_layout.task_mm, g_layout.mm_pgd, g_layout.mm_users, g_layout.mmap_lock,
                     g_layout.vma_flags, g_layout.task_fpsimd);
         ret = resolve_symbols(&btf, mmf_argc);
-        if (!ret) ret = urov_kclf_set_btf(&btf);
-        if (!ret) ret = urov_kclf_preflight();
+#if UROV_Z_WITH_KCLF
+        if (!ret && g_loader_enabled) ret = urov_kclf_set_btf(&btf);
+        if (!ret && g_loader_enabled) ret = urov_kclf_preflight();
+#endif
     }
     uz_free(storage);
     return ret;
@@ -6205,6 +6464,31 @@ static long parse_args(const char *args, uint8_t key[16], int *have_key,
             *have_key = 1;
         } else if (prefix(p, "verbose", 7) && (p[7] == 0 || p[7] == ' ')) {
             g_verbose = 1;
+        } else if (prefix(p, "writes=", 7)) {
+            v = p + 7;
+            while (v[n] && v[n] != ' ') ++n;
+            if (n == 2 && !memcmp(v, "rx", 2)) g_experimental_writes = 0;
+            else if (n == 12 && !memcmp(v, "experimental", 12)) g_experimental_writes = 1;
+            else return -EINVAL;
+        } else if (prefix(p, "loader=", 7)) {
+            v = p + 7;
+            while (v[n] && v[n] != ' ') ++n;
+            if (n == 3 && !memcmp(v, "off", 3)) g_loader_enabled = 0;
+            else if (n == 2 && !memcmp(v, "on", 2) && UROV_Z_WITH_KCLF) g_loader_enabled = 1;
+            else return -EINVAL;
+        } else if (prefix(p, "fork_copies=", 12)) {
+            uint32_t value;
+            v = p + 12;
+            while (v[n] && v[n] != ' ') ++n;
+            if (parse_u32(v, n, &value) || value > 4U) return -EINVAL;
+            g_fork_copies = value;
+        } else if (prefix(p, "buffer_kb=", 10)) {
+            uint32_t value;
+            v = p + 10;
+            while (v[n] && v[n] != ' ') ++n;
+            if (parse_u32(v, n, &value) || value < 64U || value > 256U * 1024U)
+                return -EINVAL;
+            g_buffers.limit = (uint64_t)value << 10;
         } else if (prefix(p, "btf=", 4)) {
             v = p + 4;
             while (v[n] && v[n] != ' ') ++n;
@@ -6269,8 +6553,17 @@ long urov_z_backend_init(const char *args)
 
     ret = resolve_kernel(btf_path, &mmf_argc);
     if (ret) return ret;
+    ret = uz_linear_init((const int64_t *)lookup("memstart_addr"));
+    if (ret) {
+        pr_info("urov-z: unable to validate the arm64 linear map before hooks\n");
+        return ret;
+    }
     if (g_max_pages > g_max_image_bytes / (7U * g_page_size))
         g_max_pages = (uint32_t)(g_max_image_bytes / (7U * g_page_size));
+    if (!g_max_pages) return -EINVAL;
+    /* Preserve the advertised legacy quota when writes is switched inactive;
+     * the RX allocation saving must not silently increase default workloads. */
+    g_page_buffers = g_experimental_writes ? 7U : 3U;
     g_wrapper_mode = has_syscall_wrapper ? 1 : 0;
 
     ret = fp_hook_syscalln(__NR_prctl, 6, uz_prctl_before, 0, 0);
@@ -6315,10 +6608,10 @@ long urov_z_backend_init(const char *args)
         g_gup_slow_hooked = ret ? 0 : 1;
         if (ret && g_verbose) pr_info("urov-z: hook __get_user_pages failed: %ld\n", ret);
     }
-    g_pin_ok = g_pin_hooked && f_alloc_pages && f_put_page &&
+    g_pin_ok = g_pin_hooked && uz_page_allocator_ready(&g_page_allocator) && f_put_page && f_vmalloc &&
                f_copy_highpage && f_vmalloc_to_page &&
                (g_remote_get || (g_foll_pin && f_unpin_page &&
-                (f_grab_page_bool || f_grab_page_int || f_grab_folio)));
+                (f_grab_page_bool || f_grab_page_int || f_grab_folio || f_grab_folio_page)));
     if (g_verbose && !g_pin_ok)
         pr_info("urov-z: process_vm_readv overlay unavailable "
                 "(pin=%d ref=%d v2p=%d)\n", g_pin_hooked, g_foll_pin != 0,
@@ -6399,7 +6692,7 @@ long urov_z_backend_init(const char *args)
     if (g_pin_ok) g_caps |= UROV_Z_CAP_READV;
     if (g_gup_hooked) g_caps |= UROV_Z_CAP_GUP;
     if (g_ss_ok) g_caps |= UROV_Z_CAP_STEP;
-    if (g_copymm_hooked) g_caps |= UROV_Z_CAP_FORK_SNAPSHOT;
+    if (g_copymm_hooked && g_fork_copies) g_caps |= UROV_Z_CAP_FORK_SNAPSHOT;
     __atomic_store_n(&g_ready, 1, __ATOMIC_RELEASE);
 
     if (g_verbose)
@@ -6524,6 +6817,54 @@ long urov_z_backend_exit(void)
     return 0;
 }
 
+/* KPM ctl0 is authenticated by the host. A mode is fixed for the entire
+ * session, including all child snapshots and pending readers. */
+long urov_z_set_writes(int experimental)
+{
+    long ret = 0;
+    if (experimental != 0 && experimental != 1) return -EINVAL;
+    if (!ctrl_try_lock()) return -EBUSY;
+    if (!__atomic_load_n(&g_ready, __ATOMIC_ACQUIRE)) ret = -EOPNOTSUPP;
+    else if (overlay_live() || g_sess.mm) ret = -EBUSY;
+    else {
+        g_experimental_writes = experimental;
+        g_page_buffers = experimental ? 7U : 3U;
+    }
+    ctrl_unlock();
+    return ret;
+}
+
+long urov_z_set_resources(const char *args)
+{
+    uint32_t value;
+    int fork_option;
+    uint64_t irq;
+    long ret = 0;
+    if (!args) return -EINVAL;
+    fork_option = prefix(args, "fork_copies=", 12);
+    if (!fork_option && !prefix(args, "buffer_kb=", 10)) return -EINVAL;
+    args += fork_option ? 12 : 10;
+    if (parse_u32(args, (unsigned)strlen(args), &value) ||
+        (fork_option ? value > 4U : value < 64U || value > 256U * 1024U)) return -EINVAL;
+    if (!ctrl_try_lock()) return -EBUSY;
+    if (!__atomic_load_n(&g_ready, __ATOMIC_ACQUIRE)) ret = -EOPNOTSUPP;
+    else if (overlay_live() || g_sess.mm) ret = -EBUSY;
+    else if (fork_option) {
+        g_fork_copies = value;
+        if (value && g_copymm_hooked) g_caps |= UROV_Z_CAP_FORK_SNAPSHOT;
+        else g_caps &= ~UROV_Z_CAP_FORK_SNAPSHOT;
+    } else {
+        irq = uz_irq_save();
+        (void)uz_short_lock_take(&g_buffer_lock);
+        if (g_buffers.used > ((uint64_t)value << 10)) ret = -EBUSY;
+        else g_buffers.limit = (uint64_t)value << 10;
+        uz_short_lock_drop(&g_buffer_lock);
+        uz_irq_restore(irq);
+    }
+    ctrl_unlock();
+    return ret;
+}
+
 long urov_z_status_get(struct uz_status *out)
 {
     uint32_t i, gates = 1;
@@ -6556,6 +6897,12 @@ long urov_z_status_get(struct uz_status *out)
     out->abi = UROV_Z_ABI_VERSION;
     out->page_shift = g_page_shift;
     out->caps = g_caps;
+    out->experimental_writes = (uint32_t)g_experimental_writes;
+    out->native_ptl = f_map_pt_lock ? 2U : 1U;
+    if (g_apply_pt_create) out->native_ptl = 3U;
+    out->contpte = f_contpte_unfold != 0;
+    out->readv_refs = !g_pin_ok ? 0U : g_remote_get ? 1U : 2U;
+    out->loader_enabled = (uint32_t)g_loader_enabled;
     ctrl_unlock();
     return 0;
 }
@@ -6583,7 +6930,71 @@ long urov_z_perf_get(struct uz_perf *out)
     UZ_PERF_READ(cache_misses);
     UZ_PERF_READ(cache_invalidations);
     UZ_PERF_READ(cache_bytes);
+    UZ_PERF_READ(image_locks);
+    UZ_PERF_READ(image_contended);
+    UZ_PERF_READ(image_spins);
+    UZ_PERF_READ(image_wait_max);
+    UZ_PERF_READ(image_hold_max);
+#if UROV_Z_DIAGNOSTICS
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(out->clock_hz));
+#endif
 #undef UZ_PERF_READ
     ctrl_unlock();
     return 0;
+}
+
+long urov_z_health_get(struct uz_health *out)
+{
+    if (!out) return -EINVAL;
+    memset(out, 0, sizeof(*out));
+#define UZ_HEALTH_READ(field) out->field = __atomic_load_n(&g_health.field, __ATOMIC_RELAXED)
+    UZ_HEALTH_READ(mmap_busy);
+    UZ_HEALTH_READ(fault_retries);
+    UZ_HEALTH_READ(rearm_attempts);
+    UZ_HEALTH_READ(rearm_ok);
+    UZ_HEALTH_READ(rearm_busy);
+    UZ_HEALTH_READ(rearm_missing);
+    UZ_HEALTH_READ(rearm_rejected);
+    UZ_HEALTH_READ(rearm_identity);
+    UZ_HEALTH_READ(retired_writes);
+    UZ_HEALTH_READ(readv_slots_full);
+    UZ_HEALTH_READ(gup_alloc_failures);
+    UZ_HEALTH_READ(last_rearm_error);
+#undef UZ_HEALTH_READ
+    return 0;
+}
+
+long urov_z_memory_get(struct uz_memory *out)
+{
+    uint64_t irq;
+    if (!out) return -EINVAL;
+    if (!ctrl_try_lock()) return -EBUSY;
+    memset(out, 0, sizeof(*out));
+    irq = uz_irq_save();
+    (void)uz_short_lock_take(&g_buffer_lock);
+    out->limit = g_buffers.limit;
+    out->used = g_buffers.used;
+    out->peak = g_buffers.peak;
+    out->denied = g_buffers.denied;
+    uz_short_lock_drop(&g_buffer_lock);
+    uz_irq_restore(irq);
+    out->page_buffers = g_page_buffers;
+    out->shadow_slots = g_shadow_max;
+    out->shadow_used = __atomic_load_n(&g_shadow_used, __ATOMIC_RELAXED);
+    out->fork_copies = g_fork_copies;
+    ctrl_unlock();
+    return 0;
+}
+
+long urov_z_compat_get(struct uz_compat_info *out)
+{
+    if (!out) return -EINVAL;
+    if (!__atomic_load_n(&g_ready, __ATOMIC_ACQUIRE)) return -EOPNOTSUPP;
+    *out = g_compat; /* immutable after preflight; all names are literals */
+    return 0;
+}
+
+int urov_z_loader_enabled(void)
+{
+    return g_loader_enabled;
 }

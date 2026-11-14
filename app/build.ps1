@@ -13,7 +13,9 @@ $clang = Join-Path $Ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin\clang.exe'
 $api = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\api'))
 $apiInclude = '-I' + (Join-Path $api 'include')
 $apiSource = Join-Path $api 'src\urov.c'
-$pageFlags = @('-Wl,-z,max-page-size=16384', '-Wl,-z,common-page-size=16384')
+# Keep 16K LOAD alignment, but do not extend RELRO over unmapped 4K pages
+# on Android 13's linker with NDK r26. Verify both geometries with tests/check_elf.py.
+$pageFlags = @('-Wl,-z,max-page-size=16384', '-Wl,-z,common-page-size=4096')
 foreach ($dir in @('classes','dex','lib\arm64-v8a')) {
     New-Item -ItemType Directory -Force -Path (Join-Path $out $dir) | Out-Null
 }

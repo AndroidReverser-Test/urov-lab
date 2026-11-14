@@ -1,8 +1,10 @@
 # 从 ARM64 页权限到读取结果：UROV-Z 实现解析与内核 Hook 方案比较
 
+> 历史分析：本文固定到 1.0.0 的提交与当时的外部项目版本。当前 1.2.5 的页表锁、索引、子映射、资源和写入契约请阅读 [当前技术博客](implementation-1.2.5.zh-CN.md) 与 [审计](compatibility-audit-1.2.5.zh-CN.md)，不要将下文旧缺陷列表直接套用于当前代码。
+
 同一段代码，CPU 执行的指令与程序读取到的字节，可以来自不同的视图。
 
-[urov-lab](https://github.com/AndroidReverser-Test/urov-lab) 的 UROV-Z 1.0.0 基线就在验证这件事：保留 Android ARM64 用户进程的原始代码执行路径，为指定代码页的数据读取提供另一份内容。它依托 KernelPatch 运行，通过页权限异常、A64 指令模拟和内核读取路径的补充拦截实现读取覆盖。当前 1.1.0 集成版另见 [源码分析](implementation-1.1.0.zh-CN.md)；本文的版本与对比基线保持不变。
+[urov-lab](https://github.com/AndroidReverser-Test/urov-lab) 的 UROV-Z 1.0.0 基线就在验证这件事：保留 Android ARM64 用户进程的原始代码执行路径，为指定代码页的数据读取提供另一份内容。它依托 KernelPatch 运行，通过页权限异常、A64 指令模拟和内核读取路径的补充拦截实现读取覆盖。后续 1.1.0 集成版另见 [源码分析](implementation-1.1.0.zh-CN.md)；本文的版本与对比基线保持不变。
 
 这篇文章从一次具体读取出发，拆解页表、异常处理、影像更新、内核适配与资源回收，再与 `mkpms/wxshadow`、`xiaojianbang-stealth-hook`、`stealth-core` 和 `Android-hwbp-kernel-hook` 对比。讨论重点是各方案如何改变程序的观察结果，以及为此承担什么代价。
 

@@ -51,14 +51,14 @@ CMake 3.22.1 / Ninja 和工作区 KernelPatch 头文件，重新构建 KPM、API
   AndroidManifest、DEX、native SO 等全部非签名文件内容与原包相同；重打包
   后 APK 文件哈希变化，发布值以附件 `SHA256SUMS` 为准。
 
-[此前实测记录](integration/RESULTS-2026-11-12.md)包含 Pixel 6 / Android 16 /
+[此前实测记录](RESULTS-2026-11-12.md)包含 Pixel 6 / Android 16 /
 Linux 6.1.134 / 4 KiB 环境下，manual/linker 各三轮、30 个 App 报告、7,680 次
 函数调用及原有 73 项 App 回归。**本次发布没有重跑完整注入或覆盖生命周期，
 也没有热卸载/重载设备 KPM。**
 
 ## 使用与边界
 
-请先阅读 [README](README.md)、[当前源码分析](docs/implementation-1.1.0.zh-CN.md)
+请先阅读 [README](../README.md)、[当前源码分析](implementation-1.1.0.zh-CN.md)
 和 [集成说明](INTEGRATION.md)。在 GitHub Release 页面中，这些文档均可从
 [v1.1.0 源码树](https://github.com/AndroidReverser-Test/urov-lab/tree/v1.1.0)访问。
 

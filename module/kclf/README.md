@@ -28,7 +28,7 @@ Integration changes:
 
 The outer entry owns lifecycle flags, and dispatches `ctl0 urov-z kclf,<command>`.
 Build via the repository's `build.ps1`. Both manual and linker backends remain
-available. See [integration analysis](../../INTEGRATION.md) for limits and tests.
+available. See [integration analysis](../../docs/INTEGRATION.md) for limits and tests.
 
 The portable profile regression covers the 5.4 bool, 5.8 int and 5.11+ enum
 task-work notification signatures, both cancellation ABIs, `mmap_sem` /

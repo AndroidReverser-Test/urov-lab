@@ -1,10 +1,24 @@
 # UROV-Z 1.0.0 — 原理与实现 / Design and implementation
 
-> 本文保留 1.0.0 的底层设计和历史验证。当前 1.1.0 已将 KCLF 链入同一 KPM，
-> 默认关闭 native step；完整集成设计与本次证据见 [INTEGRATION.md](INTEGRATION.md)。
+> 本文保留 1.0.0 的底层设计和历史验证。当前 1.2.5 已更新 PTL、连续 PTE、GUP、索引、子映射、资源与写入契约，
+> 具体差异以 [1.2.5 技术博客](implementation-1.2.5.zh-CN.md) 和 [1.2.5 审计](compatibility-audit-1.2.5.zh-CN.md) 为准；集成流程见 [INTEGRATION.md](INTEGRATION.md)。
 > 当前宿主上全局 inactive 不能证明热卸载安全，更新 KPM 使用受控重启。
 > This document retains the 1.0.0 design and historical results. See the integration
-> document for 1.1.0; native step is disabled by default and hot unload is not validated.
+> document and the 1.2.5 audit for current behavior. Native step remains disabled and hot unload is not validated.
+
+### 1.2.5 实现更新 / Current implementation changes
+
+所有 leaf 访问通过 `pt_access.h` 获取 Linux 原生 PTL。5.x/6.x 均优先使用经 BTF 验证的 `apply_to_existing_page_range`，由内核配对 PTL、RCU 和 lockdep；缺失时才考虑受限制的 map-lock 或旧版 allocating callback。mmap trylock 失败时保留原寄存器重试或报告降级，不继续无锁访问。`pt_leaf.h` 在 PTL 内调用经验证的 `__contpte_try_unfold`，由内核拆分连续组并完成 BBM/TLBI，再重新读取目标 PTE 修改 AP；缺少该 helper 时拒绝需要修改的连续 PTE。普通只读检查不拆分连续组。此路径降低对页表锁实现的依赖，不代表整个模块已支持所有 RT/lockdep 配置。
+
+描述符使用稳定槽位，`page_index.h` 原子发布不可变地址索引；mremap 不再移动描述符，旧索引经过 epoch 排空后复用。子快照独立保存映射身份、want/armed/dead/gone；父 SET/保护/unmap 不再改变子状态。涉及受管页的 `MREMAP_DONTUNMAP` 和零旧长度映射复制返回 `EOPNOTSUPP`。移动代码后停用无法继续证明的 LL/SC 分支图。
+
+影像复制、store 发布与 SET 交换在各自描述符上共享短 IRQ 屏蔽锁，取消旧的 bounded-sequence fallback。锁内仅复制内核缓冲和页数据，用户访问、分配及等待在锁外。默认 `writes=rx` 在观察到写入或写权限时退役该页；`writes=experimental` 才启用原辅助写入机制。DC ZVA 从 DCZID_EL0 解码块大小、对齐和 DZP，并检查 SCTLR.DZE；当前 store 缓冲仅模拟 ≤64 字节块，更大块交还 native，不能视为全覆盖。
+
+Native PTL, immutable indices and independent child slots replace the corresponding 1.0.0 implementation described below. The complete native PT callback is preferred across versions; contiguous groups require the verified native unfolding helper before single-PTE writes. Image copies and publication share the short IRQ-disabled lock of their page descriptor. RX is now the default; auxiliary writes require explicit experimental mode. Historical limitation entries below describe the old implementation; remaining limits and current evidence are listed in the 1.2.5 audit. Native refault/rearm windows, arbitrary writers, LL/SC history and host trampoline retirement remain outside a universal transparency guarantee.
+
+1.2.5 为各 owner/child 描述符设置独立影像锁，不同页可独立推进。RX 主缓冲只保留 image/spare/snapshot 三页，experimental 才分配其余四页。`buffer_kb` 在分配前保留覆盖缓冲额度，`fork_copies` 控制子池预留；两项仅可在 inactive 改变，预算不含 KCLF、宿主跳板、allocator 额外开销或 transferred GUP 页。owner/child refault 共用映射身份复核，在同一次 mmap 保护下读取当前 VMA 并访问 PTE，仍存在 native 发布窗口。KCLF 可在加载时关闭或构建时移除。新管理查询和通用 BTF inspector 提供诊断。下文的七页布局及旧页表限制保留为历史描述。
+
+Each descriptor now has its own image lock and RX allocates three main buffers. Resource policy is configurable while inactive; KCLF can be disabled or excluded. Fault rearm validates captured and current file-page identities under one mmap guard. See the 1.2.5 audit for accounting scope and diagnostics; the historical seven-buffer layout below no longer describes RX.
 
 ## 中文
 
@@ -103,7 +117,7 @@ fork 槽在本会话内不循环复用；持续 fork 应分批创建新会话。
 
 ### 7. ABI v1
 
-头文件 [api/include/urov/abi.h](api/include/urov/abi.h) 为唯一线格式定义，`module/abi.h` 仅作包含转发：小端 AArch64，自然 8 字节对齐，184 字节请求、32 字节页描述符，编译期静态断言大小与 MAC 偏移。它与 UROV-Y ABI 不兼容。应用集成使用 [用户态 API](api/README.md)。
+头文件 [api/include/urov/abi.h](../api/include/urov/abi.h) 为唯一线格式定义，`module/abi.h` 仅作包含转发：小端 AArch64，自然 8 字节对齐，184 字节请求、32 字节页描述符，编译期静态断言大小与 MAC 偏移。它与 UROV-Y ABI 不兼容。应用集成使用 [用户态 API](../api/README.md)。
 
 传输为 `syscall(__NR_prctl, option, magic, op, &request, sizeof(request))`。option 为 `uz_derive` 得到的低 32 位，magic 固定为 `0x42414c5a564f5255`（小端 “UROVZLAB”）。用派生 MAC key 对前 176 字节计算 SipHash-2-4。错误 option/magic/size/version/op/MAC 不会执行控制操作，交还原始 prctl，通常得到 EINVAL。
 
@@ -256,7 +270,7 @@ DEACTIVATE returns EBUSY while a retained child mm still has users or native rep
 
 ### 7. Wire protocol
 
-`api/include/urov/abi.h` defines the little-endian, naturally aligned AArch64 ABI; `module/abi.h` forwards to that shared definition. Request size is 184 bytes and descriptor size is 32 bytes, enforced with size/MAC-offset assertions. It is not wire-compatible with Y. Transport is `syscall(__NR_prctl, option, magic, op, &request, sizeof(request))`; option is the derived low 32-bit value, magic is fixed `0x42414c5a564f5255`, and SipHash authenticates the first 176 request bytes. Invalid transport/authentication is passed to native prctl, normally returning EINVAL. Application integrations can use the [standalone C/C++ API](api/README.md).
+`api/include/urov/abi.h` defines the little-endian, naturally aligned AArch64 ABI; `module/abi.h` forwards to that shared definition. Request size is 184 bytes and descriptor size is 32 bytes, enforced with size/MAC-offset assertions. It is not wire-compatible with Y. Transport is `syscall(__NR_prctl, option, magic, op, &request, sizeof(request))`; option is the derived low 32-bit value, magic is fixed `0x42414c5a564f5255`, and SipHash authenticates the first 176 request bytes. Invalid transport/authentication is passed to native prctl, normally returning EINVAL. Application integrations can use the [standalone C/C++ API](../api/README.md).
 
 The offset table above is normative for both language sections. In particular:
 

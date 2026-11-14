@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include "../module/compat.h"
+#include "compat_inspect.h"
 
 struct fixture {
     uint32_t words[512];
@@ -134,12 +135,24 @@ static void test_gup_signatures(void)
     unsigned t = add_type(&f, "task_struct", 4, 0, 8);
     unsigned tp = add_type(&f, NULL, 2, 0, t);
     unsigned p = add_type(&f, NULL, 2, 0, 0);
-    add_func(&f, "pin8", l, 8, (unsigned[]){tp, mp, l, l, i, p, p, p});
-    add_func(&f, "pin7", l, 7, (unsigned[]){mp, l, l, i, p, p, p});
-    add_func(&f, "pin6", l, 6, (unsigned[]){mp, l, l, i, p, p});
-    add_func(&f, "pin_bad", l, 6, (unsigned[]){mp, l, l, l, p, p});
-    add_func(&f, "pin8_bad_order", l, 8, (unsigned[]){mp, tp, l, l, i, p, p, p});
-    add_func(&f, "pin8_bad_width", l, 8, (unsigned[]){tp, mp, l, i, i, p, p, p});
+    unsigned pg = add_type(&f, "page", 4, 0, 64);
+    unsigned pgp = add_type(&f, NULL, 2, 0, pg);
+    unsigned pgpp = add_type(&f, NULL, 2, 0, pgp);
+    unsigned a = add_type(&f, "vm_area_struct", 4, 0, 8);
+    unsigned ap = add_type(&f, NULL, 2, 0, a);
+    unsigned app = add_type(&f, NULL, 2, 0, ap);
+    unsigned ip = add_type(&f, NULL, 2, 0, i);
+    unsigned lp = add_type(&f, NULL, 2, 0, l);
+    add_func(&f, "pin8", l, 8, (unsigned[]){tp, mp, l, l, i, pgpp, app, ip});
+    add_func(&f, "pin7", l, 7, (unsigned[]){mp, l, l, i, pgpp, app, ip});
+    add_func(&f, "pin6", l, 6, (unsigned[]){mp, l, l, i, pgpp, ip});
+    add_func(&f, "pin_bad", l, 6, (unsigned[]){mp, l, l, l, pgpp, ip});
+    add_func(&f, "pin8_bad_order", l, 8, (unsigned[]){mp, tp, l, l, i, pgpp, app, ip});
+    add_func(&f, "pin8_bad_width", l, 8, (unsigned[]){tp, mp, l, i, i, pgpp, app, ip});
+    add_func(&f, "pin_bad_pages", l, 6, (unsigned[]){mp, l, l, i, pgp, ip});
+    add_func(&f, "pin_void_pages", l, 6, (unsigned[]){mp, l, l, i, p, ip});
+    add_func(&f, "pin_bad_vmas", l, 7, (unsigned[]){mp, l, l, i, pgpp, ap, ip});
+    add_func(&f, "pin_bad_locked", l, 6, (unsigned[]){mp, l, l, i, pgpp, lp});
     add_func(&f, "fast_public", i, 4, (unsigned[]){l, i, i, p});
     add_func(&f, "fast_internal", i, 4, (unsigned[]){l, l, i, p});
     struct kclf_btf btf = fixture_btf(&f);
@@ -149,11 +162,113 @@ static void test_gup_signatures(void)
     assert(!uz_remote_gup_argc(&btf, "pin_bad"));
     assert(!uz_remote_gup_argc(&btf, "pin8_bad_order"));
     assert(!uz_remote_gup_argc(&btf, "pin8_bad_width"));
+    assert(!uz_remote_gup_argc(&btf, "pin_bad_pages"));
+    assert(!uz_remote_gup_argc(&btf, "pin_void_pages"));
+    assert(!uz_remote_gup_argc(&btf, "pin_bad_vmas"));
+    assert(!uz_remote_gup_argc(&btf, "pin_bad_locked"));
     assert(!uz_remote_gup_argc(&btf, "missing"));
     assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "fast_public"), "iliip"));
     assert(!uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "fast_public"), "illip"));
     assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "fast_internal"), "illip"));
-    puts("GUP ABI: 6/7/8 arguments, task/mm order, invalid/missing prototypes and count widths PASS");
+    puts("GUP ABI: 6/7/8 arguments, task/mm order, page**/VMA**/int*, missing prototypes and count widths PASS");
+}
+
+static void test_allocator_abi(void)
+{
+    for (unsigned variant = 0; variant < 8; ++variant) {
+        struct fixture f = {.strings_used = 1};
+        unsigned i = add_type(&f, "int", 1, 0, 4);
+        f.words[f.words_used++] = 32;
+        unsigned l = add_type(&f, "long", 1, 0, 8);
+        f.words[f.words_used++] = 64;
+        unsigned pgdat = add_type(&f, "pglist_data", 4, 1, variant == 2 ? 10 : 16);
+        f.words[f.words_used++] = add_name(&f, "node_id");
+        f.words[f.words_used++] = variant == 1 ? l : i;
+        f.words[f.words_used++] = variant == 3 ? 40 : 64;
+        unsigned nodep = add_type(&f, NULL, 2, 0, pgdat);
+        unsigned page = add_type(&f, "page", 4, 0, 64);
+        unsigned pagep = add_type(&f, NULL, 2, 0, page);
+        unsigned p = add_type(&f, NULL, 2, 0, 0);
+        if (variant != 4)
+            add_func(&f, "first_online_pgdat", variant == 5 ? pagep : nodep,
+                     variant == 6 ? 1 : 0, (unsigned[]){i});
+        add_func(&f, "alloc_pages", pagep, 2, (unsigned[]){i, i});
+        add_func(&f, "__alloc_pages_nodemask", pagep, 4, (unsigned[]){i, i, i, p});
+        add_func(&f, "__alloc_pages_noprof", pagep, 4, (unsigned[]){i, i, i, p});
+        add_func(&f, "bad_alloc", pagep, 3, (unsigned[]){i, i, i});
+        add_func(&f, "try_grab_folio", variant == 7 ? i : nodep, 3,
+                 (unsigned[]){pagep, i, i});
+        struct kclf_btf btf = fixture_btf(&f);
+        assert((uz_pgdat_node_offset(&btf) == 8) == (variant == 0 || variant == 7));
+        assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "alloc_pages"), "Pii"));
+        assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "__alloc_pages_nodemask"), "Piiip"));
+        assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "__alloc_pages_noprof"), "Piiip"));
+        assert(!uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "bad_alloc"), "Piiip"));
+        assert(!uz_folio_page_grab_abi(&btf)); /* wrong return pointee or int */
+    }
+    {
+        struct fixture f = {.strings_used = 1};
+        unsigned i = add_type(&f, "int", 1, 0, 4);
+        f.words[f.words_used++] = 32;
+        unsigned page = add_type(&f, "page", 4, 0, 64);
+        unsigned pp = add_type(&f, NULL, 2, 0, page);
+        unsigned folio = add_type(&f, "folio", 4, 0, 128);
+        unsigned fp = add_type(&f, NULL, 2, 0, folio);
+        add_func(&f, "try_grab_folio", fp, 3, (unsigned[]){pp, i, i});
+        struct kclf_btf btf = fixture_btf(&f);
+        assert(uz_folio_page_grab_abi(&btf));
+        assert(!uz_folio_grab_abi(&btf));
+    }
+    puts("Allocator ABI: policy/node entry, online pgdat layout, old/new folio conventions PASS");
+}
+
+static void test_ptl_abi(void)
+{
+    for (unsigned variant = 0; variant < 12; ++variant) {
+        struct fixture f = {.strings_used = 1};
+        unsigned i = add_type(&f, "int", 1, 0, 4);
+        f.words[f.words_used++] = 32;
+        unsigned l = add_type(&f, "long", 1, 0, 8);
+        f.words[f.words_used++] = 64;
+        unsigned m = add_type(&f, "mm_struct", 4, 0, 8);
+        unsigned mp = add_type(&f, NULL, 2, 0, m);
+        unsigned p = add_type(&f, NULL, 2, 0, 0);
+        unsigned pte = add_type(&f, NULL, 4, 1, 8);
+        f.words[f.words_used++] = add_name(&f, "pte");
+        f.words[f.words_used++] = variant == 1 ? i : l;
+        f.words[f.words_used++] = 0;
+        unsigned ptet = add_type(&f, "pte_t", 8, 0, pte);
+        unsigned ptep = add_type(&f, NULL, 2, 0, ptet);
+        unsigned pmd = add_type(&f, NULL, 4, 1, 8);
+        f.words[f.words_used++] = add_name(&f, variant == 2 ? "bad" : "pmd");
+        f.words[f.words_used++] = l;
+        f.words[f.words_used++] = 0;
+        unsigned pmdp = add_type(&f, NULL, 2, 0, pmd);
+        unsigned raw = add_type(&f, "raw_spinlock", 4, 0, 8);
+        unsigned rawp = add_type(&f, NULL, 2, 0, raw);
+        unsigned spin = add_type(&f, "spinlock", 4, 1, 16);
+        f.words[f.words_used++] = add_name(&f, "rlock");
+        f.words[f.words_used++] = variant == 10 ? p : raw;
+        f.words[f.words_used++] = variant == 6 ? 64 : 0;
+        unsigned sp = add_type(&f, NULL, 2, 0, spin);
+        unsigned spp = add_type(&f, NULL, 2, 0, variant == 5 ? rawp : sp);
+        add_func(&f, "__pte_offset_map_lock", variant == 3 ? mp : ptep, 4,
+                 (unsigned[]){mp, pmdp, l, variant == 4 ? sp : spp});
+        add_func(&f, "_raw_spin_unlock", 0, 1, (unsigned[]){variant == 9 ? sp : rawp});
+        unsigned cb = add_type(&f, NULL, 13, variant == 7 ? 4 : 3, i);
+        unsigned argv[] = {variant == 11 ? p : ptep, l, p, p};
+        for (unsigned a = 0; a < (variant == 7 ? 4U : 3U); ++a) {
+            f.words[f.words_used++] = 0;
+            f.words[f.words_used++] = argv[a];
+        }
+        unsigned cbp = add_type(&f, NULL, 2, 0, variant == 8 ? p : cb);
+        add_func(&f, "apply_to_page_range", i, 5, (unsigned[]){mp, l, l, cbp, p});
+        struct kclf_btf btf = fixture_btf(&f);
+        assert(uz_native_pt_abi(&btf) == (variant == 0 || variant == 7 || variant == 8 || variant == 11));
+        assert(uz_apply_pt_abi(&btf, "apply_to_page_range") ==
+               (variant != 1 && variant != 7 && variant != 8 && variant != 11));
+    }
+    puts("PTL ABI: 12 native/callback cases, descriptor pointees, lock indirection and RT rejection PASS");
 }
 
 static void test_folio_grab(void)
@@ -184,6 +299,61 @@ static void test_folio_grab(void)
         assert(!!uz_folio_grab_abi(&btf) == (variant == 0 || variant == 8));
     }
     puts("Folio GUP: complete page at offset zero, pointer/result/count ABI and missing helper PASS");
+}
+
+static void test_contpte_abi(void)
+{
+    for (unsigned variant = 0; variant < 12; ++variant) {
+        struct fixture f = {.strings_used = 1};
+        unsigned i = add_type(&f, "int", 1, 0, 4);
+        f.words[f.words_used++] = 32;
+        unsigned l = add_type(&f, "long", 1, 0, 8);
+        f.words[f.words_used++] = 64;
+        unsigned m = add_type(&f, "mm_struct", 4, 0, 8);
+        unsigned mp = add_type(&f, NULL, 2, 0, m);
+        unsigned pte = add_type(&f, NULL, variant == 3 ? 5 : 4, 1, variant == 4 ? 16 : 8);
+        f.words[f.words_used++] = add_name(&f, variant == 5 ? "pmd" : "pte");
+        f.words[f.words_used++] = variant == 6 ? i : l;
+        f.words[f.words_used++] = variant == 7 ? 8 : 0;
+        unsigned word = add_type(&f, "pte_t", 8, 0, pte);
+        unsigned ptep = add_type(&f, NULL, 2, 0, word);
+        unsigned qualified = add_type(&f, NULL, 10, 0, word);
+        if (variant != 11)
+            add_func(&f, "__contpte_try_unfold", variant == 8 ? i : 0,
+                variant == 9 ? 3 : 4, (unsigned[]){variant == 1 ? ptep : mp,
+                    variant == 2 ? i : l, ptep, variant == 10 ? ptep : qualified});
+        struct kclf_btf btf = fixture_btf(&f);
+        assert(uz_contpte_abi(&btf) == (variant == 0));
+    }
+    puts("Contiguous PTE ABI: 12 by-value/typedef, wrong pointer/width/offset/kind and absent-helper cases PASS");
+}
+
+static void test_fast_gup_abi(void)
+{
+    for (unsigned variant = 0; variant < 6; ++variant) {
+        struct fixture f = {.strings_used = 1};
+        unsigned i = add_type(&f, "int", 1, 0, 4);
+        f.words[f.words_used++] = 32;
+        unsigned l = add_type(&f, "long", 1, 0, 8);
+        f.words[f.words_used++] = 64;
+        unsigned page = add_type(&f, variant == 1 ? "folio" : "page", 4, 0, 64);
+        unsigned p = add_type(&f, NULL, 2, 0, page);
+        unsigned pp = add_type(&f, NULL, 2, 0, p);
+        unsigned ppp = add_type(&f, NULL, 2, 0, pp);
+        unsigned pages = variant == 2 ? p : variant == 3 ? ppp : pp;
+        add_func(&f, "fast", variant == 4 ? l : i, 4,
+            (unsigned[]){l, variant == 5 ? l : i, i, pages});
+        add_func(&f, "fast_internal", variant == 4 ? l : i, 4,
+            (unsigned[]){l, variant == 5 ? i : l, i, pages});
+        add_func(&f, "try_grab_compound_head", variant == 4 ? i : p, 3,
+            (unsigned[]){p, variant == 5 ? l : i, i});
+        struct kclf_btf btf = fixture_btf(&f);
+        assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "fast"), "iliiD") == (variant == 0));
+        assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "fast_internal"), "illiD") == (variant == 0));
+        assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "try_grab_compound_head"), "PPii") ==
+               (variant == 0 || variant == 2 || variant == 3));
+    }
+    puts("Fast GUP ABI: page** and int/long counts; 5.x compound grab pointee/result/count PASS");
 }
 
 static void test_build_id(void)
@@ -235,6 +405,8 @@ static void *read_saved_btf(const char *path, struct kclf_btf *btf, struct uz_la
     assert(!uz_btf_open(btf, data, (size_t)size));
     assert(!uz_layout_from_btf(layout, btf));
     assert(layout->task_fpsimd >= 0 && layout->mmap_lock >= 0 && layout->vma_pgoff_ok);
+    assert(uz_pgdat_node_offset(btf) >= 0);
+    assert(uz_native_pt_abi(btf) || uz_apply_pt_abi(btf, "apply_to_existing_page_range"));
     return data;
 }
 
@@ -252,7 +424,7 @@ static void test_saved_btf(const char *path, const char *fault, int expected_arg
     assert(uz_remote_gup_argc(&btf, "pin_user_pages_remote") == 7);
     if (expected_args == 5) {
         assert(uz_remote_gup_argc(&btf, "__get_user_pages_remote") == 7);
-        assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "internal_get_user_pages_fast"), "illip"));
+        assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "internal_get_user_pages_fast"), "illiD"));
     }
     printf("%s: MM, VMA and FPSIMD layouts; %s/%d PASS\n", path, fault, expected_args);
     free(data);
@@ -279,7 +451,10 @@ static void test_gki_btf(const char *path)
     assert(uz_remote_gup_argc(&btf, "pin_user_pages_remote") == 6);
     assert(uz_remote_gup_argc(&btf, "__get_user_pages") == 6);
     assert(uz_folio_grab_abi(&btf));
-    assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "gup_fast_fallback"), "illip"));
+    assert(uz_native_pt_abi(&btf));
+    assert(uz_apply_pt_abi(&btf, "apply_to_existing_page_range"));
+    assert(uz_contpte_abi(&btf));
+    assert(uz_btf_signature(&btf, kclf_btf_func_proto(&btf, "gup_fast_fallback"), "illiD"));
     assert(uz_btf_enum_flag(&btf, "FOLL_PIN", 0) == 0x80000U);
     assert(uz_btf_enum_flag(&btf, "FOLL_FAST_ONLY", 0) == 0x100000U);
     assert(uz_btf_enum_flag(&btf, "FOLL_GET", 0) == 2U);
@@ -291,9 +466,14 @@ static void test_gki_btf(const char *path)
 
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "--inspect")) return inspect_main(argc, argv);
     test_signatures();
     test_gup_signatures();
     test_folio_grab();
+    test_allocator_abi();
+    test_ptl_abi();
+    test_contpte_abi();
+    test_fast_gup_abi();
     test_gup_flags();
     test_build_id();
     test_geometry();

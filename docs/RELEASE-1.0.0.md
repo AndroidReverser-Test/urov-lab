@@ -55,7 +55,7 @@
 | `urov-z.kpm` | 233760 | `5a35a8b74f49b55d1e6168c087aee173dd6a519d1557f2ea4c4a62c5f53ae9b7` |
 | `urov-z-test.apk` | 29146 | `39edd5a0301529bc0ec019778a95ceb921f1d687e164bc8f942081c8d9061ddd` |
 
-下载入口：[UROV-Z 1.0.0 Release](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.0.0)。附带 `SHA256SUMS` 与 `validation.txt`。APK 是本地 debug 测试签名，签名私钥、模块密钥、设备 superkey、设备专用 BTF 不发布。加载与测试命令见 [README.md](README.md)。
+下载入口：[UROV-Z 1.0.0 Release](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.0.0)。附带 `SHA256SUMS` 与 `validation.txt`。APK 是本地 debug 测试签名，签名私钥、模块密钥、设备 superkey、设备专用 BTF 不发布。加载与测试命令见 [README.md](../README.md)。
 
 ## 尚存限制
 

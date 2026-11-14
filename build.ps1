@@ -1,7 +1,9 @@
 param(
     [string]$KernelPatchRoot = (Join-Path $PSScriptRoot '..\..'),
     [string]$Ndk = $env:ANDROID_NDK_HOME,
-    [switch]$Diagnostics
+    [switch]$Diagnostics,
+    [switch]$OverlayOnly,
+    [string]$OutDir = (Join-Path $PSScriptRoot 'out')
 )
 $ErrorActionPreference = 'Stop'
 if (!$Ndk) { throw 'Pass -Ndk <Android NDK directory> or set ANDROID_NDK_HOME.' }
@@ -9,7 +11,7 @@ $KernelPatchRoot = [IO.Path]::GetFullPath($KernelPatchRoot)
 $bin = Join-Path $Ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin'
 $clang = Join-Path $bin 'clang.exe'
 $linker = Join-Path $bin 'ld.lld.exe'
-$out = Join-Path $PSScriptRoot 'out'
+$out = [IO.Path]::GetFullPath($OutDir)
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 if (!(Test-Path (Join-Path $KernelPatchRoot 'kernel\include\kpmodule.h'))) {
     throw 'KernelPatchRoot must contain the KernelPatch kernel headers.'
@@ -22,6 +24,7 @@ $flags = @('--target=aarch64-none-elf','-std=gnu11','-O2','-Wall','-Wextra','-We
     '-fno-unwind-tables','-mgeneral-regs-only','-mno-outline-atomics','-ffixed-x18')
 $objects = @()
 if ($Diagnostics) { $flags += '-DUROV_Z_DIAGNOSTICS=1' }
+if ($OverlayOnly) { $flags += '-DUROV_Z_WITH_KCLF=0' }
 foreach ($name in @('decode','emulate','core_selftest','backend','urov_z')) {
     $object = Join-Path $out ($name + '.o')
     & $clang @flags @includes -c (Join-Path $PSScriptRoot "module\$name.c") -o $object
@@ -32,13 +35,15 @@ $kclfDir = Join-Path $PSScriptRoot 'module\kclf'
 # KCLF includes KP cache.h, whose existing CurrentEL inline helper triggers
 # Clang's operand-width warning. Keep that compatibility exception scoped to
 # these vendor units; do not modify the user's KernelPatch headers.
-foreach ($name in @('kclf','kclf_exec','kclf_compat','kclf_elf','kclf_manual','kclf_codegen')) {
-    $object = Join-Path $out ($name + '.o')
-    & $clang @flags @includes ('-I' + $kclfDir) -DUROV_KCLF_EMBEDDED `
-        -Wno-unused-parameter -Wno-asm-operand-widths -fno-strict-aliasing `
-        -c (Join-Path $kclfDir "$name.c") -o $object
-    if ($LASTEXITCODE -ne 0) { throw "Compile failed for $name" }
-    $objects += $object
+if (!$OverlayOnly) {
+    foreach ($name in @('kclf','kclf_exec','kclf_compat','kclf_elf','kclf_manual','kclf_codegen')) {
+        $object = Join-Path $out ($name + '.o')
+        & $clang @flags @includes ('-I' + $kclfDir) -DUROV_KCLF_EMBEDDED `
+            -Wno-unused-parameter -Wno-asm-operand-widths -fno-strict-aliasing `
+            -c (Join-Path $kclfDir "$name.c") -o $object
+        if ($LASTEXITCODE -ne 0) { throw "Compile failed for $name" }
+        $objects += $object
+    }
 }
 & $linker -r -o (Join-Path $out 'urov-z.kpm') @objects
 if ($LASTEXITCODE -ne 0) { throw 'KPM link failed' }

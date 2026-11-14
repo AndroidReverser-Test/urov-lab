@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="730" viewBox="0 0 1280 730" role="img" aria-label="01  同一个虚拟地址，两种访问方式">
+<title>01  同一个虚拟地址，两种访问方式</title>
+<rect x="0" y="0" width="1280" height="730" rx="0" fill="#f4f7fb" stroke="#f4f7fb" stroke-width="2"/>
+<text x="48" y="64" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="32" font-weight="700" fill="#102740">01  同一个虚拟地址，两种访问方式</text>
+<text x="48" y="101" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#516477">UROV-Z 只改变已支持的读取结果；CPU 仍执行真实映射中的代码。</text>
+<rect x="48" y="151" width="322" height="157" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="48" y="151" width="7" height="157" rx="3" fill="#295aad" stroke="#295aad" stroke-width="2"/>
+<text x="71" y="192" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#295aad">真实文件代码页</text>
+<text x="71" y="229" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">物理页仍映射在原地址</text>
+<text x="71" y="262" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">可能已经包含 Dobby 补丁</text>
+<rect x="470" y="151" width="320" height="157" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="470" y="151" width="7" height="157" rx="3" fill="#295aad" stroke="#295aad" stroke-width="2"/>
+<text x="493" y="192" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#295aad">CPU 取指 / 函数调用</text>
+<text x="493" y="229" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">保留页的执行权限</text>
+<text x="493" y="262" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">按照真实机器码运行</text>
+<rect x="891" y="151" width="341" height="157" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="891" y="151" width="7" height="157" rx="3" fill="#295aad" stroke="#295aad" stroke-width="2"/>
+<text x="914" y="192" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#295aad">真实执行结果</text>
+<text x="914" y="229" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">补丁前：基线返回值</text>
+<text x="914" y="262" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">补丁后：修改后的返回值</text>
+<polyline points="370,227 470,227" fill="none" stroke="#295aad" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="470,227 458.7416697508023,233.5 458.7416697508023,220.5" fill="#295aad"/>
+<polyline points="790,227 891,227" fill="none" stroke="#295aad" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="891,227 879.7416697508023,233.5 879.7416697508023,220.5" fill="#295aad"/>
+<rect x="48" y="414" width="322" height="157" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="48" y="414" width="7" height="157" rx="3" fill="#b26a1f" stroke="#b26a1f" stroke-width="2"/>
+<text x="71" y="455" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#b26a1f">应用将同页当作数据</text>
+<text x="71" y="492" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">LDR、memcpy、CRC 等</text>
+<text x="71" y="525" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">PTE_USER / AP[1] = 0</text>
+<rect x="470" y="414" width="320" height="157" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="470" y="414" width="7" height="157" rx="3" fill="#b26a1f" stroke="#b26a1f" stroke-width="2"/>
+<text x="493" y="455" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#b26a1f">权限异常 → load 模拟</text>
+<text x="493" y="492" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">验证映射和指令</text>
+<text x="493" y="525" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">从内核 image 中取字节</text>
+<rect x="891" y="414" width="341" height="157" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="891" y="414" width="7" height="157" rx="3" fill="#b26a1f" stroke="#b26a1f" stroke-width="2"/>
+<text x="914" y="455" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#b26a1f">替代读取结果</text>
+<text x="914" y="492" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">写回 GPR / FPSIMD</text>
+<text x="914" y="525" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">受支持的 load 继续执行</text>
+<polyline points="370,490 470,490" fill="none" stroke="#b26a1f" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="470,490 458.7416697508023,496.5 458.7416697508023,483.5" fill="#b26a1f"/>
+<polyline points="790,490 891,490" fill="none" stroke="#b26a1f" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="891,490 879.7416697508023,496.5 879.7416697508023,483.5" fill="#b26a1f"/>
+<polyline points="209,308 209,400" fill="none" stroke="#71889e" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="209,400 202.5,388.7416697508023 215.5,388.7416697508023" fill="#71889e"/>
+<text x="237" y="363" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#64748b">相同页地址</text>
+<rect x="48" y="623" width="1184" height="62" rx="10" fill="#e8eff7" stroke="#e8eff7" stroke-width="2"/>
+<text x="69" y="661" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#4d6277">image 位于模块管理的内核缓冲；它没有被映射为 CPU 的取指页。</text>
+</svg>

@@ -102,11 +102,12 @@ int kclf_compat_init(void)
     /* Upstream 5.8 already has the integer TWA_SIGNAL ABI. Older bool
      * implementations only understand RESUME=1. Do not pass 2 to those. */
     kclf_wake_supported = kver >= VERSION(5, 8, 0);
-    /* TIF_* are macros, not BTF data. arm64 lazy preemption moved UPROBE
-     * from bit 4 to bit 5 in 6.16. Do not use the build host's old headers.
-     * A vendor that backports this renumbering needs its own verified profile. */
+    /* TIF_* are macros, not BTF data. Vendors can backport the 6.16 UPROBE
+     * move (4 -> 5) without changing their release number. Reject both bits
+     * at an injection boundary: the extra lazy-resched/FSCHECK rejection is
+     * conservative, whereas missing an active uprobe is unsafe. */
     kclf_trace_mask = (1ULL << 8) | (1ULL << 12) | (1ULL << 21) |
-                      (1ULL << (kver >= VERSION(6, 16, 0) ? 5 : 4));
+                      (1ULL << 4) | (1ULL << 5);
     /* Bit 27 is reserved before SME; checking it unconditionally also covers
      * vendor SME backports. The generated code only preserves base FPSIMD. */
     kclf_vector_mask = (1ULL << 23) | (1ULL << 27);

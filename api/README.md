@@ -19,7 +19,7 @@
 .\api\build.ps1 -Ndk D:\androidSDK\ndk\26.1.10909125
 ```
 
-输出 `out/api/liburov.a`、`liburov.so`、`urov-query`。链接同时设置 `max-page-size=16384` 和 `common-page-size=16384`，覆盖 ELF LOAD 与 GNU_RELRO 页对齐；CMake 接入也会把这两个选项传给链接 `urov` 的目标。这只代表二进制布局支持，不代表模块在所有 16 KB 内核上通过运行验证；要求依据见 [Android 官方 16 KB 指南](https://developer.android.com/guide/practices/page-sizes)。
+输出 `out/api/liburov.a`、`liburov.so`、`urov-query`。当前 NDK r26 构建使用 `max-page-size=16384`、`common-page-size=4096`：保持 16 KB LOAD 对齐，避免旧 Android linker 对 RELRO 尾部未映射空隙执行 mprotect 而失败。CMake 接入也会传递这两个选项。用 `python tests/check_elf.py <产物路径>` 检查 4 KB/16 KB 下 RELRO 完整映射且不覆盖可变数据；换 NDK 或链接布局后应重查，不能只检查 LOAD 的 `p_align`。本轮 16 KB 是布局与模型验证，非实机结论。具体复现及与官方通用建议的区别见 [1.2.4 审计](../docs/compatibility-audit-1.2.4.zh-CN.md)。
 
 应用 CMake 接入：
 
@@ -126,14 +126,16 @@ UROV 只替换受支持的数据读取结果，不负责安装 Dobby hook，也�
 
 当前验证目标是本仓库带有 NOP 入口的 ARM64 测试函数：manual/linker 各 3 轮，参数和返回值修改、直接读取、`process_vm_readv`、`/proc/self/mem` CRC 均通过。该结果不证明任意函数的 literal、独占/原子序列、并发改映射或任意 Dobby 版本都可透明运行。
 
-随仓库恢复的 Dobby 版本中，可选 SymbolResolver 插件与 `RuntimeModule` 定义不一致，测试构建关闭了 `Plugin.SymbolResolver`，由测试 App 提供目标函数地址；不要据此假设 `DobbySymbolResolver` 已构建或验证。实现示例见 [payload.c](../integration/payload.c)，完整说明见 [集成设计](../INTEGRATION.md) 和 [实测记录](../integration/RESULTS-2026-11-12.md)。
+随仓库恢复的 Dobby 版本中，可选 SymbolResolver 插件与 `RuntimeModule` 定义不一致，测试构建关闭了 `Plugin.SymbolResolver`，由测试 App 提供目标函数地址；不要据此假设 `DobbySymbolResolver` 已构建或验证。实现示例见 [payload.c](../integration/payload.c)，完整说明见 [集成设计](../docs/INTEGRATION.md) 和 [实测记录](../docs/RESULTS-2026-11-12.md)。
 
 ## 使用边界
 
-会话是进程地址空间所有，当前实现全局最多一个会话；client 对象本身没有独立内核句柄。fork 子进程可以继承快照，但不能用复制的 client 控制父进程会话。`QUERY/STATUS` 仅反映调用者的视图，全局状态使用 root 的 `kpm ctl0 urov-z status` 查询。存活的子快照使注销返回 `-EBUSY`。全局 inactive 不证明 hook 跳板已排空；当前 1.1.0 集成测试不热卸载 KPM，详见 [集成生命周期](../INTEGRATION.md)。
+会话是进程地址空间所有，当前实现全局最多一个会话；client 对象本身没有独立内核句柄。fork 子进程可以继承快照，但不能用复制的 client 控制父进程会话。`QUERY/STATUS` 仅反映调用者的视图，全局状态使用 root 的 `kpm ctl0 urov-z status` 查询。存活的子快照使注销返回 `-EBUSY`。全局 inactive 不证明 hook 跳板已排空；当前 1.1.0 集成测试不热卸载 KPM，详见 [集成生命周期](../docs/INTEGRATION.md)。
 
 输入目标/影像地址必须未带标签；MTE、带标签的外部 ABI 指针、AArch32、SVE/SME load 不在验证范围。API 对自己分配的描述符地址去除 Android heap top-byte tag，不承诺支持任意 MTE 内存。不要把库中的 4096 常量当作设备页大小，读取 `info.page_shift`。
 
 typed API 每次创建全新请求，避免把响应里的 capability 等字段带回 REGISTER。低层 `urov_call` 会设置 size/version/MAC，但保留其他字段以支持协议测试；调用前必须用 `urov_request_init`，填入本次操作需要的输入字段。`request_id` 只是回显关联值，不是防重放 nonce。
 
-模块缺失和密钥错误通常都返回 `-EINVAL`。能力标志表示模块可安装的路径，厂商内核优化仍需要实际测试；不会自动将不支持的读取伪装成成功。测试 App 的 73 项回归已接入此 API，见 [审查报告](../AUDIT.md)；页表锁、映射并发与写入/原子操作的限制仍然适用。
+模块缺失和密钥错误通常都返回 `-EINVAL`。能力标志表示模块可安装的路径，厂商内核优化仍需要实际测试；不会自动将不支持的读取伪装成成功。测试 App 的 73 项回归已接入此 API。
+
+1.2.3 默认 `writes=rx`：受管页变为可写或经过受监测的内核路径写入后退役，读取恢复原生值，后续 SET 返回 `-ESTALE`。注销再注册才能重新覆盖。辅助写入实验可由认证 KPM 管理控制在 inactive 时切换 `writes=experimental`；UAPI 结构与 ABI 版本不变。映射事务竞争仍可使 API 返回 `-EBUSY`，调用者可重试；最终 copy-out 的 `-EFAULT` 不应盲目重试。新的并发实现和剩余边界见 [1.2.3 审计](../docs/compatibility-audit-1.2.3.zh-CN.md)。

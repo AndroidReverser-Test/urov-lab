@@ -1,6 +1,6 @@
 # UROV-Z 1.2.1 多页读取优化实现与验证
 
-实施及验证日期：2026-11-13 至 2026-11-14（客户端日期）。基线为 `7976445` / 1.2.0；此前的[性能分析](performance-analysis-1.2.0.zh-CN.md)保留原样。1.2.1 发布说明见 [RELEASE-1.2.1.md](../RELEASE-1.2.1.md)。
+实施及验证日期：2026-11-13 至 2026-11-14（客户端日期）。基线为 `7976445` / 1.2.0；此前的[性能分析](performance-analysis-1.2.0.zh-CN.md)保留原样。1.2.1 发布说明见 [RELEASE-1.2.1.md](RELEASE-1.2.1.md)。
 
 ## 实现与瓶颈
 
@@ -97,7 +97,7 @@ REGISTER 为 RX 文件页建立真实 snapshot 和替代 image，清 PTE_USER/AP
 
 普通构建关闭诊断。需要归因时加 `-Diagnostics` 构建单独 KPM，受控重启加载后运行 `kpm ctl0 urov-z perf`。字段是模块驻留期间累计计数，注销后仍可读取；`code_valid/code_complete` 是当前会话状态，inactive 时为 0。没有 reset 命令，区间计数使用前后差。`status/selftest` 和用户态 ABI 不变。
 
-`out/tests/insn-scan-test` 可独立在设备执行；`out/tests/perf-device` 需要加载模块并使用公开的固定项目测试密钥。只在没有活动 owner 测试时执行。原有 App 和注入 App 的运行入口见 [INTEGRATION.md](../INTEGRATION.md)。
+`out/tests/insn-scan-test` 可独立在设备执行；`out/tests/perf-device` 需要加载模块并使用公开的固定项目测试密钥。只在没有活动 owner 测试时执行。原有 App 和注入 App 的运行入口见 [INTEGRATION.md](INTEGRATION.md)。
 
 最终 KPM SHA-256：`6f2661f6147a902f9cab7af16ad75c63762cc19ee898a9c6214ec8cfb0bc284c`。
 

@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="900" viewBox="0 0 1280 900" role="img" aria-label="02  一个控制会话，四条读取通路">
+<title>02  一个控制会话，四条读取通路</title>
+<rect x="0" y="0" width="1280" height="900" rx="0" fill="#f4f7fb" stroke="#f4f7fb" stroke-width="2"/>
+<text x="48" y="64" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="32" font-weight="700" fill="#102740">02  一个控制会话，四条读取通路</text>
+<text x="48" y="101" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#516477">功能由运行时 caps 决定；Linux 原有的权限检查和引用约定仍需成立。</text>
+<rect x="48" y="142" width="544" height="153" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="48" y="142" width="7" height="153" rx="3" fill="#634c9f" stroke="#634c9f" stroke-width="2"/>
+<text x="71" y="183" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#634c9f">管理员控制：KernelPatch ctl0</text>
+<text x="71" y="220" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">模块管理 / status / health / memory / compat</text>
+<text x="71" y="253" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">可选 KCLF：目标线程中的 SO 加载</text>
+<rect x="640" y="142" width="592" height="153" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="640" y="142" width="7" height="153" rx="3" fill="#634c9f" stroke="#634c9f" stroke-width="2"/>
+<text x="663" y="183" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#634c9f">应用控制：带 MAC 的 prctl</text>
+<text x="663" y="220" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">QUERY → REGISTER → SET_PAGE → DEACTIVATE</text>
+<text x="663" y="253" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">绑定一个 owner mm；fork 使用独立子快照</text>
+<polyline points="935,295 935,332" fill="none" stroke="#634c9f" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="935,332 928.5,320.7416697508023 941.5,320.7416697508023" fill="#634c9f"/>
+<rect x="48" y="332" width="1184" height="83" rx="14" fill="#e5f0fa" stroke="#bed3e7" stroke-width="2"/>
+<text x="77" y="372" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#215887">会话与读取影像</text>
+<text x="360" y="375" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#215887">固定页槽 + 地址索引 + image / snapshot + 每页锁 + reader epoch</text>
+<polyline points="184,415 184,466" fill="none" stroke="#71889e" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="184,466 177.5,454.7416697508023 190.5,454.7416697508023" fill="#71889e"/>
+<rect x="48" y="466" width="272" height="172" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="48" y="466" width="7" height="172" rx="3" fill="#1e7e9c" stroke="#1e7e9c" stroke-width="2"/>
+<text x="71" y="507" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#1e7e9c">EL0 数据 load</text>
+<text x="71" y="543" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">权限异常进入后端</text>
+<text x="71" y="576" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">解码并提交寄存器</text>
+<polyline points="488,415 488,466" fill="none" stroke="#71889e" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="488,466 481.5,454.7416697508023 494.5,454.7416697508023" fill="#71889e"/>
+<rect x="352" y="466" width="272" height="172" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="352" y="466" width="7" height="172" rx="3" fill="#1e7e9c" stroke="#1e7e9c" stroke-width="2"/>
+<text x="375" y="507" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#1e7e9c">proc / ptrace</text>
+<text x="375" y="543" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">native 读取成功后</text>
+<text x="375" y="576" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">覆盖返回缓冲</text>
+<polyline points="792,415 792,466" fill="none" stroke="#71889e" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="792,466 785.5,454.7416697508023 798.5,454.7416697508023" fill="#71889e"/>
+<rect x="656" y="466" width="272" height="172" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="656" y="466" width="7" height="172" rx="3" fill="#1e7e9c" stroke="#1e7e9c" stroke-width="2"/>
+<text x="679" y="507" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#1e7e9c">process_vm_readv</text>
+<text x="679" y="543" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">remote GUP 后</text>
+<text x="679" y="576" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">替换页数组项</text>
+<polyline points="1096,415 1096,466" fill="none" stroke="#71889e" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1096,466 1089.5,454.7416697508023 1102.5,454.7416697508023" fill="#71889e"/>
+<rect x="960" y="466" width="272" height="172" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="960" y="466" width="7" height="172" rx="3" fill="#1e7e9c" stroke="#1e7e9c" stroke-width="2"/>
+<text x="983" y="507" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#1e7e9c">fast GUP / vmsplice</text>
+<text x="983" y="543" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">普通 GET 路径</text>
+<text x="983" y="576" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#17324d">交付新影像页</text>
+<text x="74" y="694" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#17324d">路径边界</text>
+<text x="74" y="736" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#17324d">内核代读先保留 native 权限判断；GET 与 PIN 记账分别处理。</text>
+<text x="74" y="771" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#17324d">fast-GUP 排除 PIN / LONGTERM / FAST_ONLY；remote readv 使用受控上下文。</text>
+<rect x="48" y="814" width="1184" height="62" rx="10" fill="#e8eff7" stroke="#e8eff7" stroke-width="2"/>
+<text x="69" y="852" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#4d6277">all-callers 表示不按调用 PC 筛选已支持的读者，不等于所有系统读通路都受覆盖。</text>
+</svg>

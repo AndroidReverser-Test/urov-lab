@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-/* PAGE_AP / all-callers control ABI. See DESIGN.md for field semantics. */
+/* PAGE_AP / all-callers control ABI. See docs/DESIGN.md for field semantics. */
 #ifndef UROV_Z_ABI_H
 #define UROV_Z_ABI_H
 

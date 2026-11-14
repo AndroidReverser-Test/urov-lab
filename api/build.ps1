@@ -13,11 +13,11 @@ Check 'API compilation'
 & (Join-Path $bin 'llvm-ar.exe') rcs (Join-Path $out 'liburov.a') $object
 Check 'API static library'
 & (Join-Path $bin 'clang.exe') --target=aarch64-linux-android26 -shared $object `
-    '-Wl,-z,max-page-size=16384' '-Wl,-z,common-page-size=16384' `
+    '-Wl,-z,max-page-size=16384' '-Wl,-z,common-page-size=4096' `
     '-Wl,-soname,liburov.so' -o (Join-Path $out 'liburov.so')
 Check 'API shared library'
 & (Join-Path $bin 'clang.exe') @flags (Join-Path $PSScriptRoot 'examples\query.c') `
-    (Join-Path $out 'liburov.a') '-Wl,-z,max-page-size=16384' '-Wl,-z,common-page-size=16384' `
+    (Join-Path $out 'liburov.a') '-Wl,-z,max-page-size=16384' '-Wl,-z,common-page-size=4096' `
     -o (Join-Path $out 'urov-query')
 Check 'API example'
 Get-FileHash -Algorithm SHA256 (Join-Path $out 'liburov.a'),(Join-Path $out 'liburov.so')

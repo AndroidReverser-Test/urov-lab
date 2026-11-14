@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="960" viewBox="0 0 1280 960" role="img" aria-label="04  SET 发布：内容一致性与对象寿命分开保护">
+<title>04  SET 发布：内容一致性与对象寿命分开保护</title>
+<rect x="0" y="0" width="1280" height="960" rx="0" fill="#f4f7fb" stroke="#f4f7fb" stroke-width="2"/>
+<text x="48" y="64" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="32" font-weight="700" fill="#102740">04  SET 发布：内容一致性与对象寿命分开保护</text>
+<text x="48" y="101" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#516477">每页锁保护一次复制；reader epoch 保护旧缓冲，直到先前读者全部离开。</text>
+<rect x="48" y="145" width="350" height="156" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="48" y="145" width="7" height="156" rx="3" fill="#634c9f" stroke="#634c9f" stroke-width="2"/>
+<text x="71" y="186" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#634c9f">控制写者：准备 spare</text>
+<text x="71" y="223" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">校验 expected_generation</text>
+<text x="71" y="256" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">锁外复制用户的新窗口</text>
+<rect x="465" y="145" width="350" height="156" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="465" y="145" width="7" height="156" rx="3" fill="#634c9f" stroke="#634c9f" stroke-width="2"/>
+<text x="488" y="186" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#634c9f">页锁内：形成完整影像</text>
+<text x="488" y="223" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">从 snapshot 合并窗口外</text>
+<text x="488" y="256" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">交换 image 与 spare 指针</text>
+<rect x="882" y="145" width="350" height="156" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<rect x="882" y="145" width="7" height="156" rx="3" fill="#634c9f" stroke="#634c9f" stroke-width="2"/>
+<text x="905" y="186" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="700" fill="#634c9f">释放页锁后：等待旧组</text>
+<text x="905" y="223" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">翻转 reader epoch</text>
+<text x="905" y="256" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#17324d">旧读者排空后再复用缓冲</text>
+<polyline points="398,222 465,222" fill="none" stroke="#634c9f" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="465,222 453.7416697508023,228.5 453.7416697508023,215.5" fill="#634c9f"/>
+<polyline points="815,222 882,222" fill="none" stroke="#634c9f" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="882,222 870.7416697508023,228.5 870.7416697508023,215.5" fill="#634c9f"/>
+<rect x="48" y="372" width="1184" height="369" rx="14" fill="#ffffff" stroke="#c4d2df" stroke-width="2"/>
+<text x="72" y="417" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="22" font-weight="700" fill="#17324d">时间向右推进</text>
+<polyline points="264,422 1190,422" fill="none" stroke="#64748b" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="1190,422 1178.7416697508022,428.5 1178.7416697508022,415.5" fill="#64748b"/>
+<text x="76" y="497" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="22" font-weight="400" fill="#17324d">epoch A 旧读者</text>
+<rect x="310" y="472" width="460" height="58" rx="8" fill="#dceaf9" stroke="#95b5d8" stroke-width="2"/>
+<text x="332" y="506" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#295aad">进入 → 使用旧引用 → 退出</text>
+<text x="76" y="595" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="22" font-weight="400" fill="#17324d">epoch B 新读者</text>
+<rect x="646" y="570" width="541" height="58" rx="8" fill="#e0f1ea" stroke="#93bba8" stroke-width="2"/>
+<text x="668" y="604" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#276c53">翻转后进入 → 使用新视图 → 继续</text>
+<polyline points="646,437 646,554" fill="none" stroke="#634c9f" stroke-width="3" stroke-linejoin="round"/>
+<polygon points="646,554 639.5,542.7416697508023 652.5,542.7416697508023" fill="#634c9f"/>
+<text x="662" y="458" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="18" font-weight="400" fill="#634c9f">发布 / 翻转</text>
+<text x="778" y="507" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="18" font-weight="400" fill="#634c9f">A 排空后，旧 image 才成为可写 spare</text>
+<text x="76" y="697" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#17324d">页锁：同页复制串行，不同页可并行；不在锁内等待读者或执行分配。</text>
+<rect x="48" y="788" width="1184" height="62" rx="10" fill="#e8eff7" stroke="#e8eff7" stroke-width="2"/>
+<text x="69" y="826" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#4d6277">固定页槽不随 mremap 排序搬动；只原子发布新的 {base, slot} 地址索引，再回收旧索引。</text>
+<text x="72" y="903" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#516477">保证边界：一次页内复制保持一致；跨页、多指令和整个 CRC 不形成统一事务。</text>
+</svg>

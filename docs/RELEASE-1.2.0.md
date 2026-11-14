@@ -16,7 +16,7 @@
 
 附件包括 `urov-z.kpm`、`urov-injection-test.apk`（UROV CRC Lab）、
 `urov-z-test.apk`（原有回归）、`SHA256SUMS` 和 `BUILD-INFO.txt`。
-SO 已打包进 APK，无需单独复制。简要操作见 [README](README.md#复测流程无需-powershell-脚本)，实现细节见 [INTEGRATION.md](INTEGRATION.md)。
+SO 已打包进 APK，无需单独复制。简要操作见 [README](../README.md#复测流程无需-powershell-脚本)，实现细节见 [INTEGRATION.md](INTEGRATION.md)。
 
 设备 kpatch SuperKey 由用户在界面输入。公开固定测试密钥为
 `59f5c4618474864a61d5469295548064`（MD5 of UTF-8 urov-lab，无换行）。

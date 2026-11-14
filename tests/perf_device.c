@@ -158,6 +158,24 @@ int main(void)
     } else {
         puts("SKIP LSE: CPU does not advertise HWCAP_ATOMICS");
     }
+    /* The address operand may point anywhere inside a DC ZVA block. Check
+     * the runtime geometry and its neighbours, not a hard-coded cache line. */
+    uint64_t dczid;
+    __asm__ volatile("mrs %0, dczid_el0" : "=r"(dczid));
+    unsigned zva_bytes = 4U << (dczid & 15U);
+    if (!(dczid & ~UINT64_C(15)) && zva_bytes >= 8U && zva_bytes <= 64U) {
+        unsigned char *block = perf_pages + 1024;
+        CHECK(!mprotect(perf_pages, page, PROT_READ | PROT_WRITE | PROT_EXEC));
+        __asm__ volatile("dc zva, %0; dsb ish" :: "r"(block + zva_bytes / 2U + 1U) : "memory");
+        for (unsigned i = 0; i < zva_bytes; i += 8U) CHECK(perf_read(block + i) == 0);
+        CHECK(perf_read(block - 8) == UINT64_C(0x6a6a6a6a6a6a6a6a));
+        CHECK(perf_read(block + zva_bytes) == UINT64_C(0x6a6a6a6a6a6a6a6a));
+        CHECK(!mprotect(perf_pages, page, PROT_READ | PROT_EXEC));
+        printf("PASS DC ZVA runtime_block=%u unaligned_operand and untouched neighbours\n", zva_bytes);
+    } else {
+        printf("SKIP DC ZVA emulation: dczid=%" PRIx64 " block=%u outside this test's 8..64-byte range\n",
+               dczid, zva_bytes);
+    }
     CHECK(!urov_get_status(&client, &status) && status.failures == 0);
     CHECK(!urov_deactivate(&client));
     active = 0;

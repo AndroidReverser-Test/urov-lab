@@ -1,6 +1,8 @@
 # UROV / KCLF / Dobby 实现与应用内复测
 
-当前测试流程（2026-11-13）：**10 个独立页面上的 Dobby hook、三通道 CRC、4 线程压力测试、模块/覆盖前后耗时对比**。测试直接在 **UROV CRC Lab** 中运行，结果通过内存、Binder 和 logcat 显示。构建仍使用 build.ps1；复测不需要 PowerShell 脚本，不生成报告、命令、上下文地址或密钥文件。历史单页结果见 integration/RESULTS-2026-11-12.md，不代表当前十页测试。
+当前测试流程：**10 个独立页面上的 Dobby hook、三通道 CRC、4 线程压力测试、模块/覆盖前后耗时对比**。测试直接在 **UROV CRC Lab** 中运行，结果通过内存、Binder 和 logcat 显示。构建仍使用 build.ps1；复测不需要 PowerShell 脚本，不生成报告、命令、上下文地址或密钥文件。1.2.5 的资源/并发优化与 Pixel 6 / 6.1 实机范围见 [审计](compatibility-audit-1.2.5.zh-CN.md)，机制详解见 [当前技术博客](implementation-1.2.5.zh-CN.md)。集成测试需要完整构建且 `loader=on`（默认）。历史单页结果见 [2026-11-12 记录](RESULTS-2026-11-12.md)，不代表当前十页测试。本文命令和代码路径均以仓库根目录为基准。
+
+1.2.3 的集成回归使用默认 `writes=rx`。Dobby 在注册前完成代码修改，注销后再撤销 hook，符合该契约。若先运行过写入专项，必须在 inactive 时用 `kpm ctl0 urov-z writes=rx` 恢复默认。当前实现和最终验证见 [1.2.3 审计](compatibility-audit-1.2.3.zh-CN.md)。
 
 ## 框架的实际实现
 
@@ -59,7 +61,7 @@ CRC、返回值和简短计时使用独立内存快照传到界面，最近日�
 
 使用 CLOCK_MONOTONIC 纳秒计时，统一转换为微秒。每个阶段每通道 2 次预热、9 次正式采样；每轮轮换通道顺序，每个样本核对 CRC。仅输出三通道的前/后中位数，每组比较一行 TIME；不再逐阶段输出均值、最小值、P95、差值和百分比。
 
-计时范围是一次完整 executable PT_LOAD 的读取与 CRC。直接通道用明确的 LD1 四向量指令每次取 64 字节，再软件计算 IEEE CRC32，尾部按字节读取。1.2.1 起内核辅助通道使用每线程独立、预分配并预触页的 64 KiB 缓冲区加 zlib CRC32，逐次消费短读并重试 EINTR；proc 通道仍计入 open/close。204,608 字节范围的用户态 syscall 数由 50 次降至 4 次，内核内部仍可能逐页处理。主测试与四个压力线程不共享缓冲。比较只在**同一通道**前后进行；跨版本比较先使用相同 APK 隔离内核优化，再单独测试新缓冲尺寸。实测见 [1.2.1 优化记录](docs/performance-optimization-1.2.1.zh-CN.md)。
+计时范围是一次完整 executable PT_LOAD 的读取与 CRC。直接通道用明确的 LD1 四向量指令每次取 64 字节，再软件计算 IEEE CRC32，尾部按字节读取。1.2.1 起内核辅助通道使用每线程独立、预分配并预触页的 64 KiB 缓冲区加 zlib CRC32，逐次消费短读并重试 EINTR；proc 通道仍计入 open/close。204,608 字节范围的用户态 syscall 数由 50 次降至 4 次，内核内部仍可能逐页处理。主测试与四个压力线程不共享缓冲。比较只在**同一通道**前后进行；跨版本比较先使用相同 APK 隔离内核优化，再单独测试新缓冲尺寸。实测见 [1.2.1 优化记录](performance-optimization-1.2.1.zh-CN.md)。
 
 简短的 TIME compare= 日志提供（direct_us、readv_us、proc_us 的值均为“前/后”）：
 

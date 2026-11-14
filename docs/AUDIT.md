@@ -1,5 +1,7 @@
 # UROV-Z 实现审查与验证记录
 
+> 历史审查：以下结论适用于 1.0.0 发布前基线。当前 1.2.5 的修订与未覆盖范围见 [当前审计](compatibility-audit-1.2.5.zh-CN.md) 和 [技术博客](implementation-1.2.5.zh-CN.md)。
+
 审查日期：2026-11-11（Asia/Shanghai）。独立仓库基线：`0daca2d`，审查时分支 `codex/urov-z`。以下保留发布前小米 13 审查的原始范围和数据；后续 Pixel 6 发布验证及当前交付文件见 [RELEASE-1.0.0.md](RELEASE-1.0.0.md)。本报告中的修复与新增 API 随 UROV-Z 1.0.0 提交到 `main`。外层 KernelPatch 仓库已有的修改未纳入独立仓库提交。
 
 ## 结论
@@ -99,15 +101,15 @@ App UID 为 10322，域为 `u:r:untrusted_app:s0:c66,c257,c512,c768`，未提升
 
 主要本地证据（均位于忽略的 `out/`，不会提交密钥）：
 
-- [最终 live App](out/audit-20261111-fuxi/app-final-live.txt)、[最终 detached App](out/audit-20261111-fuxi/app-final-detached.txt)、[卸载后基线](out/audit-20261111-fuxi/baseline-after.txt)。
-- [5.15 / 6.1 BTF](out/audit-20261111-fuxi/compat-5.15-6.1-final.txt)、[6.12 / 6.18 BTF](out/audit-20261111-fuxi/compat-6.x-final.txt)。
-- [原始 readv 失败](out/audit-20261111-fuxi/app-readv-diagnostic.txt)、[修复 readv 后暴露的 vmsplice 失败](out/audit-20261111-fuxi/app-readv-fix.txt)。
-- [测试窗口内核日志](out/audit-20261111-fuxi/dmesg-test-window.log)、[最终文件 SHA-256](out/audit-20261111-fuxi/sha256.txt)。
+- [最终 live App](../out/audit-20261111-fuxi/app-final-live.txt)、[最终 detached App](../out/audit-20261111-fuxi/app-final-detached.txt)、[卸载后基线](../out/audit-20261111-fuxi/baseline-after.txt)。
+- [5.15 / 6.1 BTF](../out/audit-20261111-fuxi/compat-5.15-6.1-final.txt)、[6.12 / 6.18 BTF](../out/audit-20261111-fuxi/compat-6.x-final.txt)。
+- [原始 readv 失败](../out/audit-20261111-fuxi/app-readv-diagnostic.txt)、[修复 readv 后暴露的 vmsplice 失败](../out/audit-20261111-fuxi/app-readv-fix.txt)。
+- [测试窗口内核日志](../out/audit-20261111-fuxi/dmesg-test-window.log)、[最终文件 SHA-256](../out/audit-20261111-fuxi/sha256.txt)。
 
 最终 KPM SHA-256：`5A35A8B74F49B55D1E6168C087AEE173DD6A519D1557F2EA4C4A62C5F53AE9B7`。
 
 ## 用户态接口交付
 
-见 [api/README.md](api/README.md) 和 [公开头文件](api/include/urov/urov.h)。六个协议操作全部有 typed API；保留 `urov_call` 供底层协议测试。上下文只保存派生密钥，成功/失败约定统一，不自动吞掉 EBUSY/EAGAIN，不自动注销或加载模块。
+见 [api/README.md](../api/README.md) 和 [公开头文件](../api/include/urov/urov.h)。六个协议操作全部有 typed API；保留 `urov_call` 供底层协议测试。上下文只保存派生密钥，成功/失败约定统一，不自动吞掉 EBUSY/EAGAIN，不自动注销或加载模块。
 
 API 是 syscall 封装，不扩展模块本身的并发或内核兼容保证。后续在 5.4/5.10、6.1/6.6 及 16 KB 设备上的运行验证，以及原生 PTL/映射并发修复，仍是把此实验框架提升为通用方案所需的工作。
