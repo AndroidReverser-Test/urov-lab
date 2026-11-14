@@ -1,6 +1,7 @@
 param(
     [string]$KernelPatchRoot = (Join-Path $PSScriptRoot '..\..'),
-    [string]$Ndk = $env:ANDROID_NDK_HOME
+    [string]$Ndk = $env:ANDROID_NDK_HOME,
+    [switch]$Diagnostics
 )
 $ErrorActionPreference = 'Stop'
 if (!$Ndk) { throw 'Pass -Ndk <Android NDK directory> or set ANDROID_NDK_HOME.' }
@@ -20,6 +21,7 @@ $flags = @('--target=aarch64-none-elf','-std=gnu11','-O2','-Wall','-Wextra','-We
     '-fno-pie','-fno-stack-protector','-fno-asynchronous-unwind-tables',
     '-fno-unwind-tables','-mgeneral-regs-only','-mno-outline-atomics','-ffixed-x18')
 $objects = @()
+if ($Diagnostics) { $flags += '-DUROV_Z_DIAGNOSTICS=1' }
 foreach ($name in @('decode','emulate','core_selftest','backend','urov_z')) {
     $object = Join-Path $out ($name + '.o')
     & $clang @flags @includes -c (Join-Path $PSScriptRoot "module\$name.c") -o $object

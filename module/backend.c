@@ -22,6 +22,19 @@
 #include "readers.h"
 #include "window.h"
 #include "prewin.h"
+#include "insn_scan.h"
+
+/* Compile out all hot-path diagnostic atomics in the normal build. Counters
+ * are lifetime totals so a completed session can still be inspected. */
+#ifndef UROV_Z_DIAGNOSTICS
+#define UROV_Z_DIAGNOSTICS 0
+#endif
+static struct uz_perf g_perf;
+#if UROV_Z_DIAGNOSTICS
+#define UZ_PERF_ADD(field, n) __atomic_fetch_add(&g_perf.field, (uint64_t)(n), __ATOMIC_RELAXED)
+#else
+#define UZ_PERF_ADD(field, n) ((void)(n))
+#endif
 
 /* Ordinary RX reads need no scheduler/debug replay hook. Retirement of
  * scheduler trampolines is not safe on the stock test host. */
@@ -157,6 +170,25 @@ _Static_assert(sizeof(struct uz_fpstate) == UZ_FPSIMD_BYTES, "FPSIMD image size"
 #define UZ_LLSC_ENTRY_SCAN UZ_LLSC_PRE_SCAN
 #define UZ_LLSC_MEM_MAX 4U       /* gap stores recorded and replayed at commit */
 #define UZ_LLSC_BYTES_MAX 64U    /* widest single access the decoder produces */
+
+/* A negative proof is reusable only if ALL words it inspected still match.
+ * Existing hooks do not provide a complete native-code epoch (ptrace, shared
+ * aliases and external writers are examples), so do not trust a PC/opcode or
+ * image generation alone. This bounded owner-only memo validates whole pages
+ * on each hit, including an unreadable boundary when that ended the scan.
+ * It stores no page/VMA pointers and no register-dependent positive plans.
+ * Eight non-waiting leases allow concurrent readers; busy/allocation failure
+ * falls back to the block walker. Storage is allocated before readers open,
+ * and freed only after they drain. Total extra storage is about 1 MiB. */
+#define UZ_LLSC_MEMO_SLOTS 8U
+struct uz_insn_memo {
+    uint32_t busy, words;
+    void *mm;
+    uint64_t pc, guard;
+    uint32_t saved[UZ_LLSC_PRE_SCAN];
+    uint32_t probe[UZ_LLSC_PRE_SCAN];
+};
+static struct uz_insn_memo *g_insn_memo;
 
 struct uz_llsc_pstore {
     uint64_t address;
@@ -1001,6 +1033,7 @@ static struct uz_page *uz_page_by_identity(void *mm, uint64_t addr)
     uint32_t i;
 
     if (!mm || !f_find_vma || !g_layout.vma_pgoff_ok) return 0;
+    UZ_PERF_ADD(identity_lookups, 1);
     vma = f_find_vma(mm, addr);
     if (!vma) return 0;
     start = *(uint64_t *)((char *)vma + g_layout.vma_start);
@@ -1015,6 +1048,7 @@ static struct uz_page *uz_page_by_identity(void *mm, uint64_t addr)
         struct uz_page *p = &g_sess.pages[i];
         uint64_t want_file, want_off;
 
+        UZ_PERF_ADD(identity_compares, 1);
         if (__atomic_load_n(&p->gone, __ATOMIC_ACQUIRE)) continue;
         if (uz_page_file_offset(p, &want_file, &want_off)) continue;
         if (want_file == file && want_off == pgoff) return p;
@@ -1073,22 +1107,6 @@ static void uz_shadow_store_range(void *mm, uint64_t address,
         if (sh) uz_shadow_store(sh, off, bytes + done, seg);
         done += seg;
     }
-}
-
-static int range_covered(void *mm, uint64_t address, unsigned total)
-{
-    uint64_t done = 0;
-
-    while (done < total) {
-        uint64_t cur = address + done;
-        uint64_t off = cur - page_base(cur);
-        unsigned seg = (unsigned)(g_page_size - off);
-
-        if (seg > total - done) seg = (unsigned)(total - done);
-        if (uz_page_for_fault(mm, cur)) return 1;
-        done += seg;
-    }
-    return 0;
 }
 
 /* Read [address, address+total) into `out`, using the page images for every
@@ -1599,21 +1617,83 @@ static int uz_fp_commit_multi(const struct uro_load *d, const uint8_t *bytes)
     return 0;
 }
 
-/* Fetch one instruction word from the faulting thread's address space.  A
- * registered target page may have AP[1] cleared, so prefer its immutable
- * snapshot, exactly as the AP handler does for the faulting instruction. */
-static int uz_read_insn(uint64_t pc, uint32_t *out)
+/* Fetch real instructions, never the fake data image. Owner aliases outside
+ * the registered VA range use native memory; only a known child needs file
+ * identity resolution, and it must use its own COW snapshot even at the same
+ * VA as the parent. Callers hold a session reader reference. */
+static int uz_fetch_insns(void *mm, uint64_t pc, void *out, unsigned bytes)
 {
     struct uz_page *page;
 
-    if (!uz_user_range(pc, sizeof(*out)) || (pc & 3U)) return -1;
-    page = page_find(page_base(pc));
-    if (!page) page = uz_page_by_identity(mm_of_task(current), pc);
+    if (!bytes || !uz_user_range(pc, bytes) || (pc & 3U) || (bytes & 3U) ||
+        bytes > g_page_size - (pc & (g_page_size - 1U))) return -1;
+    UZ_PERF_ADD(insn_fetches, 1);
+    page = uz_page_for_fault(mm, pc);
     if (page) {
-        memcpy(out, page->snapshot + (pc & (g_page_size - 1U)), sizeof(*out));
+        page_view_mm(mm, page, pc & (g_page_size - 1U), bytes, out, 1);
         return 0;
     }
-    return f_copy_in(out, (const void *)(uintptr_t)pc, sizeof(*out)) ? -1 : 0;
+    UZ_PERF_ADD(insn_nofault, 1);
+    return f_copy_in(out, (const void *)(uintptr_t)pc, bytes) ? -1 : 0;
+}
+
+static int uz_read_insn(uint64_t pc, uint32_t *out)
+{
+    return uz_fetch_insns(mm_of_task(current), pc, out, sizeof(*out));
+}
+
+static struct uz_insn_memo *uz_insn_memo_acquire(void *mm, uint64_t pc)
+{
+    unsigned i, first = (unsigned)(((uintptr_t)current >> 6) ^ (pc >> 2));
+
+    if (!g_insn_memo || mm != g_sess.mm) return 0;
+    for (i = 0; i < UZ_LLSC_MEMO_SLOTS; ++i) {
+        struct uz_insn_memo *memo = &g_insn_memo[(first + i) % UZ_LLSC_MEMO_SLOTS];
+        uint32_t expected = 0;
+
+        if (__atomic_compare_exchange_n(&memo->busy, &expected, 1, 0,
+                                         __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+            return memo;
+    }
+    return 0;
+}
+
+static int uz_insn_memo_match(struct uz_insn_memo *memo, void *mm, uint64_t pc)
+{
+    unsigned done = 0, bytes;
+    uint64_t start;
+
+    if (!memo || !memo->words || memo->mm != mm || memo->pc != pc) return 0;
+    bytes = memo->words * 4U;
+    start = pc - bytes;
+    while (done < bytes) {
+        uint64_t at = start + done;
+        unsigned n = g_page_size - (unsigned)(at & (g_page_size - 1U));
+
+        if (n > bytes - done) n = bytes - done;
+        if (uz_fetch_insns(mm, at, (uint8_t *)memo->probe + done, n) ||
+            memcmp((uint8_t *)memo->probe + done, (uint8_t *)memo->saved + done, n))
+            goto changed;
+        done += n;
+    }
+    if (memo->guard) {
+        uint32_t word;
+
+        /* A previously absent page may have been mapped or faulted in. Never
+         * cache its failure without checking that exact word again. */
+        if (!uz_fetch_insns(mm, memo->guard, &word, sizeof(word))) goto changed;
+    }
+    UZ_PERF_ADD(cache_bytes, bytes);
+    return 1;
+changed:
+    memo->words = 0;
+    UZ_PERF_ADD(cache_invalidations, 1);
+    return 0;
+}
+
+static void uz_insn_memo_release(struct uz_insn_memo *memo)
+{
+    if (memo) __atomic_store_n(&memo->busy, 0, __ATOMIC_RELEASE);
 }
 
 static int uz_is_ldxr(uint32_t insn, unsigned *size, unsigned *rt, unsigned *rn)
@@ -2151,6 +2231,20 @@ static int uz_llsc_skipped(uint64_t ldxr_pc, uint64_t pc)
     return seq1 != seq2;
 }
 
+/* The later skipped() proof already declines an unusable branch map. Move
+ * only that stable decision ahead of the expensive backwards walk. This is
+ * deliberately after sample->excl: an exclusive load at PC creates its own
+ * reservation and does not depend on the read-before proof. */
+static int uz_llsc_map_unusable(void)
+{
+    uint32_t before = __atomic_load_n(&g_code.seq, __ATOMIC_ACQUIRE);
+    uint32_t valid = __atomic_load_n(&g_code.valid, __ATOMIC_ACQUIRE);
+    uint32_t complete = __atomic_load_n(&g_code.complete, __ATOMIC_ACQUIRE);
+    uint32_t after = __atomic_load_n(&g_code.seq, __ATOMIC_ACQUIRE);
+
+    return !(before & 1U) && before == after && (!valid || !complete);
+}
+
 /* A gap store is only recorded, never written while the window is being
  * modeled, so a later load in the same window has to observe it.  Forward the
  * recorded bytes over the freshly read ones, in issue order. */
@@ -2471,7 +2565,8 @@ static int uz_is_ret_x30(uint32_t insn)
  * a RET whose xN was clobbered between the branch and the sampled load cannot
  * be distinguished from a RET that jumped into the span. */
 static int uz_llsc_entry_skipped(uint64_t ldxr_pc, uint64_t pc,
-                                 const struct uz_pre_state *st, uint64_t floor)
+                                 const struct uz_pre_state *st, uint64_t floor,
+                                 struct uz_insn_cursor *cursor, void *mm)
 {
     struct uz_pre_state cur;
     uint64_t at = ldxr_pc;
@@ -2489,7 +2584,8 @@ static int uz_llsc_entry_skipped(uint64_t ldxr_pc, uint64_t pc,
 
         if (at < 4U || at < floor + 4U) return 0;
         at -= 4U;
-        if (!uz_user_range(at, 4U) || uz_read_insn(at, &insn)) return 1;
+        if (!uz_user_range(at, 4U) ||
+            uz_insn_back_read(cursor, at, &insn, uz_fetch_insns, mm)) return 1;
         if (uz_is_indirect_branch(insn, &rn)) {
             /* Rn == 31 names XZR here, not SP: the transfer targets zero. */
             if (rn == 31U) return 0;
@@ -2551,12 +2647,16 @@ static void uz_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
                             const struct uz_sample *sample, struct uz_llsc *out)
 {
     struct uz_pre_state st;
+    struct uz_insn_cursor cursor;
+    struct uz_insn_memo *memo;
     uint32_t insn = 0;
-    unsigned scanned, lsize = 0, lrn = 0, pair = 0, acquire = 0;
-    uint64_t ldxr_pc = 0, at, base, floor = 0;
+    unsigned scanned, words = 0, lsize = 0, lrn = 0, pair = 0, acquire = 0;
+    uint64_t ldxr_pc = 0, at, base, floor = 0, guard = 0;
+    void *mm = mm_of_task(current);
 
     memset(out, 0, sizeof(*out));
     if (!f_copy_out || !sample) return;
+    UZ_PERF_ADD(llsc_prepares, 1);
     if (sample->excl) {
         /* The faulting instruction is the reservation: no walk is needed and
          * no earlier exclusive load can still be live. */
@@ -2567,18 +2667,36 @@ static void uz_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
         out->valid = 1;
         return;
     }
+    if (uz_llsc_map_unusable()) {
+        UZ_PERF_ADD(map_declines, 1);
+        return;
+    }
     if (pc < 4U || !uz_user_range(pc - 4U, 4U)) return;
+    memo = uz_insn_memo_acquire(mm, pc);
+    if (uz_insn_memo_match(memo, mm, pc)) {
+        UZ_PERF_ADD(cache_hits, 1);
+        uz_insn_memo_release(memo);
+        return;
+    }
+    UZ_PERF_ADD(cache_misses, 1);
 
     /* First pass: locate the reservation instruction and its access size.
      * The value proof needs the alignment that a load-exclusive that reached
      * the sampled access must have had, and that is only known after the
      * instruction is decoded. */
     at = pc - 4U;
+    uz_insn_cursor_reset(&cursor);
+    UZ_PERF_ADD(scan_calls, 1);
     for (scanned = 0; scanned < UZ_LLSC_PRE_SCAN; ++scanned) {
         unsigned size_enc, rt, rt2, rs, rn;
 
-        if (at < 4U || !uz_user_range(at, 4U) || uz_read_insn(at, &insn))
-            return;
+        if (at < 4U || !uz_user_range(at, 4U)) goto scan_done;
+        if (uz_insn_back_read(&cursor, at, &insn, uz_fetch_insns, mm)) {
+            guard = at;
+            goto scan_done;
+        }
+        ++words;
+        if (memo) memo->probe[UZ_LLSC_PRE_SCAN - words] = insn;
         if (uz_is_ldxr(insn, &size_enc, &rt, &rn)) {
             ldxr_pc = at;
             lsize = 1U << size_enc;
@@ -2601,9 +2719,19 @@ static void uz_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
         if (uz_is_stxr(insn, &size_enc, &rs, &rt, &rn) ||
             uz_is_stxp(insn, &size_enc, &rs, &rt, &rt2, &rn) ||
             uz_is_clrex(insn) || uz_is_exception_insn(insn))
-            return;
+            goto scan_done;
         at -= 4U;
     }
+scan_done:
+    UZ_PERF_ADD(scan_words, words);
+    if (memo && !ldxr_pc) {
+        memo->mm = mm;
+        memo->pc = pc;
+        memo->guard = guard;
+        memo->words = words;
+        memcpy(memo->saved, memo->probe + UZ_LLSC_PRE_SCAN - words, words * 4U);
+    }
+    uz_insn_memo_release(memo);
     if (!ldxr_pc) return;
 
     /* The entry walk never crosses the start of the executable VMA that holds
@@ -2611,7 +2739,6 @@ static void uz_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
      * loader enters the mapping there); crossing it would let the walk read an
      * unrelated mapping or walk off the user address space. */
     {
-        void *mm = mm_of_task(current);
         void *vma = (mm && f_find_vma) ? f_find_vma(mm, (unsigned long)ldxr_pc) : 0;
 
         if (vma) floor = *(uint64_t *)((char *)vma + g_layout.vma_start);
@@ -2622,8 +2749,9 @@ static void uz_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
      * only clear the low log2(size) bits of the base is the identity for every
      * value the hardware could have reserved. */
     uz_pre_reset(&st, regs);
+    uz_insn_cursor_reset(&cursor);
     for (at = pc - 4U; at > ldxr_pc; at -= 4U) {
-        if (uz_read_insn(at, &insn)) return;
+        if (uz_insn_back_read(&cursor, at, &insn, uz_fetch_insns, mm)) return;
         if (uz_pre_step_aligned(insn, &st, lsize - 1U)) return;
     }
     /* The rewind must still know the base.  A class it could not invert leaves
@@ -2634,7 +2762,8 @@ static void uz_llsc_prepare(const struct uro_regs *regs, uint64_t pc,
     /* lsize is already in bytes, so the mask is the access size minus one. */
     if (base & (lsize - 1U)) return;
     if (uz_llsc_skipped(ldxr_pc, pc)) return;
-    if (uz_llsc_entry_skipped(ldxr_pc, pc, &st, floor)) return;
+    uz_insn_cursor_reset(&cursor);
+    if (uz_llsc_entry_skipped(ldxr_pc, pc, &st, floor, &cursor, mm)) return;
 
     out->base = base;
     out->size = lsize;
@@ -2889,21 +3018,15 @@ static void uz_atomic_reg(struct pt_regs *regs, unsigned reg, uint64_t value,
 
 /* Decode and complete one LSE atomic RMW.  CAS failure is a normal outcome:
  * the old value is written back to Rs and nothing is stored. */
-static int uz_atomic_emulate(struct pt_regs *regs, uint64_t far, void *mm)
+static int uz_atomic_emulate(struct pt_regs *regs, uint64_t far, void *mm,
+                              uint32_t opcode, const struct uro_regs *model)
 {
-    struct uro_regs model;
     struct uro_atomic a;
     uint8_t old[16], newb[16];
     uint64_t mask, o0, o1, n0, n1, src, expect, expect2;
-    uint32_t opcode;
     unsigned i;
 
-    if ((regs->pc & 3U) || uz_read_insn(regs->pc, &opcode)) return -1;
-    for (i = 0; i < 31; ++i) model.x[i] = regs->regs[i];
-    model.sp = regs->sp;
-    model.pc = regs->pc;
-    model.pstate = regs->pstate;
-    if (uro_decode_atomic(opcode, &model, &a) || a.address != far) return -1;
+    if (uro_decode_atomic(opcode, model, &a) || a.address != far) return -1;
     if (!uz_user_range(a.address, a.total)) return -1;
     for (i = 0; i < (a.count == 2U ? 2U : 1U); ++i) {
         uint64_t at = a.address + (uint64_t)i * a.size;
@@ -3020,7 +3143,7 @@ static int uz_store_emulate(struct pt_regs *regs, uint64_t far, struct uz_page *
         struct uro_atomic probe;
 
         if (!uro_decode_atomic(opcode, &model, &probe)) {
-            if (!uz_atomic_emulate(regs, far, mm))
+            if (!uz_atomic_emulate(regs, far, mm, opcode, &model))
                 return 0;
             return -1;
         }
@@ -3813,6 +3936,8 @@ static int uz_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
     uint8_t bytes[64];
     int use_fake = 0, covered;
     unsigned i;
+    void *mm = mm_of_task(current);
+    struct uz_page *read_page;
 
     *bad = 0;
     for (i = 0; i < 31; ++i) model.x[i] = regs->regs[i];
@@ -3820,6 +3945,9 @@ static int uz_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
     model.pc = pc;
     model.pstate = regs->pstate;
 
+    /* LSE RMW can report a read ESR. Share the one opcode/model with the load
+     * decoder; a successful atomic still cancels native step at the caller. */
+    if (!uz_atomic_emulate(regs, far, mm, opcode, &model)) return 1;
     {
         uint64_t reject = UINT64_C(31) | (UINT64_C(1) << 20);
 
@@ -3840,6 +3968,7 @@ static int uz_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
         (load.writeback && !uz_user_range(load.wb, 1)))
         return -3;
     if (check_far && (far < load.address || far - load.address >= total)) return -3;
+    UZ_PERF_ADD(loads, 1);
     if (llsc) {
         struct uz_sample sample;
 
@@ -3857,19 +3986,21 @@ static int uz_emulate_load(struct pt_regs *regs, uint64_t pc, uint32_t opcode,
             uz_llsc_prepare(&model, pc, &sample, llsc);
     }
 
-    covered = range_covered(mm_of_task(current), load.address, (unsigned)total);
-    if (!covered) {
-        if (f_copy_in(bytes, (const void *)(uintptr_t)load.address, (unsigned long)total)) {
-            *bad = load.address;
-            return -5;
-        }
+    use_fake = !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE);
+    if (total <= g_page_size - (load.address & (g_page_size - 1U)) &&
+        (read_page = uz_page_for_fault(mm, load.address)) != NULL) {
+        /* Resolve once after the proof, then copy. Do not retain the earlier
+         * FAR descriptor across a long scan: mremap can sort the page array. */
+        uz_ext_drain(mm, read_page);
+        page_view_mm(mm, read_page, load.address & (g_page_size - 1U),
+                     (unsigned)total, bytes, !use_fake);
+        covered = 1;
+        UZ_PERF_ADD(single_page, 1);
     } else {
-        int allow_fake = !__atomic_load_n(&g_suspend, __ATOMIC_ACQUIRE) ;
-        int ret = read_range(mm_of_task(current), load.address, (unsigned)total,
-                             allow_fake, bytes, bad);
-
-        if (ret < 0) return ret;
-        use_fake = allow_fake;
+        /* Locate and copy each segment once. No registers are committed until
+         * every segment (including any native neighbour) has succeeded. */
+        covered = read_range(mm, load.address, (unsigned)total, use_fake, bytes, bad);
+        if (covered < 0) return covered;
     }
 
     if (load.multi) {
@@ -3907,7 +4038,7 @@ static int emulate_or_signal(struct pt_regs *regs, uint32_t opcode, uint64_t far
     uint64_t bad = 0, pc = regs->pc;
     int result = uz_emulate_load(regs, pc, opcode, far, check_far, &bad, llsc);
 
-    if (!result) return 0;
+    if (result >= 0) return result;
     session_count_failure(pc, result);
     force_segv(result == -5 ? bad : far);
     return result;
@@ -4041,7 +4172,6 @@ serve:
     if (ap_read) {
         void *mm = mm_of_task(current);
         struct uz_page *page = uz_page_for_fault(mm, far);
-        struct uz_page *code = uz_page_for_fault(mm, regs->pc);
         uint64_t fault_pc = regs->pc;
         struct uz_llsc llsc;
         int emulated = -1;
@@ -4051,25 +4181,7 @@ serve:
             uz_step_cancel();
             goto out;
         }
-        /* LSE atomics (LDADD/SWP/CAS/...) are reported as a read fault on
-         * this CPU even though they also write.  Complete the RMW before the
-         * generic load decoder can reject the encoding. */
-        if (!uz_atomic_emulate(regs, far, mm)) {
-            uz_step_cancel();
-            args->ret = 0;
-            args->skip_origin = 1;
-            goto out;
-        }
-        if ((regs->pc & 3U) || !uz_user_range(regs->pc, sizeof(opcode))) {
-            session_count_failure(regs->pc, -EFAULT);
-            force_segv(far);
-        } else if (code) {
-            /* Instruction fetch still uses the original RX bytes, but
-             * data uaccess to that same code page can fault on AP[1]. */
-            memcpy(&opcode, code->snapshot + (fault_pc & (g_page_size - 1U)),
-                   sizeof(opcode));
-            emulated = emulate_or_signal(regs, opcode, far, 1, &llsc);
-        } else if (f_copy_in(&opcode, (const void *)(uintptr_t)regs->pc, sizeof(opcode))) {
+        if (uz_fetch_insns(mm, fault_pc, &opcode, sizeof(opcode))) {
             session_count_failure(regs->pc, -EFAULT);
             force_segv(far);
         } else {
@@ -4079,7 +4191,9 @@ serve:
          * the bridge only restores an outcome the native sequence would have
          * had.  It is attempted after the load committed, and only when the
          * load succeeded. */
-        if (!emulated && uz_step_current()) {
+        if (emulated == 1) {
+            uz_step_cancel();
+        } else if (!emulated && uz_step_current()) {
             (void)uz_step_resume(regs);
         } else if (!emulated) {
             int stepped;
@@ -4230,6 +4344,8 @@ static void session_free_storage(void)
     unsigned i, n = g_sess.page_count;
 
     uz_code_free();
+    uz_free(g_insn_memo);
+    g_insn_memo = 0;
     /* Remember the page bases (not the images) so an orphaned trap in a
      * forked child can still be recognised and restored after the session is
      * gone.  The array is only ever compared by address. */
@@ -4458,6 +4574,11 @@ static long do_register(struct urov_z_request *q)
         ret = page_build_image(p, d, mm, q->page_count ? 0 : q);
         if (ret) goto fail;
     }
+
+    /* Optional acceleration: lack of memory must not reduce coverage. */
+    g_insn_memo = uz_alloc(UZ_LLSC_MEMO_SLOTS * sizeof(*g_insn_memo));
+    if (g_insn_memo)
+        memset(g_insn_memo, 0, UZ_LLSC_MEMO_SLOTS * sizeof(*g_insn_memo));
 
     /* From the first AP[1] edit on, a racing reader must have a valid
      * replay view. Enable fake values only after the complete set is armed. */
@@ -6365,6 +6486,34 @@ long urov_z_status_get(struct uz_status *out)
     out->abi = UROV_Z_ABI_VERSION;
     out->page_shift = g_page_shift;
     out->caps = g_caps;
+    ctrl_unlock();
+    return 0;
+}
+
+long urov_z_perf_get(struct uz_perf *out)
+{
+    if (!out) return -EINVAL;
+    if (!ctrl_try_lock()) return -EBUSY;
+    memset(out, 0, sizeof(*out));
+    out->enabled = UROV_Z_DIAGNOSTICS;
+    out->code_valid = __atomic_load_n(&g_code.valid, __ATOMIC_ACQUIRE);
+    out->code_complete = __atomic_load_n(&g_code.complete, __ATOMIC_ACQUIRE);
+#define UZ_PERF_READ(field) out->field = __atomic_load_n(&g_perf.field, __ATOMIC_RELAXED)
+    UZ_PERF_READ(loads);
+    UZ_PERF_READ(llsc_prepares);
+    UZ_PERF_READ(map_declines);
+    UZ_PERF_READ(scan_calls);
+    UZ_PERF_READ(scan_words);
+    UZ_PERF_READ(insn_fetches);
+    UZ_PERF_READ(insn_nofault);
+    UZ_PERF_READ(identity_lookups);
+    UZ_PERF_READ(identity_compares);
+    UZ_PERF_READ(single_page);
+    UZ_PERF_READ(cache_hits);
+    UZ_PERF_READ(cache_misses);
+    UZ_PERF_READ(cache_invalidations);
+    UZ_PERF_READ(cache_bytes);
+#undef UZ_PERF_READ
     ctrl_unlock();
     return 0;
 }

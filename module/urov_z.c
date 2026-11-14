@@ -9,7 +9,7 @@
 #include "kclf/embedded.h"
 
 KPM_NAME("urov-z");
-KPM_VERSION("1.2.0");
+KPM_VERSION("1.2.1");
 KPM_LICENSE("GPL v2");
 KPM_AUTHOR("UROV-Z");
 KPM_DESCRIPTION("ARM64 code-page read overlay with integrated KCLF loader");
@@ -38,7 +38,7 @@ static long module_init(const char *args, const char *event, void *reserved)
 static long module_control(const char *args, char __user *out, int len)
 {
     struct uz_status st;
-    char message[320];
+    char message[640];
     int n;
     long ret;
 
@@ -46,6 +46,27 @@ static long module_control(const char *args, char __user *out, int len)
     if (args && !strncmp(args, "kclf", 4) &&
         (!args[4] || args[4] == ',' || args[4] == ' '))
         return urov_kclf_control(args[4] ? args + 5 : "help", out, len);
+    if (args && !strcmp(args, "perf")) {
+        struct uz_perf perf;
+
+        ret = urov_z_perf_get(&perf);
+        if (ret) return ret;
+        n = snprintf(message, sizeof(message),
+            "diagnostics=%u code_valid=%u code_complete=%u loads=%llu "
+            "llsc_prepares=%llu map_declines=%llu scan_calls=%llu scan_words=%llu "
+            "insn_fetches=%llu insn_nofault=%llu identity_lookups=%llu "
+            "identity_compares=%llu single_page=%llu cache_hits=%llu cache_misses=%llu "
+            "cache_invalidations=%llu cache_bytes=%llu\n",
+            perf.enabled, perf.code_valid, perf.code_complete,
+            (unsigned long long)perf.loads, (unsigned long long)perf.llsc_prepares,
+            (unsigned long long)perf.map_declines, (unsigned long long)perf.scan_calls,
+            (unsigned long long)perf.scan_words, (unsigned long long)perf.insn_fetches,
+            (unsigned long long)perf.insn_nofault, (unsigned long long)perf.identity_lookups,
+            (unsigned long long)perf.identity_compares, (unsigned long long)perf.single_page,
+            (unsigned long long)perf.cache_hits, (unsigned long long)perf.cache_misses,
+            (unsigned long long)perf.cache_invalidations, (unsigned long long)perf.cache_bytes);
+        goto copy;
+    }
     if (!args || (strcmp(args, "status") && strcmp(args, "selftest"))) return -EINVAL;
     ret = urov_z_status_get(&st);
     if (ret) return ret;
@@ -57,6 +78,7 @@ static long module_control(const char *args, char __user *out, int len)
         (unsigned long long)st.hits, (unsigned long long)st.replays,
         (unsigned long long)st.failures, (unsigned long long)st.llsc,
         st.degraded, st.hooks, st.core_checks, st.abi, st.fpsimd, st.page_shift, st.caps);
+copy:
     if (n < 0 || n >= (int)sizeof(message)) return -EOVERFLOW;
     if (len <= n) return -ENOSPC;
     return urov_z_copy_to_user(out, message, (unsigned long)n + 1);

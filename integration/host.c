@@ -48,6 +48,10 @@ static unsigned observation_tick, return_failures;
 static uint64_t observation_due, observation_origin;
 static int overlay_returns[TEST_TARGETS];
 enum { SAMPLES = 9, WARMUP = 2, THREADS = 4, STRESS_ROUNDS = 8 };
+enum { READ_CHUNK = 64 * 1024 };
+/* The suite and each stress worker own separate, pre-touched scratch space.
+ * Allocation and first-touch faults must stay outside the timed read. */
+static unsigned char suite_buffer[READ_CHUNK];
 struct timing { double median[3]; };
 
 static uint64_t now_ns(void)
@@ -165,23 +169,28 @@ static uint32_t direct_range(const void *base, size_t size)
     return ~crc;
 }
 static uint32_t direct_crc(void) { return direct_range(code, code_size); }
-static int crc_channel(unsigned mode, const void *base, size_t size, uint32_t *out)
+static int crc_channel(unsigned mode, const void *base, size_t size, uint32_t *out,
+                       unsigned char *buffer)
 {
     if (!mode) { *out = direct_range(base, size); return 0; }
-    unsigned char buffer[4096];
     uint32_t crc = crc32(0, NULL, 0);
     int fd = mode == 2 ? open("/proc/self/mem", O_RDONLY | O_CLOEXEC) : -1;
     if (mode == 2 && fd < 0) return -errno;
     for (size_t off = 0; off < size;) {
         size_t n = size - off;
-        if (n > sizeof(buffer)) n = sizeof(buffer);
+        if (n > READ_CHUNK) n = READ_CHUNK;
         ssize_t got;
         if (mode == 2) got = pread64(fd, buffer, n, (off64_t)(uintptr_t)((const char *)base + off));
         else {
             struct iovec local = {buffer, n}, remote = {(char *)base + off, n};
             got = process_vm_readv(getpid(), &local, 1, &remote, 1, 0);
         }
-        if (got <= 0) { int rc = got < 0 ? -errno : -EIO; if (fd >= 0) close(fd); return rc; }
+        if (got < 0 && errno == EINTR) continue;
+        if (got <= 0 || (size_t)got > n) {
+            int rc = got < 0 ? -errno : -EIO;
+            if (fd >= 0) close(fd);
+            return rc;
+        }
         crc = crc32(crc, buffer, (uInt)got);
         off += (size_t)got;
     }
@@ -347,7 +356,7 @@ static int check_stage(const char *stage)
     int ok = !calls(256);
     int patched = ctx.hooked && !ctx.overlaid;
     for (unsigned m = 0; m < 3; ++m)
-        read_rc[m] = crc_channel(m, code, code_size, &values[m]);
+        read_rc[m] = crc_channel(m, code, code_size, &values[m], suite_buffer);
     int readable = !read_rc[0] && !read_rc[1] && !read_rc[2];
     int equal = readable && values[0] == values[1] && values[0] == values[2];
     int crc_ok = equal && (patched ? values[0] != ctx.baseline_crc : values[0] == ctx.baseline_crc);
@@ -356,7 +365,7 @@ static int check_stage(const char *stage)
         uint32_t v[3] = {0};
         int page_ok = 1, page_readable = 1;
         for (unsigned m = 0; m < 3; ++m)
-            if (crc_channel(m, pages[i], page_size, &v[m])) page_readable = 0;
+            if (crc_channel(m, pages[i], page_size, &v[m], suite_buffer)) page_readable = 0;
         page_ok = page_readable;
         if (v[0] != v[1] || v[0] != v[2] ||
             (patched ? v[0] == page_crc[i] : v[0] != page_crc[i])) page_ok = 0;
@@ -409,7 +418,7 @@ static int benchmark(const char *stage, uint32_t expected, struct timing *out)
             uint32_t value = 0;
             pthread_mutex_lock(&observation_lock);
             uint64_t start = now_ns();
-            int rc = crc_channel(m, code, code_size, &value);
+            int rc = crc_channel(m, code, code_size, &value, suite_buffer);
             uint64_t elapsed = now_ns() - start;
             pthread_mutex_unlock(&observation_lock);
             if (rc || value != expected)
@@ -438,7 +447,10 @@ static void comparison(const char *label, const struct timing *before, const str
         pthread_mutex_unlock(&log_lock);
     }
 }
-struct stress_arg { unsigned id, failed, scans, invocations; };
+struct stress_arg {
+    unsigned id, failed, scans, invocations;
+    unsigned char buffer[READ_CHUNK];
+};
 static int stress_start;
 static void *stress_thread(void *opaque)
 {
@@ -450,7 +462,7 @@ static void *stress_thread(void *opaque)
         for (unsigned j = 0; j < 3; ++j) {
             uint32_t value = 0;
             unsigned m = (a->id + r + j) % 3;
-            if (crc_channel(m, code, code_size, &value) || value != ctx.baseline_crc) a->failed++;
+            if (crc_channel(m, code, code_size, &value, a->buffer) || value != ctx.baseline_crc) a->failed++;
             a->scans++;
         }
     }
@@ -459,8 +471,11 @@ static void *stress_thread(void *opaque)
 static int stress(void)
 {
     pthread_t threads[THREADS];
-    struct stress_arg args[THREADS] = {{0}};
+    struct stress_arg *args = calloc(THREADS, sizeof(*args));
     unsigned created = 0, bad = 0, scans = 0, invocations = 0;
+    if (require(args != NULL, "stress scratch allocation")) return -1;
+    for (unsigned i = 0; i < THREADS; ++i)
+        memset(args[i].buffer, 0xa5, sizeof(args[i].buffer));
     __atomic_store_n(&stress_start, 0, __ATOMIC_RELAXED);
     for (; created < THREADS; ++created) {
         args[created].id = created;
@@ -473,9 +488,11 @@ static int stress(void)
         bad += args[i].failed; scans += args[i].scans; invocations += args[i].invocations;
     }
     int rc = action(INSPECT);
+    uint64_t elapsed = now_ns() - start;
+    free(args);
     report("STRESS %s threads=%u rounds=%d crc_scans=%u calls=%u mismatches=%u elapsed_ms=%.3f armed=%u hits=%llu failures=%llu",
            !bad && !rc && created == THREADS && !ctx.overlay_failures && ctx.armed == TEST_TARGETS ? "PASS" : "FAIL",
-           created, STRESS_ROUNDS, scans, invocations, bad, (now_ns() - start) / 1000000.0,
+           created, STRESS_ROUNDS, scans, invocations, bad, elapsed / 1000000.0,
            ctx.armed, (unsigned long long)ctx.overlay_hits, (unsigned long long)ctx.overlay_failures);
     return require(!bad && !rc && created == THREADS && !ctx.overlay_failures && ctx.armed == TEST_TARGETS, "concurrent CRC and calls");
 }
@@ -486,7 +503,8 @@ static int suite(const char *key, const char *libdir, const char *backend, unsig
     int worker_started = 0, observer_started = 0, safe = 1, rc = -1;
     char state[8192] = {0};
     report("RUN backend=%s cycles=%u module_key=MD5(urov-lab)=%s", backend, cycles, UROV_TEST_KEY);
-    report("METHOD CRC32 whole RX; direct=LD1+IEEE, readv/proc=zlib; TIME=median us before/after (2 warmups, 9 samples); RETURN=1s real calls, deferred during transitions/timed reads.");
+    report("METHOD CRC32 whole RX; direct=LD1+IEEE, readv/proc=zlib chunk=65536 pre-touched per thread, proc includes open/close; TIME=median us before/after (2 warmups, 9 samples); RETURN=1s real calls, deferred during transitions/timed reads.");
+    memset(suite_buffer, 0xa5, sizeof(suite_buffer));
     if (setup()) goto finish;
     if (pthread_create(&observation_thread, NULL, observer, NULL)) goto finish;
     observer_started = 1;

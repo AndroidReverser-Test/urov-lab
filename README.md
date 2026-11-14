@@ -4,9 +4,9 @@
 
 Android ARM64 用户态代码页读取覆盖实验模块，基于 UROV-Y 2.28.0，固定使用 **PAGE_AP / all-callers**。取指执行物理代码页，数据读取由注册的影像替代；无需配置读取指令地址或调用者白名单。详细原理、ABI、兼容条件和限制见 [DESIGN.md](DESIGN.md)。
 
-当前 `main` 工作版本为 **1.2.0：十页 CRC / 定时返回值 / 应用内复测**，单 KPM 集成 KCLF 1.5.7。`module/kclf/` 是内置加载器，`integration/` 提供 Dobby 注入 SO、十页 CRC 测试 App 和应用内复测入口；`Dobby/` 原样恢复自 `dev`。实现分析、控制命令和复现步骤见 [INTEGRATION.md](INTEGRATION.md)，历史单页实测见 [集成验证记录](integration/RESULTS-2026-11-12.md)。
+当前工作版本为 **1.2.1：多页读取性能优化**，单 KPM 集成 KCLF 1.5.7。取指使用块扫描和全字节验证的负分析缓存；内核代读测试使用预触页的 64 KiB 缓冲。实现、实测和边界见 [优化记录](docs/performance-optimization-1.2.1.zh-CN.md)。`module/kclf/` 是内置加载器，`integration/` 提供 Dobby 注入 SO、十页 CRC 测试 App 和应用内复测入口；`Dobby/` 保持原样。集成流程见 [INTEGRATION.md](INTEGRATION.md)，历史实测见 [集成验证记录](integration/RESULTS-2026-11-12.md)。
 
-`app/` 保留原有 73 项回归，`api/` 保留独立用户态库；`out/` 中的 KPM、APK、签名材料与 BTF 不进入 Git。当前 APK、KPM 与 SHA-256 校验文件见 [Release v1.2.0](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.0)，版本说明见 [RELEASE-1.2.0.md](RELEASE-1.2.0.md)。内核实现分析见 [1.1.0 源码分析](docs/implementation-1.1.0.zh-CN.md)，当前测试实现见 [INTEGRATION.md](INTEGRATION.md)。原实现可从 `dev` / `3679b4f` 查看；之前的审查见 [AUDIT.md](AUDIT.md)，历史 1.0.0 发布记录见 [RELEASE-1.0.0.md](RELEASE-1.0.0.md)。
+`app/` 保留原有 73 项回归，`api/` 保留独立用户态库；`tests/` 新增块扫描、长 LL/SC、代码修改和页数扩展测试。`out/` 中的 KPM、APK、签名材料与 BTF 不进入 Git。当前 APK、KPM 和校验文件见 [Release v1.2.1](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.1) 与 [版本说明](RELEASE-1.2.1.md)；历史版本见 [Release v1.2.0](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.0)。内核实现分析见 [1.1.0 源码分析](docs/implementation-1.1.0.zh-CN.md)，当前测试实现见 [INTEGRATION.md](INTEGRATION.md)。
 
 用户态 C/C++ 接口见 [api/README.md](api/README.md)：查询、注册、更新、状态和注销均已封装；无需应用自己实现 syscall 参数和 MAC。构建静态库/动态库：`.\api\build.ps1 -Ndk <NDK目录>`。
 
@@ -128,6 +128,7 @@ adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z kclf,status
 |---|---|
 | `status` | UROV 全局状态：active/inactive、页数、armed、hits、failures、能力等；不是注入状态 |
 | `selftest` | 与 `status` 相同，显示初始化时已完成的 `core_checks` 等状态；不会重新运行 App 或内核自检 |
+| `perf` | 1.2.1 取指/扫描/缓存诊断累计计数；普通构建为 `diagnostics=0`，加 `-Diagnostics` 才开启计数 |
 | `kclf` / `kclf,help` | 显示加载器帮助；帮助中的子命令用于集成版时仍需带 `kclf,` 前缀 |
 | `kclf,probe` | 运行时兼容性诊断：内核布局、BTF、pt_regs、页大小、唤醒支持、观察 hook、quiescing 状态等 |
 | `kclf,sym` | 内核符号解析诊断，用于排查 ABI/符号缺失；输出可能包含内核地址 |
@@ -189,7 +190,7 @@ adb shell /data/local/tmp/kpatch $KP_KEY kpm ctl0 urov-z kclf,quiesce
 
 ### 复测流程（无需 PowerShell 脚本）
 
-1. 从 [Releases](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.0) 下载 `urov-z.kpm`、`urov-injection-test.apk` 和 `urov-z-test.apk`。在下载目录执行：
+1. 从 [Releases](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.1) 下载 `urov-z.kpm`、`urov-injection-test.apk` 和 `urov-z-test.apk`。在下载目录执行：
 
    ~~~text
    adb push urov-z.kpm /data/local/tmp/urov-z.kpm
@@ -250,7 +251,7 @@ adb push out/kernel.uzbtf /data/local/tmp/kernel.uzbtf
 
 UROV-Z is an Android ARM64 code-page read-overlay experiment derived from UROV-Y 2.28.0. It uses **PAGE_AP / all-callers only**: original instructions execute while supported data reads receive a registered image. No reader-site addresses or caller allowlist are required. [DESIGN.md](DESIGN.md) describes the implementation, ABI, compatibility conditions and limitations.
 
-The current version is **1.1.0**, with KCLF 1.5.7 linked into the single `urov-z.kpm`. `Dobby/` is restored unchanged from `dev`, and `integration/` supplies the injection payload, CRC App and runner. See [INTEGRATION.md](INTEGRATION.md) and [test evidence](integration/RESULTS-2026-11-12.md). Generated artifacts and credentials remain under ignored `out/`. The independent API and original 73-check App are retained. Download binaries and SHA-256 checksums from [Release 1.1.0](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.1.0); see [the release record](RELEASE-1.1.0.md) for rebuild verification and runtime limits. [Release 1.0.0](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.0.0) remains available as the historical standalone version.
+The current version is **1.2.1**, with KCLF 1.5.7 linked into `urov-z.kpm`. It adds block instruction reads, negative LL/SC analysis reuse with complete byte validation on every hit, and pre-touched 64 KiB readv/proc test buffers. See the [implementation and measurements](docs/performance-optimization-1.2.1.zh-CN.md). `Dobby/` remains unchanged; the independent API and original 73-check App are retained. Binaries and checksums are available in [Release 1.2.1](https://github.com/AndroidReverser-Test/urov-lab/releases/tag/v1.2.1); see the [release notes](RELEASE-1.2.1.md). Generated artifacts remain under ignored `out/`.
 
 ### Build
 
@@ -295,6 +296,7 @@ Pass each string as the last argument to `adb shell /data/local/tmp/kpatch $KP_K
 | Control string | Meaning |
 |---|---|
 | `status` / `selftest` | Global overlay status, including the already completed core checks; selftest is an alias, not a new test run |
+| `perf` | Lifetime scan/cache counters; build with `-Diagnostics` to enable them (off in normal builds) |
 | `kclf` / `kclf,help` | Loader help; prepend `kclf,` to its displayed subcommands when using the integrated module |
 | `kclf,probe` | Runtime ABI, layout, page size, wake and completion-observation diagnostics |
 | `kclf,sym` | Kernel-symbol diagnostics; output may contain kernel addresses |
